@@ -72,6 +72,7 @@ type marketPost struct {
 	T     int64  `json:"t"`
 	ID    int64  `json:"id"`
 	Mess  string `json:"mess"`
+	Diet  string `json:"diet,omitempty"`
 	Kind  string `json:"kind"`
 	Price *int   `json:"price,omitempty"`
 }
@@ -81,6 +82,7 @@ type marketSale struct {
 	First int64  `json:"first"`
 	ID    int64  `json:"id"`
 	Mess  string `json:"mess"`
+	Diet  string `json:"diet,omitempty"`
 	Price *int   `json:"price,omitempty"`
 }
 
@@ -101,7 +103,7 @@ func Handler(cfg *config.Config, srv *mcpserver.Server, hub *Hub) http.Handler {
 			return
 		}
 		st := state{Now: now.Unix(), TZ: cfg.Timezone, Listings: items}
-		if st.Market, err = marketState(r.Context(), srv, now.Add(-marketSpan)); err != nil {
+		if st.Market, err = marketState(r.Context(), cfg, srv, now.Add(-marketSpan)); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -168,17 +170,25 @@ func mineToday(ctx context.Context, cfg *config.Config, srv *mcpserver.Server) (
 	return out, nil
 }
 
-func marketState(ctx context.Context, srv *mcpserver.Server, since time.Time) (market, error) {
+func marketState(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, since time.Time) (market, error) {
 	posts, sales, err := srv.Market(ctx, since)
 	m := market{Since: since.Unix(), Posts: []marketPost{}, Sales: []marketSale{}}
 	if err != nil {
 		return m, err
 	}
+	// Veg-only messes serve nothing else, so their posts are veg even when
+	// they don't say.
+	diet := func(mess, d string) string {
+		if d == "" && cfg.VegOnly(mess) {
+			return "veg"
+		}
+		return d
+	}
 	for _, p := range posts {
-		m.Posts = append(m.Posts, marketPost{T: p.TS.Unix(), ID: p.ListingID, Mess: p.Mess, Kind: p.Kind, Price: price(p.Price)})
+		m.Posts = append(m.Posts, marketPost{T: p.TS.Unix(), ID: p.ListingID, Mess: p.Mess, Diet: diet(p.Mess, p.Diet), Kind: p.Kind, Price: price(p.Price)})
 	}
 	for _, s := range sales {
-		m.Sales = append(m.Sales, marketSale{T: s.TS.Unix(), First: s.FirstSeen.Unix(), ID: s.ListingID, Mess: s.Mess, Price: price(s.Price)})
+		m.Sales = append(m.Sales, marketSale{T: s.TS.Unix(), First: s.FirstSeen.Unix(), ID: s.ListingID, Mess: s.Mess, Diet: diet(s.Mess, s.Diet), Price: price(s.Price)})
 	}
 	return m, nil
 }

@@ -482,7 +482,7 @@ button.slot { padding: 0; margin: 0; cursor: pointer; outline: none; -webkit-tap
 .win:hover { background: var(--slot-hi); color: var(--text); }
 .win.on { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 70%, transparent); background: var(--slot-hi); }
 
-.cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: calc(var(--gap) * 2); }
+.cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: calc(var(--gap) * 2); }
 .card {
   --accent: var(--m);
   position: relative;
@@ -504,6 +504,10 @@ button.slot { padding: 0; margin: 0; cursor: pointer; outline: none; -webkit-tap
 .card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
 .card-head svg { width: 18px; height: 18px; flex: none; }
 .card-name { flex: 1; font: 700 12px Pixel, var(--sans); letter-spacing: .3px; }
+.card-diet { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; font: 700 8px Pixel; letter-spacing: .3px; vertical-align: 1px; }
+.card-diet svg { width: 10px; height: 10px; }
+.card-diet.veg { color: #34c463; }
+.card-diet.nonveg { color: #c9513a; }
 .verdict { padding: 2px 6px 3px; border-radius: 99px; border: 1px solid var(--line); font: 700 8px Pixel; letter-spacing: .4px; color: var(--dim); }
 .verdict.hot { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 55%, transparent); }
 .verdict.slow, .verdict.steady { color: var(--muted); }
