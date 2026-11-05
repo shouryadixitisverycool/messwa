@@ -157,8 +157,12 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 			return errors.New("WhatsApp connection not ready")
 		}
 		groupPost := *offer
+		price := "₹" + strings.TrimSuffix(*amount, ".00")
 		if strings.TrimSpace(groupPost) == "" {
-			groupPost = fmt.Sprintf("Selling %s on %s for INR %s. Use Reply privately on this message and wait for a payment request in DM.", mealLabel, *date, *amount)
+			groupPost = fmt.Sprintf("sell %s %s", mealLabel, price)
+			if *date != time.Now().In(cfg.Location()).Format("2006-01-02") {
+				groupPost += " (" + day.Format("2 Jan 2006") + ")"
+			}
 		}
 		buyer, err := postGroupOffer(ctx, c, log, *group, groupPost, 10*time.Minute)
 		if err != nil {
@@ -179,9 +183,9 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 				jid = pn.ToNonAD()
 			}
 		}
-		paymentPrompt = fmt.Sprintf("Your %s on %s is reserved. Please send INR %s via WhatsApp Pay in this chat and I'll send the meal QR.", mealLabel, *date, *amount)
+		paymentPrompt = fmt.Sprintf("pay %s here via WhatsApp Pay, I'll send the QR", price)
 		if *qr == "" && !*portalQR {
-			paymentPrompt = fmt.Sprintf("Messwa test for %s on %s. Please send INR %s via WhatsApp Pay in this chat and I'll send a placeholder QR.", *meal, *date, *amount)
+			paymentPrompt = fmt.Sprintf("pay %s here via WhatsApp Pay for the test QR", price)
 		}
 		armDelivery = st.ArmNewDelivery
 	}
