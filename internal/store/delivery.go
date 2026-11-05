@@ -40,10 +40,38 @@ type Delivery struct {
 	Mess, Diet string
 }
 
+func (s *Store) insertDelivery(ctx context.Context, d Delivery) (bool, error) {
+	r, err := s.db.ExecContext(ctx, `INSERT INTO qr_deliveries(date,meal,peer,amount,image_hash,armed_at,mess,diet)
+ VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(date,meal) DO NOTHING`, d.Date, d.Meal, d.Peer, d.Amount, d.ImageHash, d.ArmedAt.Unix(), d.Mess, d.Diet)
+	if err != nil {
+		return false, err
+	}
+	n, err := r.RowsAffected()
+	return n == 1, err
+}
+
+func (s *Store) DeliveryExists(ctx context.Context, date, meal string) (bool, error) {
+	var exists bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM qr_deliveries WHERE date=? AND meal=?)`, date, meal).Scan(&exists)
+	return exists, err
+}
+
+// ArmNewDelivery claims a previously unused meal for a buyer found in a group.
+// A concurrent command that already claimed the slot wins.
+func (s *Store) ArmNewDelivery(ctx context.Context, d Delivery) (time.Time, error) {
+	inserted, err := s.insertDelivery(ctx, d)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if !inserted {
+		return time.Time{}, errors.New("meal already has a delivery record")
+	}
+	return d.ArmedAt.Truncate(time.Second), nil
+}
+
 // An existing slot can only resume with the exact same buyer, price and image.
 func (s *Store) ArmDelivery(ctx context.Context, d Delivery) (time.Time, error) {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO qr_deliveries(date,meal,peer,amount,image_hash,armed_at,mess,diet)
- VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(date,meal) DO NOTHING`, d.Date, d.Meal, d.Peer, d.Amount, d.ImageHash, d.ArmedAt.Unix(), d.Mess, d.Diet)
+	_, err := s.insertDelivery(ctx, d)
 	if err != nil {
 		return time.Time{}, err
 	}

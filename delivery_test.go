@@ -17,6 +17,15 @@ import (
 	"messwa/internal/store"
 )
 
+func TestPortalMealLabel(t *testing.T) {
+	if got := portalMealLabel("bakul", "nonveg", "lunch"); got != "bakul non-veg lunch" {
+		t.Fatalf("unexpected label %q", got)
+	}
+	if got := portalMealLabel("kadamba", "", "dinner"); got != "kadamba dinner" {
+		t.Fatalf("unexpected label %q", got)
+	}
+}
+
 func TestDeliveryPaymentGate(t *testing.T) {
 	now := time.Unix(1793700000, 0)
 	armed := now.Add(-time.Minute)

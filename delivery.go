@@ -39,17 +39,24 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	date := fs.String("date", "", "meal date, YYYY-MM-DD in the configured timezone")
 	meal := fs.String("meal", "", "configured meal name")
 	peer := fs.String("peer", "", "reserved buyer's full WhatsApp JID")
+	group := fs.String("group", "", "post an offer to this exact group name or JID and wait for a private reply")
 	amount := fs.String("amount", "", "agreed INR amount, e.g. 60.00")
 	qr := fs.String("qr", "", "PNG or JPEG image to send (defaults to an embedded, labelled test image)")
 	portalQR := fs.Bool("portal-qr", false, "fetch the current QR from the portal immediately before delivery, with -user's mess API key")
 	user := fs.String("user", "", "with -portal-qr, whose mess API key to use; defaults to the first admin")
-	offer := fs.String("offer-text", "", "optional offer to send to the selected buyer once connected and armed")
+	offer := fs.String("offer-text", "", "group post with -group, or optional private offer with -peer")
 	diagnostics := fs.Bool("diagnostics", false, "log delivery checks for the selected buyer without message contents")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
+	}
+	if (*peer == "") == (*group == "") {
+		return errors.New("choose either -peer or -group")
+	}
+	if *group != "" && !*portalQR && strings.TrimSpace(*offer) == "" {
+		return errors.New("-group requires -offer-text or -portal-qr")
 	}
 	if *portalQR && *qr != "" {
 		return errors.New("choose either -portal-qr or -qr")
@@ -70,11 +77,14 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	if !time.Now().Before(slot.End) {
 		return errors.New("meal has already ended")
 	}
-	jid, err := types.ParseJID(*peer)
-	if err != nil || jid.User == "" || (jid.Server != types.DefaultUserServer && jid.Server != types.HiddenUserServer) {
-		return errors.New("-peer must be a personal WhatsApp JID")
+	var jid types.JID
+	if *peer != "" {
+		jid, err = types.ParseJID(*peer)
+		if err != nil || jid.User == "" || (jid.Server != types.DefaultUserServer && jid.Server != types.HiddenUserServer) {
+			return errors.New("-peer must be a personal WhatsApp JID")
+		}
+		jid = jid.ToNonAD()
 	}
-	jid = jid.ToNonAD()
 	if !decimalAmount.MatchString(*amount) || strings.Trim(*amount, "0.") == "" {
 		return errors.New("-amount must be a positive INR value with two decimal places")
 	}
@@ -91,7 +101,8 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	}
 	imageHash := fmt.Sprintf("%x", sha256.Sum256(data))
 	var portalClient *portal.Client
-	var accountHash, mess, diet string
+	var accountHash, mess, diet, portalMess string
+	mealLabel := *meal
 	if *portalQR {
 		portalClient, err = userPortal(ctx, cfg, *user)
 		if err != nil {
@@ -102,10 +113,12 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 			return err
 		}
 		accountHash = current.AccountHash
+		portalMess = current.Registration.Mess
 		mess, diet = current.Registration.MessDiet()
 		if diet == "" && cfg.VegOnly(mess) {
 			diet = "veg"
 		}
+		mealLabel = portalMealLabel(mess, diet, *meal)
 		// Bind restarts to the account, not the token that rotates daily.
 		imageHash = "portal:" + accountHash
 	}
@@ -116,7 +129,7 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	if !c.LoggedIn() {
 		return errors.New("not linked; run messwa login first")
 	}
-	if jid == c.WA.Store.GetJID().ToNonAD() || jid == c.WA.Store.GetLID().ToNonAD() {
+	if *peer != "" && (jid == c.WA.Store.GetJID().ToNonAD() || jid == c.WA.Store.GetLID().ToNonAD()) {
 		return errors.New("buyer cannot be your own account")
 	}
 	st, err := store.Open(cfg.DataDB())
@@ -124,16 +137,62 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 		return err
 	}
 	defer st.Close()
+	ctx, cancel := context.WithDeadline(ctx, slot.End)
+	defer cancel()
+	defer c.WA.Disconnect()
+	paymentPrompt := *offer
+	armDelivery := st.ArmDelivery
+	if *group != "" {
+		exists, err := st.DeliveryExists(ctx, *date, *meal)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return errors.New("meal already has a delivery reservation")
+		}
+		if err := c.WA.ConnectContext(ctx); err != nil {
+			return err
+		}
+		if !c.WA.WaitForConnection(20 * time.Second) {
+			return errors.New("WhatsApp connection not ready")
+		}
+		groupPost := *offer
+		if strings.TrimSpace(groupPost) == "" {
+			groupPost = fmt.Sprintf("Selling %s on %s for INR %s. Use Reply privately on this message and wait for a payment request in DM.", mealLabel, *date, *amount)
+		}
+		buyer, err := postGroupOffer(ctx, c, log, *group, groupPost, 10*time.Minute)
+		if err != nil {
+			return err
+		}
+		if portalClient != nil {
+			reg, err := portalClient.RequireRegistration(ctx, *date, *meal)
+			if err != nil {
+				return err
+			}
+			if reg.Mess != portalMess {
+				return errors.New("portal registration changed since the group offer")
+			}
+		}
+		jid = buyer.ToNonAD()
+		if jid.Server == types.HiddenUserServer {
+			if pn, err := c.WA.Store.LIDs.GetPNForLID(ctx, jid); err == nil && pn.User != "" {
+				jid = pn.ToNonAD()
+			}
+		}
+		paymentPrompt = fmt.Sprintf("Your %s on %s is reserved. Please send INR %s via WhatsApp Pay in this chat and I'll send the meal QR.", mealLabel, *date, *amount)
+		if *qr == "" && !*portalQR {
+			paymentPrompt = fmt.Sprintf("Messwa test for %s on %s. Please send INR %s via WhatsApp Pay in this chat and I'll send a placeholder QR.", *meal, *date, *amount)
+		}
+		armDelivery = st.ArmNewDelivery
+	}
 	d := store.Delivery{Date: *date, Meal: *meal, Peer: jid.String(), Amount: *amount, ImageHash: imageHash, ArmedAt: time.Now(), Mess: mess, Diet: diet}
-	armedAt, err := st.ArmDelivery(ctx, d)
+	armedAt, err := armDelivery(ctx, d)
 	if err != nil {
 		return err
 	}
 	// WhatsApp event timestamps have second precision. Start at the next second
 	// so messages from just before the first arming cannot qualify.
 	armedAt = armedAt.Add(time.Second)
-	ctx, cancel := context.WithDeadline(ctx, slot.End)
-	defer cancel()
 	done := make(chan error, 1)
 	var mu sync.Mutex
 	attempted := false
@@ -205,6 +264,9 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 				if err != nil {
 					return err
 				}
+				if *group != "" && current.Registration.Mess != portalMess {
+					return errors.New("portal registration changed since the group offer")
+				}
 				data, mime, width, height, err = deliveryImageBytes(current.PNG)
 				if err != nil {
 					return err
@@ -228,18 +290,19 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 		log.Info("meal image sent", "date", d.Date, "meal", d.Meal, "message_id", id)
 		done <- nil
 	})
-	if err := c.WA.Connect(); err != nil {
-		return err
+	if *group == "" {
+		if err := c.WA.Connect(); err != nil {
+			return err
+		}
 	}
-	defer c.WA.Disconnect()
 	if *diagnostics && !c.WA.WaitForConnection(20*time.Second) {
 		return errors.New("WhatsApp connection not ready")
 	}
-	if *offer != "" {
+	if paymentPrompt != "" {
 		if !c.WA.WaitForConnection(20 * time.Second) {
 			return errors.New("WhatsApp connection not ready; offer was not sent")
 		}
-		if _, err := c.WA.SendMessage(ctx, jid, &waE2E.Message{Conversation: proto.String(*offer)}); err != nil {
+		if _, err := c.WA.SendMessage(ctx, jid, &waE2E.Message{Conversation: proto.String(paymentPrompt)}); err != nil {
 			return fmt.Errorf("offer send failed or is uncertain; inspect chat before retrying: %w", err)
 		}
 		log.Info("offer sent to selected buyer")
@@ -254,6 +317,13 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func portalMealLabel(mess, diet, meal string) string {
+	if diet == "nonveg" {
+		diet = "non-veg"
+	}
+	return strings.Join(strings.Fields(mess+" "+diet+" "+meal), " ")
 }
 
 func deliverOnce(ctx context.Context, st *store.Store, d store.Delivery, paid store.Payment, messageID string, send func() error) error {

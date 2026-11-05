@@ -9,6 +9,37 @@ import (
 	"time"
 )
 
+func TestGroupDeliveryReservesUnusedSlot(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	d := Delivery{Date: "2026-11-03", Meal: "lunch", Peer: "buyer", Amount: "1.00", ImageHash: "hash", ArmedAt: time.Now()}
+	if exists, err := s.DeliveryExists(ctx, d.Date, d.Meal); err != nil || exists {
+		t.Fatalf("unused slot exists=%t, err=%v", exists, err)
+	}
+	armed, err := s.ArmNewDelivery(ctx, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists, err := s.DeliveryExists(ctx, d.Date, d.Meal); err != nil || !exists {
+		t.Fatalf("reserved slot exists=%t, err=%v", exists, err)
+	}
+	if _, err := s.ArmNewDelivery(ctx, d); err == nil {
+		t.Fatal("same buyer reserved the same meal again")
+	}
+	other := d
+	other.Peer = "second buyer"
+	if _, err := s.ArmNewDelivery(ctx, other); err == nil {
+		t.Fatal("second buyer reserved the same meal")
+	}
+	if resumed, err := s.ArmDelivery(ctx, d); err != nil || !resumed.Equal(armed) {
+		t.Fatalf("first reservation changed, resumed=%v, err=%v", resumed, err)
+	}
+}
+
 func TestDeliveryClaimSurvivesRestart(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "data.db")

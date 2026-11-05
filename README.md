@@ -267,6 +267,48 @@ The old systemd unit (`~/.config/systemd/user/messwa.service`) is disabled. Don'
 
 ## Next: selling (phase 2)
 
+### Group offer test
+
+With the linked session free, run a single offer in a test group:
+
+```sh
+./messwa offer-group -group 'Test group' \
+  -offer-text 'Test offer. Use Reply privately and type interested.' \
+  -reply-text 'Thanks, I got your reply. What price were you thinking?'
+```
+
+The group name must match exactly. Use its JID if names are duplicated. The
+command waits up to ten minutes for a private text reply that quotes its post,
+sends the configured DM response once and exits.
+
+### Group offer with payment and QR delivery
+
+Use `deliver-qr -group` to post an offer and finish the sale in the buyer's DM
+on the same connection. Set the fixed price with `-amount`.
+
+```sh
+./messwa deliver-qr -date 2026-11-04 -meal lunch \
+  -group 'Test group' -amount 1.00 \
+  -offer-text 'Test lunch offer for INR 1.00. Use Reply privately and wait for a DM before paying.'
+```
+
+The first private text reply that quotes the post within ten minutes gets
+the reservation and the payment instructions. The reply can say anything.
+A matching WhatsApp Pay message from that buyer triggers QR delivery before
+the meal ends. The example sends the embedded placeholder image.
+
+For a live portal sale, pass `-portal-qr` and omit `-offer-text` to build the
+group offer from the selected account's actual mess and diet.
+
+```sh
+./messwa deliver-qr -date YYYY-MM-DD -meal lunch \
+  -group 'Test group' -amount 1.00 -portal-qr -user YOUR_ACCOUNT
+```
+
+The command uses the same live portal API as IIITH-mess-MCP. It checks the
+registration before posting, checks it again before requesting payment, and
+fetches the current QR after a matching payment message.
+
 ### One-meal QR delivery
 
 Stop `run` or `inspect-payment` before using the same linked session. Arm one
@@ -282,14 +324,13 @@ QR**. It works in the Docker image too. For a real sale, pass
 `-qr state/meal-qr.png`; keep your real QR in the ignored state directory.
 The image must be PNG or JPEG, no larger than 5 MiB or 8192 pixels per side.
 The date is interpreted in the configured timezone and the configured meal's
-end time is the delivery deadline. Nothing is posted to selling groups and
-payment instructions are not sent by this command; agree the price first.
+end time is the delivery deadline. In `-peer` mode, agree the price directly
+with the buyer before arming.
 
 Optionally pass `-offer-text "Selling Palash breakfast for INR 2.37. Pay through
 WhatsApp Pay here and I will send the QR."` to send that text to the selected
 buyer after arming and connecting. It is sent once per invocation; omit the
-flag when resuming if you do not want to repeat the offer. Sending an offer
-does not implement negotiation or posting to groups.
+flag when resuming if you do not want to repeat the offer.
 
 For the sales page, `deliver-qr` also records when the offer went out, when
 the buyer paid, the name on their payment message and when the QR was sent.
