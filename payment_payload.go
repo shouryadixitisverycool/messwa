@@ -27,6 +27,8 @@ type paymentPayloadSummary struct {
 
 var decimalAmount = regexp.MustCompile(`^[0-9]{1,12}\.[0-9]{2}$`)
 
+var errTruncatedPayment = errors.New("payment prefix truncated")
+
 func decodePaymentPayload(s string) (*paymentPayloadSummary, error) {
 	if len(s) > 1024*1024 {
 		return nil, errors.New("payment payload too large")
@@ -36,7 +38,7 @@ func decodePaymentPayload(s string) (*paymentPayloadSummary, error) {
 		return nil, errors.New("invalid payment base64")
 	}
 	if len(b) < 36 {
-		return nil, errors.New("payment prefix truncated")
+		return nil, errTruncatedPayment
 	}
 	currency, next, err := parcelString(b, 16)
 	if err != nil || currency != "INR" || next+4 > len(b) {

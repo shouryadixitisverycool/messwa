@@ -44,6 +44,7 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	portalQR := fs.Bool("portal-qr", false, "fetch the current QR from the portal immediately before delivery, with -user's mess API key")
 	user := fs.String("user", "", "with -portal-qr, whose mess API key to use; defaults to the first admin")
 	offer := fs.String("offer-text", "", "optional offer to send to the selected buyer once connected and armed")
+	diagnostics := fs.Bool("diagnostics", false, "log delivery checks for the selected buyer without message contents")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -136,22 +137,63 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	done := make(chan error, 1)
 	var mu sync.Mutex
 	attempted := false
+	requestedPayments := map[string]bool{}
+	matchesBuyer := func(info types.MessageInfo) bool {
+		if info.IsFromMe || info.IsGroup {
+			return false
+		}
+		if info.Chat.ToNonAD() == jid || info.SenderAlt.ToNonAD() == jid {
+			return true
+		}
+		if info.Chat.Server == types.HiddenUserServer && jid.Server == types.DefaultUserServer {
+			pn, err := c.WA.Store.LIDs.GetPNForLID(ctx, info.Chat.ToNonAD())
+			return err == nil && pn.ToNonAD() == jid
+		}
+		return false
+	}
 	c.WA.AddEventHandler(func(evt any) {
+		if *diagnostics {
+			switch e := evt.(type) {
+			case *events.Connected:
+				log.Info("WhatsApp connected")
+			case *events.Disconnected:
+				log.Warn("WhatsApp disconnected")
+			case *events.LoggedOut:
+				log.Warn("WhatsApp session logged out")
+			case *events.UndecryptableMessage:
+				if matchesBuyer(e.Info) {
+					log.Warn("could not decrypt buyer message", "at", e.Info.Timestamp, "unavailable", e.IsUnavailable)
+				}
+			}
+		}
 		e, ok := evt.(*events.Message)
 		if !ok {
 			return
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		if attempted || ctx.Err() != nil || e.Info.IsFromMe || e.Info.IsGroup {
+		if attempted || ctx.Err() != nil || !matchesBuyer(e.Info) {
 			return
 		}
-		matches := e.Info.Chat.ToNonAD() == jid || e.Info.SenderAlt.ToNonAD() == jid
-		if !matches && e.Info.Chat.Server == types.HiddenUserServer && jid.Server == types.DefaultUserServer {
-			pn, lookupErr := c.WA.Store.LIDs.GetPNForLID(ctx, e.Info.Chat.ToNonAD())
-			matches = lookupErr == nil && pn.ToNonAD() == jid
-		}
-		if !matches || !qualifiesForDelivery(e, d.Amount, armedAt, slot.End, time.Now()) {
+		if reason := deliveryRejection(e, d.Amount, armedAt, slot.End, time.Now()); reason != nil {
+			if errors.Is(reason, errTruncatedPayment) && !requestedPayments[e.Info.ID] {
+				requestedPayments[e.Info.ID] = true
+				// The primary phone can have the full payment when the linked
+				// device receives only a shortened copy. The response re-enters
+				// this handler and must pass the same checks before delivery.
+				chat, id := e.Info.Chat.ToNonAD(), e.Info.ID
+				go func() {
+					_, err := c.WA.SendPeerMessage(ctx, c.WA.BuildUnavailableMessageRequest(chat, chat, id))
+					if err != nil {
+						log.Warn("could not recover payment from primary device", "err", err)
+						return
+					}
+					log.Info("requested full payment from primary device")
+				}()
+			}
+			if *diagnostics {
+				log.Info("buyer message did not trigger delivery", "at", e.Info.Timestamp, "reason", reason.Error())
+			}
 			return
 		}
 		attempted = true
@@ -190,6 +232,9 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 		return err
 	}
 	defer c.WA.Disconnect()
+	if *diagnostics && !c.WA.WaitForConnection(20*time.Second) {
+		return errors.New("WhatsApp connection not ready")
+	}
 	if *offer != "" {
 		if !c.WA.WaitForConnection(20 * time.Second) {
 			return errors.New("WhatsApp connection not ready; offer was not sent")
@@ -229,14 +274,34 @@ func deliverOnce(ctx context.Context, st *store.Store, d store.Delivery, paid st
 }
 
 func qualifiesForDelivery(e *events.Message, amount string, armedAt, endsAt, now time.Time) bool {
-	if e == nil || e.Info.IsFromMe || e.Info.IsGroup || e.Info.ID == "" || e.Info.Timestamp.Before(armedAt) || !e.Info.Timestamp.Before(endsAt) || !now.Before(endsAt) || e.Info.Timestamp.After(now.Add(5*time.Second)) {
-		return false
+	return deliveryRejection(e, amount, armedAt, endsAt, now) == nil
+}
+
+func deliveryRejection(e *events.Message, amount string, armedAt, endsAt, now time.Time) error {
+	if e == nil || e.Info.IsFromMe || e.Info.IsGroup || e.Info.ID == "" {
+		return errors.New("not an incoming DM with a message ID")
 	}
 	if e.Info.Chat.Server != types.DefaultUserServer && e.Info.Chat.Server != types.HiddenUserServer {
-		return false
+		return errors.New("not a personal chat")
 	}
-	p, err := decodePaymentPayload(e.Message.GetSendPaymentMessage().GetTransactionData())
-	return err == nil && p.Currency == "INR" && p.Amount == amount && !p.Timestamp.Before(armedAt) && p.Timestamp.Before(endsAt) && !p.Timestamp.After(now.Add(5*time.Second))
+	if e.Info.Timestamp.Before(armedAt) || !e.Info.Timestamp.Before(endsAt) || !now.Before(endsAt) || e.Info.Timestamp.After(now.Add(5*time.Second)) {
+		return errors.New("message time outside the delivery window")
+	}
+	payment := e.Message.GetSendPaymentMessage()
+	if payment == nil {
+		return errors.New("no sendPaymentMessage field")
+	}
+	p, err := decodePaymentPayload(payment.GetTransactionData())
+	if err != nil {
+		return err
+	}
+	if p.Currency != "INR" || p.Amount != amount {
+		return errors.New("payment amount or currency does not match")
+	}
+	if p.Timestamp.Before(armedAt) || !p.Timestamp.Before(endsAt) || p.Timestamp.After(now.Add(5*time.Second)) {
+		return errors.New("transaction time outside the delivery window")
+	}
+	return nil
 }
 
 func readDeliveryImage(path string) ([]byte, string, int, int, error) {
