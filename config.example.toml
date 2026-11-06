@@ -50,6 +50,35 @@ listen = "127.0.0.1:8767"
 # 0 hides the bar's target then.
 monthly_fee = 0
 
+# Seasons split the year for the insights page. In a term everyone is
+# registered with a mess, so the market is far busier than in a break, and the
+# page never averages the two together unless you pick ALL SEASONS. Dates are
+# "MM-DD", both ends included, and repeat every year. Days no season covers
+# count as an "Off-season" break. The defaults are below; defining any
+# [[seasons]] replaces all four.
+#
+# [[seasons]]
+# name = "Spring term"
+# term = true
+# starts = "01-01"
+# ends = "05-07"
+#
+# [[seasons]]
+# name = "Summer break"
+# starts = "05-08"
+# ends = "07-31"
+#
+# [[seasons]]
+# name = "Monsoon term"
+# term = true
+# starts = "08-01"
+# ends = "12-07"
+#
+# [[seasons]]
+# name = "Winter break"
+# starts = "12-08"
+# ends = "12-31"
+
 # Meal windows and mess names have built-in defaults (internal/config/config.go):
 # breakfast 07:30-09:30, lunch 12:30-14:30, snacks 16:45-18:15, dinner 19:30-21:30,
 # messes kadamba, yuktahar, palash, bakul. Names match with typo tolerance.

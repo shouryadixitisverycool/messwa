@@ -148,3 +148,37 @@ func (s *Store) FirstFactDate(ctx context.Context) (string, error) {
 	err := s.db.QueryRowContext(ctx, `SELECT coalesce(min(meal_date), '') FROM listing_facts`).Scan(&d)
 	return d, err
 }
+
+// FactTotal sums one meal date's facts for one mess and diet. Offers are
+// sell and exchange listings that name a mess and weren't deleted; Wanted
+// are buy orders that weren't deleted. AskSum and Asks cover the offers
+// that are sales with a price.
+type FactTotal struct {
+	Date, Mess, Diet     string
+	Offers, Sold, Wanted int
+	AskSum, Asks         int
+}
+
+// FactTotals returns the totals for every meal date up to to, oldest first.
+func (s *Store) FactTotals(ctx context.Context, to string) ([]FactTotal, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT meal_date, mess, diet,
+		sum(kind != 'buy' AND mess != '' AND deleted = 0),
+		sum(kind != 'buy' AND mess != '' AND deleted = 0 AND sold_at IS NOT NULL),
+		sum(kind = 'buy' AND deleted = 0),
+		sum(CASE WHEN kind = 'sell' AND mess != '' AND deleted = 0 AND price > 0 THEN price ELSE 0 END),
+		sum(kind = 'sell' AND mess != '' AND deleted = 0 AND price > 0)
+		FROM listing_facts WHERE meal_date <= ? GROUP BY meal_date, mess, diet ORDER BY meal_date`, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FactTotal
+	for rows.Next() {
+		var t FactTotal
+		if err := rows.Scan(&t.Date, &t.Mess, &t.Diet, &t.Offers, &t.Sold, &t.Wanted, &t.AskSum, &t.Asks); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
