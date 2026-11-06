@@ -590,6 +590,12 @@ func (s *Server) Facts(ctx context.Context, from, to string) ([]store.Fact, erro
 	return s.st.Facts(ctx, from, to)
 }
 
+// FactTotals sums the facts per meal date, mess and diet up to to, for the
+// insights page's season comparison.
+func (s *Server) FactTotals(ctx context.Context, to string) ([]store.FactTotal, error) {
+	return s.st.FactTotals(ctx, to)
+}
+
 // FirstFactDate is the earliest meal date with a fact, or "".
 func (s *Server) FirstFactDate(ctx context.Context) (string, error) {
 	return s.st.FirstFactDate(ctx)
