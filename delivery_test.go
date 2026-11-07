@@ -17,6 +17,15 @@ import (
 	"messwa/internal/store"
 )
 
+func TestPortalMealLabel(t *testing.T) {
+	if got := portalMealLabel("bakul", "nonveg", "lunch"); got != "bakul non-veg lunch" {
+		t.Fatalf("unexpected label %q", got)
+	}
+	if got := portalMealLabel("kadamba", "", "dinner"); got != "kadamba dinner" {
+		t.Fatalf("unexpected label %q", got)
+	}
+}
+
 func TestDeliveryPaymentGate(t *testing.T) {
 	now := time.Unix(1793700000, 0)
 	armed := now.Add(-time.Minute)
@@ -28,6 +37,15 @@ func TestDeliveryPaymentGate(t *testing.T) {
 	}
 	if !qualifiesForDelivery(good(), "1.00", armed, ends, now) {
 		t.Fatal("valid payment rejected")
+	}
+	short := good()
+	short.Message.SendPaymentMessage.TransactionData = proto.String("")
+	if err := deliveryRejection(short, "1.00", armed, ends, now); !errors.Is(err, errTruncatedPayment) {
+		t.Fatalf("expected recovery for the incomplete payment, got %v", err)
+	}
+	short.Info.Timestamp = armed.Add(-time.Second)
+	if err := deliveryRejection(short, "1.00", armed, ends, now); errors.Is(err, errTruncatedPayment) {
+		t.Fatal("old payment must be rejected before recovery")
 	}
 	cases := map[string]func(*events.Message){
 		"outgoing":       func(e *events.Message) { e.Info.IsFromMe = true },

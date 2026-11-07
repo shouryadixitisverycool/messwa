@@ -49,7 +49,9 @@ commands:
                                 read a month's mess bill from the portal
   fetch-qr [-user NAME] [-out IMAGE]
                                 fetch the current portal QR into a private PNG file
-  deliver-qr -date DATE -meal MEAL -peer JID -amount INR [-qr IMAGE | -portal-qr [-user NAME]]
+  offer-group -group NAME_OR_JID -offer-text TEXT -reply-text TEXT [-wait 10m]
+                                post once and answer the first private text reply to that post
+  deliver-qr -date DATE -meal MEAL (-peer JID | -group NAME_OR_JID) -amount INR [-offer-text TEXT] [-qr IMAGE | -portal-qr [-user NAME]]
                                 arm one meal's QR delivery after a matching payment message
 
 inspection (read the database only, safe while run is up):
@@ -97,6 +99,8 @@ func main() {
 		err = bill(ctx, cfg, args)
 	case "fetch-qr":
 		err = fetchPortalQR(ctx, cfg, args)
+	case "offer-group":
+		err = offerGroup(ctx, cfg, log, args)
 	case "deliver-qr":
 		err = deliverQR(ctx, cfg, log, args)
 	case "import-history":
