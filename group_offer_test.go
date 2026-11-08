@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -9,6 +11,59 @@ import (
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestOfferQueueKeepsReplyOrder(t *testing.T) {
+	q := offerQueue{seen: make(map[types.JID]bool), ready: make(chan struct{}, 1)}
+	a := types.NewJID("100", types.DefaultUserServer)
+	b := types.NewJID("200", types.DefaultUserServer)
+	c := types.NewJID("300", types.DefaultUserServer)
+	q.add(a)
+	if peer, err := q.next(t.Context()); err != nil || peer != a {
+		t.Fatalf("first buyer = %v, %v", peer, err)
+	}
+	q.add(b)
+	q.add(a)
+	q.add(c)
+	q.add(b)
+	for _, want := range []types.JID{b, c} {
+		if peer, err := q.next(t.Context()); err != nil || peer != want {
+			t.Fatalf("next buyer = %v, %v; want %v", peer, err, want)
+		}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Millisecond)
+	defer cancel()
+	if _, err := q.next(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("duplicate reply stayed in queue: %v", err)
+	}
+}
+
+func TestBuyerPassed(t *testing.T) {
+	if !buyerPassed(&waE2E.Message{Conversation: proto.String(" No thanks! ")}) {
+		t.Fatal("decline was ignored")
+	}
+	if buyerPassed(&waE2E.Message{Conversation: proto.String("Don't cancel, I paid")}) {
+		t.Fatal("ordinary conversation was treated as a decline")
+	}
+}
+
+func TestSoldOfferDrainsOnlyWaitingBuyers(t *testing.T) {
+	q := offerQueue{seen: make(map[types.JID]bool), ready: make(chan struct{}, 1)}
+	first := types.NewJID("100", types.DefaultUserServer)
+	waiting := types.NewJID("200", types.DefaultUserServer)
+	q.add(first)
+	q.add(waiting)
+	q.add(waiting)
+	if peer, err := q.next(t.Context()); err != nil || peer != first {
+		t.Fatalf("first buyer = %v, %v", peer, err)
+	}
+	if buyers := q.closeAndDrain(); len(buyers) != 1 || buyers[0] != waiting {
+		t.Fatalf("sold notifications would go to %v", buyers)
+	}
+	q.add(types.NewJID("300", types.DefaultUserServer))
+	if buyers := q.closeAndDrain(); len(buyers) != 0 {
+		t.Fatalf("closed offer accepted new buyers: %v", buyers)
+	}
+}
 
 func TestPrivateOfferReply(t *testing.T) {
 	group := types.NewJID("123", types.GroupServer)

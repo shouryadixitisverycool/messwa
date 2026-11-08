@@ -69,6 +69,21 @@ func (s *Store) ArmNewDelivery(ctx context.Context, d Delivery) (time.Time, erro
 	return d.ArmedAt.Truncate(time.Second), nil
 }
 
+// ReleaseUnpaidDelivery removes only the unclaimed reservation for this buyer.
+func (s *Store) ReleaseUnpaidDelivery(ctx context.Context, d Delivery) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM qr_deliveries
+ WHERE date=? AND meal=? AND peer=? AND amount=? AND image_hash=? AND armed_at=? AND state='armed' AND payment_id IS NULL`,
+		d.Date, d.Meal, d.Peer, d.Amount, d.ImageHash, d.ArmedAt.Unix())
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err == nil && rows != 1 {
+		return errors.New("reservation was changed or claimed before it could be released")
+	}
+	return err
+}
+
 // An existing slot can only resume with the exact same buyer, price and image.
 func (s *Store) ArmDelivery(ctx context.Context, d Delivery) (time.Time, error) {
 	_, err := s.insertDelivery(ctx, d)

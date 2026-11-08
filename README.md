@@ -289,10 +289,15 @@ on the same connection. Set the fixed price with `-amount`.
   -offer-text 'Test lunch offer for INR 1.00. Use Reply privately and wait for a DM before paying.'
 ```
 
-The first private text reply that quotes the post within ten minutes gets
-the reservation and the payment instructions. The reply can say anything.
-A matching WhatsApp Pay message from that buyer triggers QR delivery before
-the meal ends. The example sends the embedded placeholder image.
+The first buyer must reply privately to the quoted post within ten minutes.
+Later buyers who quote the same offer join the queue in arrival order. Only
+the current buyer gets payment instructions. That buyer has up to two minutes
+to pay or can reply `not interested` to give up their turn. The bot finishes checking
+any payment it received on time before it moves on to the next buyer. A
+payment from a previous buyer cannot release the QR after their turn ends.
+Once the QR is sent, the bot privately replies `sorry sold` to everyone still
+in the queue. The queue also closes when the meal ends. The example sends the
+embedded placeholder image.
 
 For a live portal sale, pass `-portal-qr` and omit `-offer-text` to build the
 group offer from the selected account's actual mess and diet.
@@ -349,12 +354,16 @@ account ID, so daily token rotation does not prevent resuming an armed slot,
 while switching portal accounts does. Keep separate keys and state directories
 for separate people. The portal can still invalidate an image after it is sent.
 
-Only a new incoming WhatsApp Pay `sendPaymentMessage` from the selected buyer
-with exactly that amount qualifies. Both the message and decoded transaction
-timestamps must be after arming and before the meal ends. Normal text,
-screenshots, other buyers, wrong amounts and old transactions do not qualify.
-As agreed for this workflow, payment is **assumed**, with no bank receipt or
-completion-status check. It sends the image back to that buyer's DM and exits.
+Delivery requires a new incoming WhatsApp Pay `sendPaymentMessage` from the
+selected buyer, after arming and before the meal ends. If the amount is
+missing, the bot requests the full message from the primary device. After up
+to six recovery requests within 40 seconds, it assumes the agreed amount and
+sends the QR automatically if the sale is still open. The bot logs the
+assumption and records the triggering message ID.
+
+Normal text, screenshots, other buyers, expired messages, mismatched payment
+details and known incomplete transactions do not qualify. The WhatsApp event
+does not independently verify that funds arrived.
 
 The data database stores the buyer, amount, image hash or portal-account binding, arming time, payment
 message ID, outgoing image ID and state for each date/meal. It never stores

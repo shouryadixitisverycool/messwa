@@ -40,6 +40,36 @@ func TestGroupDeliveryReservesUnusedSlot(t *testing.T) {
 	}
 }
 
+func TestReleaseUnpaidDeliveryAllowsNextBuyer(t *testing.T) {
+	ctx := t.Context()
+	s, err := Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	first := Delivery{Date: "2026-11-08", Meal: "lunch", Peer: "a", Amount: "1.00", ImageHash: "hash", ArmedAt: time.Now()}
+	second := first
+	second.Peer = "b"
+	if _, err := s.ArmNewDelivery(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReleaseUnpaidDelivery(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ArmNewDelivery(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.ClaimDelivery(ctx, first, Payment{ID: "late-a"}, "image-a"); err != nil || ok {
+		t.Fatalf("old buyer claimed the new reservation: %t, %v", ok, err)
+	}
+	if ok, err := s.ClaimDelivery(ctx, second, Payment{ID: "payment-b"}, "image-b"); err != nil || !ok {
+		t.Fatalf("next buyer could not claim the reservation: %t, %v", ok, err)
+	}
+	if err := s.ReleaseUnpaidDelivery(ctx, second); err == nil {
+		t.Fatal("a claimed delivery was released")
+	}
+}
+
 func TestDeliveryClaimSurvivesRestart(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "data.db")
