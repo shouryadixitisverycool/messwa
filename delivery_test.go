@@ -29,6 +29,15 @@ func TestDeliveryPaymentGate(t *testing.T) {
 	if !qualifiesForDelivery(good(), "1.00", armed, ends, now) {
 		t.Fatal("valid payment rejected")
 	}
+	short := good()
+	short.Message.SendPaymentMessage.TransactionData = proto.String("")
+	if err := deliveryRejection(short, "1.00", armed, ends, now); !errors.Is(err, errTruncatedPayment) {
+		t.Fatalf("expected recovery for the incomplete payment, got %v", err)
+	}
+	short.Info.Timestamp = armed.Add(-time.Second)
+	if err := deliveryRejection(short, "1.00", armed, ends, now); errors.Is(err, errTruncatedPayment) {
+		t.Fatal("old payment must be rejected before recovery")
+	}
 	cases := map[string]func(*events.Message){
 		"outgoing":       func(e *events.Message) { e.Info.IsFromMe = true },
 		"group":          func(e *events.Message) { e.Info.IsGroup = true },
