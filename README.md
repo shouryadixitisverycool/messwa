@@ -284,7 +284,9 @@ sends the configured DM response once and exits.
 ### Group offer with payment and QR delivery
 
 Use `deliver-qr -group` to post an offer and finish the sale in the buyer's DM
-on the same connection. Set the fixed price with `-amount`.
+on the same connection. Set the fixed price with `-amount`. [Offer
+settings](#offer-settings) post to several groups, hide the price, or list
+extras.
 
 ```sh
 ./messwa deliver-qr -date 2026-11-04 -meal lunch \
@@ -313,6 +315,49 @@ group offer from the selected account's actual mess and diet.
 The command uses the same live portal API as IIITH-mess-MCP. It checks the
 registration before posting, checks it again before requesting payment, and
 fetches the current QR after a matching payment message.
+
+#### Offer settings
+
+The `[sell]` section of `config.toml` sets where the offer goes and what it
+says. Each setting has a flag of the same name that overrides it for one run.
+The defaults post what `deliver-qr -group` always posted: one group, price
+included, no extras.
+
+| Setting | Flag | Default | Does |
+| --- | --- | --- | --- |
+| `groups` | `-group`, repeatable | none | Groups to post to, by exact name or JID, in order |
+| `group_count` | `-group-count` | 0 | Post to the first N of the top-level `groups` instead. Set this or `groups`, not both |
+| `post_gap` | `-post-gap` | `15s` | Pause between copies, at least 3s |
+| `show_price` | `-show-price` | `true` | Put the price in the group post |
+| `mention_extras` | `-mention-extras` | `false` | List the extras registered for that meal |
+
+With `groups` or `group_count` set, `deliver-qr` without `-peer` posts to
+those groups, so `-group` is no longer needed:
+
+```sh
+./messwa deliver-qr -date YYYY-MM-DD -meal lunch -amount 60.00 -portal-qr
+./messwa deliver-qr -date YYYY-MM-DD -meal lunch -amount 60.00 -portal-qr \
+  -group-count 1 -show-price=false -mention-extras
+```
+
+With `show_price = false` and `mention_extras = true` a Kadamba lunch goes out
+as `sell kadamba non-veg lunch + extras: Chicken 65`. The payment request DM
+always states the price. Settings only shape the offer built with
+`-portal-qr`; `-offer-text` is posted exactly as written.
+
+**Several groups.** Every copy feeds one buyer queue. The first private reply
+to any copy reserves the meal, later replies to any copy queue behind it, and
+a buyer who replies to two copies gets one turn. The delivery ledger still
+holds one reservation per date and meal, so only one QR goes out. The sale
+starts as soon as the first copy is posted and the rest follow `post_gap`
+apart. Once the meal sells, no more copies go out. If one copy fails to post,
+the others still go out and replies to the failed one still count, in case
+WhatsApp posted it anyway. The command stops only when no copy posts.
+
+**Extras.** The extras come from the portal's `/registrations/extras`, the
+same read as IIITH-mess-MCP's `get_extra_registrations`. Extras already eaten
+or registered at another mess are left out. If the read fails, the offer goes
+out without extras and the log says why.
 
 ### One-meal QR delivery
 

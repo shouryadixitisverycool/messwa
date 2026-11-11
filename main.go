@@ -51,8 +51,11 @@ commands:
                                 fetch the current portal QR into a private PNG file
   offer-group -group NAME_OR_JID -offer-text TEXT -reply-text TEXT [-wait 10m]
                                 post once and answer the first private text reply to that post
-  deliver-qr -date DATE -meal MEAL (-peer JID | -group NAME_OR_JID) -amount INR [-offer-text TEXT] [-qr IMAGE | -portal-qr [-user NAME]]
-                                arm one meal's QR delivery after a matching payment message
+  deliver-qr -date DATE -meal MEAL (-peer JID | [-group NAME_OR_JID ... | -group-count N]) -amount INR
+             [-offer-text TEXT] [-qr IMAGE | -portal-qr [-user NAME]]
+             [-show-price=false] [-mention-extras] [-post-gap 15s]
+                                arm one meal's QR delivery after a matching payment message;
+                                without -peer it posts an offer to the [sell] groups
 
 inspection (read the database only, safe while run is up):
   chat [-hours 48]              the merged group stream, each post annotated with its listing

@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -26,6 +27,7 @@ type Config struct {
 	MCP     MCP      `toml:"mcp"`
 	Dash    Dash     `toml:"dashboard"`
 	Sales   Sales    `toml:"sales"`
+	Sell    Sell     `toml:"sell"`
 
 	loc *time.Location
 }
@@ -98,6 +100,27 @@ type Sales struct {
 	MonthlyFee int `toml:"monthly_fee"`
 }
 
+// Sell holds the settings for group offers posted by deliver-qr. CLI flags
+// override each of them for one run.
+type Sell struct {
+	// Groups are the groups an offer goes to, by exact name or JID. Leave
+	// it empty to use GroupCount or pass -group on the command line.
+	Groups []string `toml:"groups"`
+	// GroupCount posts to the first N of the top-level groups instead of
+	// naming them. Set Groups or GroupCount, not both.
+	GroupCount int `toml:"group_count"`
+	// PostGap is the pause between copies of one offer in different groups.
+	PostGap duration `toml:"post_gap"`
+	// ShowPrice puts the price in the group post. The payment request DM
+	// states the price either way.
+	ShowPrice bool `toml:"show_price"`
+	// MentionExtras lists the extras registered for that meal in the post.
+	MentionExtras bool `toml:"mention_extras"`
+}
+
+// MinPostGap is the shortest pause allowed between copies of one offer.
+const MinPostGap = 3 * time.Second
+
 // VegOnly reports whether a mess serves only veg.
 func (c *Config) VegOnly(mess string) bool {
 	for _, m := range c.Messes {
@@ -150,6 +173,10 @@ func Default() *Config {
 		},
 		DMs: DMs{Retention: duration{72 * time.Hour}},
 		MCP: MCP{Listen: "127.0.0.1:8766", TokenEnv: "MESSWA_MCP_TOKEN"},
+		Sell: Sell{
+			PostGap:   duration{15 * time.Second},
+			ShowPrice: true,
+		},
 	}
 }
 
@@ -167,7 +194,29 @@ func (c *Config) validate() error {
 			return fmt.Errorf("meal %s ends: %w", m.Name, err)
 		}
 	}
+	if err := c.validateSell(); err != nil {
+		return err
+	}
 	return validateSeasons(c.Seasons)
+}
+
+func (c *Config) validateSell() error {
+	s := c.Sell
+	if len(s.Groups) > 0 && s.GroupCount != 0 {
+		return fmt.Errorf("sell: set groups or group_count, not both")
+	}
+	if s.GroupCount < 0 || s.GroupCount > len(c.Groups) {
+		return fmt.Errorf("sell.group_count must be between 0 and the %d configured groups", len(c.Groups))
+	}
+	for _, g := range s.Groups {
+		if strings.TrimSpace(g) == "" {
+			return fmt.Errorf("sell.groups has an empty entry")
+		}
+	}
+	if s.PostGap.Duration < MinPostGap {
+		return fmt.Errorf("sell.post_gap must be at least %s", MinPostGap)
+	}
+	return nil
 }
 
 func (c *Config) Location() *time.Location {
