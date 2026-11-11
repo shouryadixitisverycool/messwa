@@ -58,9 +58,9 @@ monthly_fee = 0
 [sell]
 # Group offers posted by `deliver-qr` without -peer, and by sell tasks.
 # Flags of the same name (-group, -group-count, -post-gap, -show-price,
-# -mention-extras, -handoff) override these for one deliver-qr run. Sell
-# tasks use everything here except handoff, which start_sell_task sets per
-# task; with show_price they post the task's max price.
+# -mention-extras, -handoff, -buyers) override these for one deliver-qr run.
+# Sell tasks use everything here except handoff, which start_sell_task sets
+# per task; with show_price they post the task's max price.
 #
 # Which groups an offer goes to: exact names or JIDs, posted in this order...
 # groups = ["Mess Buy Sell", "120363000000000002@g.us"]
@@ -81,6 +81,11 @@ mention_extras = false
 # replies privately to any copy of the offer, before the bot sends them
 # anything, and prints which chat to take over.
 handoff = "never"
+# Who may buy. "anyone" sells to whoever replies privately to the offer.
+# "unsaved_only" skips anyone in your address book, matched by number or
+# LID: the bot logs that they replied and sends them nothing. It applies to
+# deliver-qr group offers and sell tasks; a -peer delivery is your own pick.
+buyers = "anyone"
 
 # Seasons split the year for the insights page. In a term everyone is
 # registered with a mess, so the market is far busier than in a break, and the

@@ -137,16 +137,50 @@ func (c *Client) Groups(ctx context.Context) ([]GroupSummary, error) {
 // Saved reports whether jid (or its alternate) is in your address book, and
 // the best display name for it.
 func (c *Client) Saved(ctx context.Context, jids ...string) (bool, string) {
-	name := ""
+	parsed := make([]types.JID, 0, len(jids))
 	for _, s := range jids {
 		if s == "" {
 			continue
 		}
-		j, err := types.ParseJID(s)
-		if err != nil {
+		if j, err := types.ParseJID(s); err == nil {
+			parsed = append(parsed, j)
+		}
+	}
+	return SavedContact(ctx, c.WA.Store, parsed...)
+}
+
+// SavedContact reports whether any of jids is in your address book, and the
+// best display name for it. Each JID is also looked up under the phone
+// number or LID WhatsApp maps it to, so someone who appears only by LID
+// still matches a contact saved under their number. Ingest, the MCP and
+// the sell paths all decide "saved" here.
+func SavedContact(ctx context.Context, dev *store.Device, jids ...types.JID) (bool, string) {
+	var all []types.JID
+	seen := map[types.JID]bool{}
+	add := func(j types.JID) {
+		j = j.ToNonAD()
+		if j.User != "" && !seen[j] {
+			seen[j] = true
+			all = append(all, j)
+		}
+	}
+	for _, j := range jids {
+		add(j)
+		if dev.LIDs == nil {
 			continue
 		}
-		ci, err := c.WA.Store.Contacts.GetContact(ctx, j)
+		var alt types.JID
+		switch j.Server {
+		case types.HiddenUserServer:
+			alt, _ = dev.LIDs.GetPNForLID(ctx, j.ToNonAD())
+		case types.DefaultUserServer:
+			alt, _ = dev.LIDs.GetLIDForPN(ctx, j.ToNonAD())
+		}
+		add(alt)
+	}
+	name := ""
+	for _, j := range all {
+		ci, err := dev.Contacts.GetContact(ctx, j)
 		if err != nil || !ci.Found {
 			continue
 		}

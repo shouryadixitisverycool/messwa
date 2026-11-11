@@ -54,6 +54,7 @@ commands:
   deliver-qr -date DATE -meal MEAL (-peer JID | [-group NAME_OR_JID ... | -group-count N]) -amount INR
              [-offer-text TEXT] [-qr IMAGE | -portal-qr [-user NAME]]
              [-show-price=false] [-mention-extras] [-post-gap 15s] [-handoff never|on_reply]
+             [-buyers anyone|unsaved_only]
                                 arm one meal's QR delivery after a matching payment message;
                                 without -peer it posts an offer to the [sell] groups
   release-handoff -date DATE -meal MEAL
