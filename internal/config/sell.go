@@ -40,6 +40,10 @@ const (
 	// HandoffOnReply stops when a buyer replies privately to the offer,
 	// before the bot sends them anything, so you can talk to them yourself.
 	HandoffOnReply Handoff = "on_reply"
+	// HandoffOnAgreement lets a sell task negotiate, then hands you the chat
+	// at the agreed price instead of asking the buyer to pay. Only sell
+	// tasks negotiate, so deliver-qr and [sell] don't take it.
+	HandoffOnAgreement Handoff = "on_agreement"
 )
 
 // ParseHandoff reads a handoff setting. Empty means HandoffNever.
@@ -51,6 +55,19 @@ func ParseHandoff(s string) (Handoff, error) {
 		return h, nil
 	}
 	return "", fmt.Errorf("handoff %q: use %q or %q", s, HandoffNever, HandoffOnReply)
+}
+
+// ParseTaskHandoff reads a sell task's handoff, which may also be
+// on_agreement. Empty means HandoffNever.
+func ParseTaskHandoff(s string) (Handoff, error) {
+	if Handoff(s) == HandoffOnAgreement {
+		return HandoffOnAgreement, nil
+	}
+	h, err := ParseHandoff(s)
+	if err != nil {
+		return "", fmt.Errorf("handoff %q: use %q, %q or %q", s, HandoffNever, HandoffOnReply, HandoffOnAgreement)
+	}
+	return h, nil
 }
 
 func (h *Handoff) UnmarshalText(b []byte) error {

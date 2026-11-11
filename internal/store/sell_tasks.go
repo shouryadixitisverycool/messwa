@@ -116,6 +116,13 @@ type SellBuyer struct {
 	State     string
 	Amount    string    // the price asked, once offered
 	PayUntil  time.Time // zero until offered
+	// A negotiating task's haggle with this buyer.
+	Negotiation
+	Agreed   string    // the agreed price, once agreed
+	AgreedAt time.Time // zero until agreed
+	// Note says why the buyer needs you; Refund is a payment the bot could
+	// not honour.
+	Note, Refund string
 }
 
 // CreateSellTask starts a task unless the meal already has one running or
@@ -294,7 +301,9 @@ func (s *Store) IsSellTaskBuyer(ctx context.Context, id int64, peers ...string) 
 
 // SellTaskBuyers returns buyers in the order they replied.
 func (s *Store) SellTaskBuyers(ctx context.Context, id int64) ([]SellBuyer, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT peer,alt,joined_at,state,amount,coalesce(pay_until,0) FROM sell_task_buyers WHERE task_id=? ORDER BY joined_at, rowid`, id)
+	rows, err := s.db.QueryContext(ctx, `SELECT peer,alt,joined_at,state,amount,coalesce(pay_until,0),
+ ask,rounds,bot_msgs,unknowns,last_offer,quoted,said_lowest,coalesce(started_at,0),agreed,coalesce(agreed_at,0),note,refund
+ FROM sell_task_buyers WHERE task_id=? ORDER BY joined_at, rowid`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -302,14 +311,23 @@ func (s *Store) SellTaskBuyers(ctx context.Context, id int64) ([]SellBuyer, erro
 	var out []SellBuyer
 	for rows.Next() {
 		var b SellBuyer
-		var joined, until int64
-		if err := rows.Scan(&b.Peer, &b.Alt, &joined, &b.State, &b.Amount, &until); err != nil {
+		var joined, until, started, agreed int64
+		var quoted string
+		if err := rows.Scan(&b.Peer, &b.Alt, &joined, &b.State, &b.Amount, &until,
+			&b.Ask, &b.Rounds, &b.BotMsgs, &b.Unknowns, &b.LastOffer, &quoted, &b.SaidLowest, &started, &b.Agreed, &agreed, &b.Note, &b.Refund); err != nil {
 			return nil, err
 		}
 		b.JoinedAt = time.Unix(0, joined)
 		if until != 0 {
 			b.PayUntil = time.Unix(until, 0)
 		}
+		if started != 0 {
+			b.StartedAt = time.Unix(started, 0)
+		}
+		if agreed != 0 {
+			b.AgreedAt = time.Unix(0, agreed)
+		}
+		b.Quoted = splitPaise(quoted)
 		out = append(out, b)
 	}
 	return out, rows.Err()

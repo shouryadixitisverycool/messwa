@@ -27,12 +27,12 @@ func (s *Server) sellEnabled() bool { return s.sell != nil && s.cfg.MCP.SellTask
 
 const sellInstructions = `
 
-Sell tasks (admins only) sell one of your registered meals through WhatsApp. start_sell_task checks the registration, posts an offer in the mess groups set in config.toml and asks everyone who replies privately to a post to pay, one at a time. The first matching WhatsApp Pay payment gets the meal's QR, and the offer posts get a ✅. The task asks max_price; it never asks for or accepts less than min_price. With handoff "on_reply" the task instead stops at the first private reply, sends that buyer nothing, and sell_task_status shows who to message. It ends when the meal sells, when it hands off, when it is cancelled, or when the meal ends. Check on it with sell_task_status and stop it with cancel_sell_task. Start a task only when the user asked you to sell that meal, at the prices they gave.`
+Sell tasks (admins only) sell one of your registered meals through WhatsApp. start_sell_task checks the registration and posts an offer in the mess groups set in config.toml. With max_price above min_price, the task negotiates with everyone who replies privately to a post, all at once: it opens at max_price, says it's slightly negotiable, and comes down toward the meal's usual price, and toward min_price as the meal's end nears. It never quotes, agrees or accepts less than min_price. Buyers who agree pay one at a time; the first matching WhatsApp Pay payment gets the meal's QR, and the offer posts get a ✅. With max_price equal to min_price it just asks that price. Buyers the bot can't handle (unreadable messages, still too low after its lowest price, wanting to pay another way) are listed in needs_you, along with buyers whose payment it could not honour and the amount to refund. With handoff "on_reply" the task stops at the first private reply and sends that buyer nothing; with "on_agreement" it negotiates and hands over the first buyer who agrees, at the agreed price. sell_task_status shows who to message. A task ends when the meal sells, when it hands off, when it is cancelled, or when the meal ends. Check on it with sell_task_status and stop it with cancel_sell_task. Start a task only when the user asked you to sell that meal, at the prices they gave.`
 
 func (s *Server) addSellTools(srv *mcp.Server) {
 	write := &mcp.ToolAnnotations{OpenWorldHint: ptr(true)}
 	mcp.AddTool(srv, &mcp.Tool{Name: "start_sell_task", Annotations: write,
-		Description: "Sell one of your registered meals: post an offer in the mess group, ask buyers who reply privately to pay, and send the QR after a matching payment. Prices are whole rupees. Admins only."}, s.startSellTask)
+		Description: "Sell one of your registered meals: post an offer in the mess group, negotiate between min_price and max_price with buyers who reply privately, and send the QR after a matching payment. Prices are whole rupees. Admins only."}, s.startSellTask)
 	mcp.AddTool(srv, &mcp.Tool{Name: "sell_task_status", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 		Description: "One sell task by id, or every active task plus those started in the last 24 hours: state, offer posts, buyers who replied, and the sale. Admins only."}, s.sellTaskStatus)
 	mcp.AddTool(srv, &mcp.Tool{Name: "cancel_sell_task", Annotations: write,
@@ -44,9 +44,9 @@ func ptr[T any](v T) *T { return &v }
 type StartSellIn struct {
 	Date     string `json:"date" jsonschema:"meal date, YYYY-MM-DD"`
 	Meal     string `json:"meal" jsonschema:"breakfast, lunch, snacks or dinner"`
-	MinPrice int    `json:"min_price" jsonschema:"lowest price in rupees to accept; never asked or accepted below this"`
-	MaxPrice int    `json:"max_price" jsonschema:"price in rupees to ask first"`
-	Handoff  string `json:"handoff,omitempty" jsonschema:"never (default): the task runs the whole sale. on_reply: the first private reply ends the task and hands that buyer's chat to the user; the bot sends them nothing"`
+	MinPrice int    `json:"min_price" jsonschema:"lowest price in rupees to accept; never quoted or accepted below this"`
+	MaxPrice int    `json:"max_price" jsonschema:"price in rupees to open at; above min_price the task negotiates down from it"`
+	Handoff  string `json:"handoff,omitempty" jsonschema:"never (default): the task runs the whole sale. on_reply: the first private reply ends the task and hands that buyer's chat to the user; the bot sends them nothing. on_agreement: the task negotiates, then hands over the first buyer who agrees, at the agreed price, without asking them to pay"`
 }
 
 type SellTaskIn struct {
@@ -65,9 +65,25 @@ type SellOfferOut struct {
 
 type SellBuyerOut struct {
 	Person
-	State    string `json:"state" jsonschema:"queued, offered (asked to pay), passed, timed_out, bought, skipped, told_sold, or handed_off"`
-	Asked    string `json:"asked,omitempty" jsonschema:"price asked, INR"`
+	State    string `json:"state" jsonschema:"queued, negotiating, agreed (waiting for their turn to pay), offered (asked to pay), passed, timed_out, bought, skipped, told_sold, parked (needs the user), or handed_off"`
+	Asked    string `json:"asked,omitempty" jsonschema:"price asked in the payment prompt, INR"`
 	PayUntil string `json:"pay_until,omitempty"`
+	// Negotiation, for a task with a price range.
+	Ask       string `json:"ask,omitempty" jsonschema:"the bot's latest price to this buyer, INR"`
+	LastOffer string `json:"last_offer,omitempty" jsonschema:"the buyer's latest offer, INR"`
+	Rounds    int    `json:"rounds,omitempty" jsonschema:"counter-offers the bot made"`
+	Agreed    string `json:"agreed,omitempty" jsonschema:"price agreed, INR"`
+	Note      string `json:"note,omitempty" jsonschema:"why the buyer needs the user"`
+}
+
+// SellNeedsYouOut is a buyer the bot stopped talking to.
+type SellNeedsYouOut struct {
+	Buyer     Person `json:"buyer"`
+	ChatLink  string `json:"chat_link,omitempty" jsonschema:"wa.me link to the buyer's chat; empty when WhatsApp hides their number"`
+	Why       string `json:"why"`
+	Ask       string `json:"ask,omitempty" jsonschema:"the bot's latest price to them, INR"`
+	LastOffer string `json:"last_offer,omitempty" jsonschema:"their latest offer, INR"`
+	Refund    string `json:"refund,omitempty" jsonschema:"a payment the bot could not honour, INR; send it back unless they get the meal"`
 }
 
 type SellSaleOut struct {
@@ -80,7 +96,7 @@ type SellSaleOut struct {
 type SellHandoffOut struct {
 	Buyer    Person   `json:"buyer"`
 	ChatLink string   `json:"chat_link,omitempty" jsonschema:"wa.me link to the buyer's chat; empty when WhatsApp hides their number"`
-	Asked    string   `json:"asked" jsonschema:"price the offer asked, INR"`
+	Asked    string   `json:"asked" jsonschema:"price the offer asked, INR; with on_agreement, the price the buyer agreed"`
 	Others   []Person `json:"also_replied" jsonschema:"other buyers who replied before the handoff, in reply order"`
 	// Finish is what the user runs once they agree a price, with run stopped.
 	Finish string `json:"finish" jsonschema:"how to finish or drop the sale from the command line"`
@@ -96,13 +112,16 @@ type SellTaskOut struct {
 	Detail   string         `json:"detail,omitempty"`
 	MinPrice string         `json:"min_price"`
 	MaxPrice string         `json:"max_price"`
-	Handoff  string         `json:"handoff" jsonschema:"never or on_reply"`
+	Handoff  string         `json:"handoff" jsonschema:"never, on_reply or on_agreement"`
 	Started  string         `json:"started"`
 	Ends     string         `json:"ends"`
 	Ended    string         `json:"ended,omitempty"`
 	Offers   []SellOfferOut `json:"offers"`
 	Buyers   []SellBuyerOut `json:"buyers"`
 	Sale     *SellSaleOut   `json:"sale,omitempty"`
+	// NeedsYou are buyers the bot handed to the user without ending the
+	// task, and buyers who paid when the bot could not sell to them.
+	NeedsYou []SellNeedsYouOut `json:"needs_you,omitempty"`
 	// HandedOff is set once the task handed a buyer to the user.
 	HandedOff *SellHandoffOut `json:"handed_off,omitempty"`
 }
@@ -207,8 +226,27 @@ func (s *Server) sellTaskOut(ctx context.Context, t store.SellTask) (SellTaskOut
 	if err != nil {
 		return out, err
 	}
+	inr := func(paise int64) string {
+		if paise <= 0 {
+			return ""
+		}
+		return store.FormatPaise(paise)
+	}
 	for _, b := range buyers {
-		out.Buyers = append(out.Buyers, SellBuyerOut{Person: s.person(ctx, b.Peer, b.Alt, ""), State: b.State, Asked: b.Amount, PayUntil: s.fmt(b.PayUntil)})
+		p := s.person(ctx, b.Peer, b.Alt, "")
+		bo := SellBuyerOut{Person: p, State: b.State, Asked: b.Amount, PayUntil: s.fmt(b.PayUntil),
+			Rounds: b.Rounds, Agreed: b.Agreed, Note: b.Note, LastOffer: inr(b.LastOffer)}
+		if b.BotMsgs > 0 {
+			bo.Ask = inr(b.Ask)
+		}
+		out.Buyers = append(out.Buyers, bo)
+		if b.Note != "" || b.Refund != "" {
+			n := SellNeedsYouOut{Buyer: p, Why: b.Note, Ask: bo.Ask, LastOffer: bo.LastOffer, Refund: b.Refund}
+			if p.Phone != "" {
+				n.ChatLink = "https://wa.me/" + strings.TrimPrefix(p.Phone, "+")
+			}
+			out.NeedsYou = append(out.NeedsYou, n)
+		}
 	}
 	d, state, err := s.st.TaskDelivery(ctx, t.ID)
 	if err != nil {
@@ -228,7 +266,7 @@ func (s *Server) sellTaskOut(ctx context.Context, t store.SellTask) (SellTaskOut
 			switch {
 			case b.Peer == d.Peer:
 				h.Buyer = s.person(ctx, b.Peer, b.Alt, name)
-			case b.State == store.BuyerQueued:
+			case b.State == store.BuyerQueued || b.State == store.BuyerNegotiating || b.State == store.BuyerAgreed:
 				h.Others = append(h.Others, s.person(ctx, b.Peer, b.Alt, ""))
 			}
 		}

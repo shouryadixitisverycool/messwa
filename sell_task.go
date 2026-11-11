@@ -26,20 +26,23 @@ import (
 //   - nothing is sent unless the task is active;
 //   - besides the group post, messages go only to people who replied
 //     privately to that post;
-//   - no buyer is asked, and no delivery armed, below the floor price;
+//   - no buyer is quoted, agreed with, asked, or armed for below the floor
+//     price (see negotiate.go for how a task haggles);
 //   - sends are rate-limited per task and across all tasks;
 //   - a task ends when its meal ends.
 //
 // Every send is claimed in the store first, so a restart resumes a task
 // without posting, prompting or saying "sorry sold" twice.
 
-// Send limits. A sale needs the group post, one prompt per buyer, the QR
-// and a "sorry sold" to each buyer still waiting, so these stop a runaway
-// loop without slowing a normal sale much.
+// Send limits. A sale needs the group post, a few negotiation messages per
+// buyer, one prompt per paying buyer, the QR and a "sorry sold" to each
+// buyer still waiting. Buyers message several sellers at once and leave
+// within a minute, so a burst of replies needs quick quotes; these still
+// stop a runaway loop.
 const (
-	taskSendsPerMinute   = 6
-	globalSendsPerMinute = 12
-	taskSendCap          = 40
+	taskSendsPerMinute   = 12
+	globalSendsPerMinute = 15
+	taskSendCap          = 80
 )
 
 // resumeGrace is how long a resumed buyer's turn lasts at least, so a
@@ -67,18 +70,6 @@ type handedOffError struct{ detail string }
 func (e handedOffError) Error() string { return "handed off: " + e.detail }
 func (e handedOffError) Unwrap() error { return errHandedOff }
 
-// negotiator decides what to ask a buyer, in paise. This is the seam for
-// negotiation: a negotiator can talk to the buyer and return the price
-// they accepted. Whatever it returns, the task refuses to ask for or arm
-// a delivery below the task's floor, and the payment must match exactly.
-type negotiator func(ctx context.Context, t store.SellTask, buyer types.JID) (int64, error)
-
-// openAtMax asks every buyer the task's max price. It stands in until
-// negotiation lands.
-func openAtMax(_ context.Context, t store.SellTask, _ types.JID) (int64, error) {
-	return t.MaxPaise, nil
-}
-
 type sellManager struct {
 	cfg  *config.Config
 	log  *slog.Logger
@@ -88,8 +79,9 @@ type sellManager struct {
 	send      sendFunc
 	connected func(time.Duration) bool
 	portalFor func(ctx context.Context, userID int64) (mealPortal, error)
-	negotiate negotiator
-	limits    *sendLimits
+	// prices reads asking prices for the negotiation's target; tests fake it.
+	prices func(ctx context.Context, from, to string) ([]store.ServingPrices, error)
+	limits *sendLimits
 	// own writes the task's offer posts and ✅ into the group log, since
 	// run never gets events for messages it sent itself.
 	own ownGroupLog
@@ -109,19 +101,20 @@ func newSellManager(ctx context.Context, cfg *config.Config, log *slog.Logger, s
 	connected func(time.Duration) bool, portalFor func(context.Context, int64) (mealPortal, error), own ownGroupLog) *sellManager {
 	return &sellManager{
 		cfg: cfg, log: log.With("component", "sell"), st: st, conn: conn, send: send, connected: connected,
-		portalFor: portalFor, negotiate: openAtMax, limits: newSendLimits(), own: own, base: ctx, running: map[int64]*runningTask{},
+		portalFor: portalFor, prices: st.Prices, limits: newSendLimits(), own: own, base: ctx, running: map[int64]*runningTask{},
 	}
 }
 
 // Start checks the registration, records the task and starts selling in
-// the background. Prices are whole rupees. handoff is "never" (or empty)
-// or "on_reply", which ends the task at the first private reply and hands
-// that buyer's chat to you.
+// the background. Prices are whole rupees; with max above min the task
+// negotiates. handoff is "never" (or empty); "on_reply", which ends the
+// task at the first private reply and hands that buyer's chat to you; or
+// "on_agreement", which hands you the first buyer who agrees a price.
 func (m *sellManager) Start(ctx context.Context, userID int64, date, meal string, minRupees, maxRupees int, handoff string) (int64, error) {
 	if minRupees <= 0 || maxRupees < minRupees || maxRupees > 10000 {
 		return 0, errors.New("min_price must be at least 1 and max_price between min_price and 10000")
 	}
-	h, err := config.ParseHandoff(handoff)
+	h, err := config.ParseTaskHandoff(handoff)
 	if err != nil {
 		return 0, err
 	}
@@ -352,7 +345,7 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, ga
 		}
 	}
 	s.send, s.sendPaid = gate.send, gate.sendPaid
-	j := &taskJournal{st: m.st, t: t, negotiate: m.negotiate}
+	j := &taskJournal{st: m.st, t: t}
 	settings, err := taskSellSettings(m.cfg)
 	if err != nil {
 		return err
@@ -365,7 +358,11 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, ga
 		}
 		return added
 	}
-	resume, err := m.restore(ctx, t, queue)
+	var n *negotiation
+	if negotiates(t) {
+		n = newNegotiation(ctx, m, t, s, gate, queue)
+	}
+	resume, err := m.restore(ctx, t, queue, n)
 	if err != nil {
 		return err
 	}
@@ -397,7 +394,7 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, ga
 	}
 	s.sold = func() { posting.stop() }
 	var detail string
-	if t.Handoff == string(config.HandoffOnReply) {
+	if t.Handoff == string(config.HandoffOnReply) || t.Handoff == string(config.HandoffOnAgreement) {
 		s.handoff = func(ctx context.Context, buyer types.JID, d store.Delivery, others []types.JID) error {
 			posting.stop()
 			var err error
@@ -405,7 +402,11 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, ga
 			return err
 		}
 	}
-	err = s.sellToQueue(ctx, context.WithoutCancel(ctx), queue, j, 0, resume)
+	if n != nil {
+		err = m.sellNegotiated(ctx, n, s, j, resume)
+	} else {
+		err = s.sellToQueue(ctx, context.WithoutCancel(ctx), queue, j, 0, resume)
+	}
 	if errors.Is(err, errHandedOff) {
 		return handedOffError{detail: detail}
 	}
@@ -505,7 +506,7 @@ func (m *sellManager) handOff(ctx context.Context, t store.SellTask, buyer types
 	if err := m.st.HandOffTaskDelivery(ctx, t.ID, d, name); err != nil {
 		return "", err
 	}
-	if _, err := m.st.MoveSellTaskBuyer(ctx, t.ID, buyer.String(), store.BuyerQueued, store.BuyerHandedOff, d.Amount, time.Time{}); err != nil {
+	if _, err := m.st.MoveSellTaskBuyerFrom(ctx, t.ID, buyer.String(), []string{store.BuyerQueued, store.BuyerAgreed}, store.BuyerHandedOff); err != nil {
 		m.log.Warn("could not record the handed-off buyer", "task", t.ID, "err", err)
 	}
 	who := buyer.String()
@@ -516,6 +517,9 @@ func (m *sellManager) handOff(ctx context.Context, t store.SellTask, buyer types
 		who = name + " (" + who + ")"
 	}
 	detail := fmt.Sprintf("handed the chat with %s to you; the bot sent them nothing. The offer asked INR %s.", who, d.Amount)
+	if t.Handoff == string(config.HandoffOnAgreement) {
+		detail = fmt.Sprintf("handed the chat with %s to you. %s", who, describeAgreement(d.Amount))
+	}
 	if len(others) > 0 {
 		detail += fmt.Sprintf(" %d other buyer(s) replied too.", len(others))
 	}
@@ -525,7 +529,9 @@ func (m *sellManager) handOff(ctx context.Context, t store.SellTask, buyer types
 
 // restore rebuilds the queue from the store and finds a buyer whose turn
 // was under way. A buyer whose prompt was claimed is never prompted again.
-func (m *sellManager) restore(ctx context.Context, t store.SellTask, queue *offerQueue) (*resumedTurn, error) {
+// With n, buyers who were negotiating or waiting to pay get their sessions
+// back.
+func (m *sellManager) restore(ctx context.Context, t store.SellTask, queue *offerQueue, n *negotiation) (*resumedTurn, error) {
 	buyers, err := m.st.SellTaskBuyers(ctx, t.ID)
 	if err != nil {
 		return nil, err
@@ -555,8 +561,15 @@ func (m *sellManager) restore(ctx context.Context, t store.SellTask, queue *offe
 				}
 				resume = &resumedTurn{buyer: peer, d: *d, payUntil: payUntil}
 				d = nil
+				if n != nil {
+					n.restoreBuyer(b, true)
+				}
 			} else if _, err := m.st.MoveSellTaskBuyer(ctx, t.ID, b.Peer, store.BuyerOffered, store.BuyerTimedOut, "", time.Time{}); err != nil {
 				return nil, err
+			}
+		case store.BuyerNegotiating, store.BuyerAgreed:
+			if n != nil {
+				n.restoreBuyer(b, false)
 			}
 		}
 		queue.restore(peer, false)
@@ -573,20 +586,17 @@ func (m *sellManager) restore(ctx context.Context, t store.SellTask, queue *offe
 
 // taskJournal persists a task's queue so restarts don't repeat sends.
 type taskJournal struct {
-	st        *store.Store
-	t         store.SellTask
-	negotiate negotiator
+	st *store.Store
+	t  store.SellTask
 }
 
-func (j *taskJournal) price(ctx context.Context, buyer types.JID) (string, error) {
-	p, err := j.negotiate(ctx, j.t, buyer)
-	if err != nil {
-		return "", err
+// price is the task's max price: a task that doesn't negotiate asks it of
+// every buyer. A negotiating task uses negotiatedJournal instead.
+func (j *taskJournal) price(context.Context, types.JID) (string, error) {
+	if j.t.MaxPaise < j.t.MinPaise {
+		return "", fmt.Errorf("INR %s is below the floor of INR %s", store.FormatPaise(j.t.MaxPaise), store.FormatPaise(j.t.MinPaise))
 	}
-	if p < j.t.MinPaise {
-		return "", fmt.Errorf("INR %s is below the floor of INR %s", store.FormatPaise(p), store.FormatPaise(j.t.MinPaise))
-	}
-	return store.FormatPaise(p), nil
+	return store.FormatPaise(j.t.MaxPaise), nil
 }
 
 func (j *taskJournal) arm(ctx context.Context, d store.Delivery) (time.Time, error) {
@@ -611,7 +621,8 @@ func (j *taskJournal) turnEnded(ctx context.Context, buyer types.JID, state stri
 }
 
 func (j *taskJournal) tellingSold(ctx context.Context, buyer types.JID) (bool, error) {
-	return j.st.MoveSellTaskBuyer(ctx, j.t.ID, buyer.String(), store.BuyerQueued, store.BuyerToldSold, "", time.Time{})
+	return j.st.MoveSellTaskBuyerFrom(ctx, j.t.ID, buyer.String(),
+		[]string{store.BuyerQueued, store.BuyerNegotiating, store.BuyerAgreed, store.BuyerParked}, store.BuyerToldSold)
 }
 
 // taskGate is the only way a task sends. It checks the rules on every

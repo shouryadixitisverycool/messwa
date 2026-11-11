@@ -101,6 +101,9 @@ type sale struct {
 	// sold, when set, runs once the QR is out, before the queue hears
 	// "sorry sold". Group offers stop posting copies here.
 	sold func()
+	// others, when set, are more buyers to tell "sorry sold" besides the
+	// queue: a negotiating task's buyers who are still talking.
+	others func() []types.JID
 }
 
 // findSlot returns the configured meal's window on date.
@@ -199,6 +202,11 @@ type turn struct {
 	// payUntil limits the turn for a queued buyer, who may also reply "not
 	// interested". Zero waits until the meal ends.
 	payUntil time.Time
+	// amounts are more prices the buyer may pay besides d.Amount, all at or
+	// above the floor. reprice changes the reservation to the one they paid
+	// before it is claimed, so the ledger records it.
+	amounts []string
+	reprice func(context.Context, store.Delivery, string) (store.Delivery, error)
 }
 
 // takeTurn arms the meal for buyer and delivers the QR after a matching
@@ -234,7 +242,7 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 	requestedPayments := map[string]context.CancelFunc{}
 	// finish runs with mu held. The delivery itself runs in a goroutine so
 	// the event handler doesn't hold up the rest of run's ingest.
-	finish := func(e *events.Message, amountMissing bool) {
+	finish := func(e *events.Message, amountMissing bool, paidAmount string) {
 		attempted, delivering = true, true
 		for _, stop := range requestedPayments {
 			stop()
@@ -250,6 +258,18 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 			// ending must not cut the QR upload short.
 			sendCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 			defer stop()
+			d := d
+			if paidAmount != "" && paidAmount != d.Amount {
+				if t.reprice == nil {
+					done <- errors.New("payment matched a quoted price but the reservation cannot be repriced")
+					return
+				}
+				var err error
+				if d, err = t.reprice(sendCtx, d, paidAmount); err != nil {
+					done <- err
+					return
+				}
+			}
 			s.log.Info("payment assumed; sending meal image", "date", d.Date, "meal", d.Meal, "amount", d.Amount)
 			err := deliverOnce(sendCtx, s.st, d, paid, id, func() error { return s.sendQR(sendCtx, e.Info.Chat, id, d, queued) })
 			if err == nil {
@@ -303,7 +323,7 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 			done <- errBuyerPassed
 			return
 		}
-		reason := deliveryRejection(e, d.Amount, armedAt, s.end, time.Now())
+		paidAmount, reason := paymentMatch(e, append([]string{d.Amount}, t.amounts...), armedAt, s.end, time.Now())
 		if !errors.Is(reason, errTruncatedPayment) && stopRecovery != nil {
 			stopRecovery()
 		}
@@ -343,7 +363,7 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 						return
 					}
 					if s.assumeUnreadable {
-						finish(e, true)
+						finish(e, true, "")
 						return
 					}
 					s.log.Warn("payment amount unreadable after recovery; not sending the meal image. Check the buyer's chat, or rerun with -assume-unreadable-payment",
@@ -355,7 +375,7 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 			}
 			return
 		}
-		finish(e, false)
+		finish(e, false, paidAmount)
 	})
 	defer s.conn.RemoveEventHandler(handler)
 	if t.listening != nil {
@@ -438,6 +458,13 @@ type saleJournal interface {
 	tellingSold(ctx context.Context, buyer types.JID) (bool, error)
 }
 
+// quoteJournal is a journal whose buyers may pay any of several prices the
+// bot quoted them, not only the one their turn asks.
+type quoteJournal interface {
+	accepts(buyer types.JID, agreed string) []string
+	reprice(ctx context.Context, d store.Delivery, amount string) (store.Delivery, error)
+}
+
 // resumedTurn is a buyer whose turn was under way when run stopped.
 type resumedTurn struct {
 	buyer    types.JID
@@ -465,6 +492,9 @@ func (s *sale) sellToQueue(ctx, notifyCtx context.Context, q *offerQueue, j sale
 			buyer, d = resume.buyer, resume.d
 			// The prompt went out before the restart; only listen again.
 			t = turn{arm: s.st.ArmDelivery, payUntil: resume.payUntil}
+			if qj, ok := j.(quoteJournal); ok {
+				t.amounts, t.reprice = qj.accepts(buyer, d.Amount), qj.reprice
+			}
 			if listening := resume.listening; listening != nil {
 				t.listening = func() error { listening(); return nil }
 			}
@@ -505,6 +535,9 @@ func (s *sale) sellToQueue(ctx, notifyCtx context.Context, q *offerQueue, j sale
 					return j.prompting(ctx, buyer, amount, payUntil)
 				},
 			}
+			if qj, ok := j.(quoteJournal); ok {
+				t.amounts, t.reprice = qj.accepts(buyer, amount), qj.reprice
+			}
 		}
 		err := s.takeTurn(ctx, buyer, d, t)
 		if err == nil {
@@ -514,17 +547,11 @@ func (s *sale) sellToQueue(ctx, notifyCtx context.Context, q *offerQueue, j sale
 			if err := j.turnEnded(ctx, buyer, store.BuyerBought); err != nil {
 				s.log.Warn("could not record the sale", "err", err)
 			}
-			for _, waiting := range q.closeAndDrain() {
-				if ok, err := j.tellingSold(notifyCtx, waiting); err != nil || !ok {
-					continue
-				}
-				sendCtx, stop := context.WithTimeout(notifyCtx, time.Minute)
-				_, notifyErr := s.send(sendCtx, waiting, &waE2E.Message{Conversation: proto.String("sorry sold")})
-				stop()
-				if notifyErr != nil {
-					s.log.Warn("could not notify queued buyer that meal sold", "err", notifyErr)
-				}
+			waiting := q.closeAndDrain()
+			if s.others != nil {
+				waiting = append(waiting, s.others()...)
 			}
+			s.tellSold(notifyCtx, j, waiting)
 			return nil
 		}
 		if !errors.Is(err, errBuyerPassed) && !errors.Is(err, errBuyerTimedOut) {
@@ -541,6 +568,26 @@ func (s *sale) sellToQueue(ctx, notifyCtx context.Context, q *offerQueue, j sale
 			return err
 		}
 		s.log.Info("buyer turn ended; checking queue", "reason", err)
+	}
+}
+
+// tellSold says "sorry sold" to each buyer the journal lets it claim.
+func (s *sale) tellSold(notifyCtx context.Context, j saleJournal, buyers []types.JID) {
+	told := map[types.JID]bool{}
+	for _, waiting := range buyers {
+		if told[waiting] {
+			continue
+		}
+		told[waiting] = true
+		if ok, err := j.tellingSold(notifyCtx, waiting); err != nil || !ok {
+			continue
+		}
+		sendCtx, stop := context.WithTimeout(notifyCtx, time.Minute)
+		_, notifyErr := s.send(sendCtx, waiting, &waE2E.Message{Conversation: proto.String("sorry sold")})
+		stop()
+		if notifyErr != nil {
+			s.log.Warn("could not notify queued buyer that meal sold", "err", notifyErr)
+		}
 	}
 }
 

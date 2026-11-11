@@ -105,7 +105,7 @@ func TestSellToolsNeedSettingAndAdmin(t *testing.T) {
 			t.Fatalf("%s missing with the setting on", want)
 		}
 	}
-	if !strings.Contains(on.InitializeResult().Instructions, "never asks for or accepts less than min_price") {
+	if !strings.Contains(on.InitializeResult().Instructions, "never quotes, agrees or accepts less than min_price") {
 		t.Fatal("instructions don't explain sell tasks")
 	}
 	start := map[string]any{"date": "2026-11-11", "meal": "lunch", "min_price": 30, "max_price": 60}
@@ -144,6 +144,26 @@ func TestSellToolsNeedSettingAndAdmin(t *testing.T) {
 	if len(list.Tasks) != 1 || list.Tasks[0].ID != task.ID {
 		t.Fatalf("status = %+v", list)
 	}
+	// A buyer the negotiation parked shows under needs_you with their chat.
+	parked := "913333333333@s.whatsapp.net"
+	st.AddSellTaskBuyer(ctx, task.ID, parked, parked, time.Now())
+	if ok, err := st.ClaimNegotiationMessage(ctx, task.ID, parked, 0, store.Negotiation{Ask: 5000, BotMsgs: 1, LastOffer: 2000, Quoted: []int64{6000, 5000}, StartedAt: time.Now()}); !ok || err != nil {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	if err := st.ParkSellTaskBuyer(ctx, task.ID, parked, "sent messages the bot couldn't read"); err != nil {
+		t.Fatal(err)
+	}
+	res, err = on.CallTool(ctx, &mcp.CallToolParams{Name: "sell_task_status", Arguments: map[string]any{"id": task.ID}})
+	if err != nil || res.IsError {
+		t.Fatalf("status: %v %+v", err, res)
+	}
+	b, _ = json.Marshal(res.StructuredContent)
+	json.Unmarshal(b, &list)
+	if nu := list.Tasks[0].NeedsYou; len(nu) != 1 || nu[0].ChatLink != "https://wa.me/913333333333" || nu[0].Ask != "50.00" ||
+		nu[0].LastOffer != "20.00" || nu[0].Why == "" || list.Tasks[0].Buyers[0].State != store.BuyerParked {
+		t.Fatalf("needs_you = %+v, buyers = %+v", nu, list.Tasks[0].Buyers)
+	}
+
 	res, err = on.CallTool(ctx, &mcp.CallToolParams{Name: "cancel_sell_task", Arguments: map[string]any{"id": task.ID}})
 	if err != nil || res.IsError {
 		t.Fatalf("cancel: %v %+v", err, res)

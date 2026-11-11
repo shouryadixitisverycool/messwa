@@ -87,6 +87,8 @@ type offerQueue struct {
 	// join, when set, records a new buyer before they are queued, with the
 	// chat they replied from. A buyer it refuses is dropped.
 	join func(peer, chat types.JID) bool
+	// firsts holds each buyer's first reply, for a negotiation to answer.
+	firsts map[types.JID]buyerMsg
 }
 
 func newOfferQueue() *offerQueue {
@@ -118,6 +120,40 @@ func (q *offerQueue) addFrom(peer, chat types.JID, name string) {
 	case q.ready <- struct{}{}:
 	default:
 	}
+}
+
+// noteFirst remembers peer's first reply, unless one is already noted.
+func (q *offerQueue) noteFirst(peer types.JID, id, text string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.firsts == nil {
+		q.firsts = make(map[types.JID]buyerMsg)
+	}
+	if _, ok := q.firsts[peer]; !ok && !q.seen[peer] {
+		q.firsts[peer] = buyerMsg{id: id, text: text}
+	}
+}
+
+// first is peer's first reply: its message ID and text.
+func (q *offerQueue) first(peer types.JID) (string, string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	m := q.firsts[peer]
+	return m.id, m.text
+}
+
+// has reports whether peer ever joined the queue.
+func (q *offerQueue) has(peer types.JID) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.seen[peer]
+}
+
+// waiting is how many buyers are queued.
+func (q *offerQueue) waiting() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.buyers)
 }
 
 func (q *offerQueue) name(peer types.JID) string {
@@ -248,18 +284,27 @@ func watchGroupOffer(ctx context.Context, conn saleConn, queue *offerQueue) *gro
 		if !ok || !o.matches(e) || buyerPassed(e.Message) {
 			return
 		}
-		peer := e.Info.Chat.ToNonAD()
-		if alt := e.Info.SenderAlt.ToNonAD(); alt.User != "" && alt.Server == types.DefaultUserServer {
-			peer = alt
-		} else if peer.Server == types.HiddenUserServer {
-			if pn := conn.PNForLID(ctx, peer); pn.User != "" {
-				peer = pn
-			}
-		}
+		peer := buyerPeer(ctx, conn, e.Info)
+		queue.noteFirst(peer, e.Info.ID, messageText(e.Message))
 		queue.addFrom(peer, e.Info.Chat.ToNonAD(), e.Info.PushName)
 	})
 	o.removeHandler = func() { conn.RemoveEventHandler(handlerID) }
 	return o
+}
+
+// buyerPeer is who sent a DM: their phone-number JID when WhatsApp tells us
+// one, else the chat's JID (a LID).
+func buyerPeer(ctx context.Context, conn saleConn, info types.MessageInfo) types.JID {
+	peer := info.Chat.ToNonAD()
+	if alt := info.SenderAlt.ToNonAD(); alt.User != "" && alt.Server == types.DefaultUserServer {
+		return alt
+	}
+	if peer.Server == types.HiddenUserServer {
+		if pn := conn.PNForLID(ctx, peer); pn.User != "" {
+			return pn
+		}
+	}
+	return peer
 }
 
 // watch queues replies to p from now on.

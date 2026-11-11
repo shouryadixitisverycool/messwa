@@ -344,6 +344,25 @@ func qualifiesForDelivery(e *events.Message, amount string, armedAt, endsAt, now
 	return deliveryRejection(e, amount, armedAt, endsAt, now) == nil
 }
 
+// paymentMatch checks e against each acceptable amount in turn and returns
+// the one it pays. The error is the rejection for the first amount.
+func paymentMatch(e *events.Message, amounts []string, armedAt, endsAt, now time.Time) (string, error) {
+	if len(amounts) == 0 {
+		return "", errors.New("no amount to match")
+	}
+	var first error
+	for i, a := range amounts {
+		err := deliveryRejection(e, a, armedAt, endsAt, now)
+		if err == nil {
+			return a, nil
+		}
+		if i == 0 {
+			first = err
+		}
+	}
+	return "", first
+}
+
 func deliveryRejection(e *events.Message, amount string, armedAt, endsAt, now time.Time) error {
 	if e == nil || e.Info.IsFromMe || e.Info.IsGroup || e.Info.ID == "" {
 		return errors.New("not an incoming DM with a message ID")

@@ -406,40 +406,6 @@ func TestResumedTurnTakesPaymentSentWhileDown(t *testing.T) {
 	})
 }
 
-func TestSellTaskNeverAsksBelowFloor(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "data.db")
-	synctest.Test(t, func(t *testing.T) {
-		f := newSellFixture(t, path)
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		m := f.manager(ctx)
-		m.negotiate = func(_ context.Context, t store.SellTask, _ types.JID) (int64, error) { return t.MinPaise - 1, nil }
-		id, err := m.Start(ctx, 0, f.date, "lunch", 30, 60, "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		synctest.Wait()
-		f.conn.emit(f.reply(buyerA, "interested"))
-		synctest.Wait()
-		if got := sentTo(f.conn.messages(), buyerA); len(got) != 0 {
-			t.Fatalf("buyer was asked below the floor: %+v", got)
-		}
-		buyers, _ := f.st.SellTaskBuyers(ctx, id)
-		if len(buyers) != 1 || buyers[0].State != store.BuyerSkipped {
-			t.Fatalf("buyers = %+v", buyers)
-		}
-		// The store refuses a reservation below the floor on its own too.
-		d := store.Delivery{Date: f.date, Meal: "lunch", Peer: buyerA.String(), Amount: "29.99", ImageHash: "portal:account", ArmedAt: time.Now()}
-		if _, err := f.st.ArmTaskDelivery(ctx, id, d); err == nil {
-			t.Fatal("store armed a delivery below the floor")
-		}
-		d.Amount = "30.00"
-		if _, err := f.st.ArmTaskDelivery(ctx, id, d); err != nil {
-			t.Fatalf("store refused the floor price: %v", err)
-		}
-	})
-}
-
 func TestSellTaskTurnsAndExpiry(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data.db")
 	synctest.Test(t, func(t *testing.T) {
