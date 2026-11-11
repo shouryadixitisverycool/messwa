@@ -153,6 +153,7 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 		return err
 	}
 	defer st.Close()
+	own := newOwnGroupLog(ctx, cfg, st, c)
 	commandCtx := ctx
 	ctx, cancel := context.WithDeadline(ctx, slot.End)
 	defer cancel()
@@ -188,6 +189,7 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 		}
 		defer closeOffer()
 		queue = replies
+		recordOffers(ctx, st, own, log, *date, *meal, queue.posts)
 		paymentPrompt = fmt.Sprintf("pay %s here via WhatsApp Pay, I'll send the QR", price)
 		if *qr == "" && !*portalQR {
 			paymentPrompt = fmt.Sprintf("pay %s here via WhatsApp Pay for the test QR", price)
@@ -423,8 +425,22 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	newReservation := func(peer types.JID) store.Delivery {
 		return store.Delivery{Date: *date, Meal: *meal, Peer: peer.String(), Amount: *amount, ImageHash: imageHash, ArmedAt: time.Now(), Mess: mess, Diet: diet}
 	}
+	// The meal is sold once its QR is out, so tick every offer post for it,
+	// including ones from an earlier group offer. The deadline is the
+	// command's, not the meal's: a sale in the last seconds still gets its ✅.
+	tickOffers := func() {
+		tickCtx, stop := context.WithTimeout(commandCtx, time.Minute)
+		defer stop()
+		if _, _, err := reactSold(tickCtx, st, own, waReaction(c), log, *date, *meal); err != nil {
+			log.Warn("could not read the offer posts to mark them sold", "err", err)
+		}
+	}
 	if queue == nil {
-		return tryBuyer(ctx, jid, newReservation(jid))
+		if err := tryBuyer(ctx, jid, newReservation(jid)); err != nil {
+			return err
+		}
+		tickOffers()
+		return nil
 	}
 	wait, stopWaiting := context.WithTimeout(ctx, 10*time.Minute)
 	defer stopWaiting()
@@ -458,6 +474,7 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 					log.Warn("could not notify queued buyer that meal sold", "err", notifyErr)
 				}
 			}
+			tickOffers()
 			return nil
 		}
 		if !errors.Is(err, errBuyerPassed) && !errors.Is(err, errBuyerTimedOut) {

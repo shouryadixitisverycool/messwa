@@ -55,6 +55,8 @@ commands:
                                 arm one meal's QR delivery after a matching payment message
   release-handoff -date DATE -meal MEAL
                                 free a meal handed to you by -handoff on_reply so it can be offered again
+  mark-sold -date DATE -meal MEAL
+                                react ✅ to the meal's offer posts, for a sale finished by hand
 
 inspection (read the database only, safe while run is up):
   chat [-hours 48]              the merged group stream, each post annotated with its listing
@@ -107,6 +109,8 @@ func main() {
 		err = deliverQR(ctx, cfg, log, args)
 	case "release-handoff":
 		err = releaseHandoff(ctx, cfg, os.Stdout, args)
+	case "mark-sold":
+		err = markSold(ctx, cfg, log, args)
 	case "import-history":
 		err = importHistory(ctx, cfg, args)
 	case "chat":

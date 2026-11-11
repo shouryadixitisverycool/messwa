@@ -4,7 +4,7 @@ messwa links to WhatsApp as a companion device (via [whatsmeow](https://github.c
 
 The WhatsApp access limits live in the binary. Ingest drops every chat outside the allowed set before anything touches disk, and WhatsApp MCP tools read only that stored data. Optional portal tools separately read your own registrations and current QR, using the mess API key saved on your messwa account.
 
-The default `run` service and MCP tools are read-only: no messages, read receipts or presence are sent. Your phone keeps showing messages as unread and notifications don't change. The separate, explicitly armed `deliver-qr` command can send one image after a matching payment message.
+The default `run` service and MCP tools are read-only: no messages, read receipts or presence are sent. Your phone keeps showing messages as unread and notifications don't change. The separate, explicitly armed `deliver-qr` command can send one image after a matching payment message, and then reacts ✅ to its own offer posts. `mark-sold` sends only that ✅.
 
 ## What gets stored
 
@@ -363,6 +363,36 @@ If you send the QR from your phone instead, messwa never sees the payment.
 The meal stays handed off on the sales page and doesn't count toward
 earnings. If the portal shows you ate it, the page shows ATE.
 
+### Marking the meal sold
+
+`deliver-qr -group` records each offer post's group and message ID in the
+data database. Once a QR reaches the `sent` state, the command reacts ✅ to
+every offer post recorded for that date and meal, in any group and from any
+earlier `deliver-qr -group` run. This also happens after a `-peer` delivery
+for a meal that was offered in a group first. A reaction that fails is logged
+as a warning and the sale still counts.
+
+If you finish a sale yourself, for example after taking over the buyer's
+chat, tick the posts by hand. Stop `run` first, like the other sending
+commands:
+
+```sh
+./messwa mark-sold -date 2026-11-04 -meal lunch
+```
+
+It errors when no offer post is recorded for that meal. Posts you made from
+your phone aren't recorded; react to those from the phone. Running it again
+sends the ✅ again, which also restores one you removed. It exits with an
+error if any reaction failed, after trying the rest.
+
+WhatsApp doesn't deliver a message back to the device that sent it, so `run`
+never sees an offer or ✅ that messwa sent. `deliver-qr` and `mark-sold`
+write both into the group log themselves, as posts from the linked account,
+for groups listed in `config.toml`. The board then shows the offer as your
+listing, and the ✅ marks it sold like any seller's tick. A ✅ you add or
+remove from your phone arrives as a normal event. The sales page doesn't
+change: `mark-sold` doesn't record a buyer or price.
+
 ### One-meal QR delivery
 
 Stop `run` or `inspect-payment` before using the same linked session. Arm one
@@ -424,7 +454,8 @@ details and known incomplete transactions do not qualify. The WhatsApp event
 does not independently verify that funds arrived.
 
 The data database stores the buyer, amount, image hash or portal-account binding, arming time, payment
-message ID, outgoing image ID and state for each date/meal. It never stores
+message ID, outgoing image ID and state for each date/meal, plus the group
+and message ID of each offer post and when messwa reacted to it. It never stores
 the raw payment payload. Repeated events and restarts cannot automatically
 send the same slot twice. An armed slot can resume only with the same buyer,
 price and image. A payment message cannot claim another meal.

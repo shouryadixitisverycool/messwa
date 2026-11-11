@@ -71,6 +71,8 @@ func postGroupOffer(ctx context.Context, c *wa.Client, log *slog.Logger, group, 
 }
 
 type offerQueue struct {
+	// posts are the group posts this offer went out as.
+	posts  []postedOffer
 	mu     sync.Mutex
 	buyers []types.JID
 	seen   map[types.JID]bool
@@ -183,10 +185,12 @@ func openGroupOffer(ctx context.Context, c *wa.Client, log *slog.Logger, group, 
 		queue.addNamed(peer, e.Info.PushName)
 	})
 	closeOffer := func() { c.WA.RemoveEventHandler(handlerID) }
-	if _, err := c.WA.SendMessage(ctx, jid, &waE2E.Message{Conversation: proto.String(offer)}, whatsmeow.SendRequestExtra{ID: offerID}); err != nil {
+	resp, err := c.WA.SendMessage(ctx, jid, &waE2E.Message{Conversation: proto.String(offer)}, whatsmeow.SendRequestExtra{ID: offerID})
+	if err != nil {
 		closeOffer()
 		return nil, nil, fmt.Errorf("group offer send failed or is uncertain: %w", err)
 	}
+	queue.posts = append(queue.posts, postedOffer{Chat: jid, ID: offerID, At: firstTime(resp.Timestamp, postedAt), Text: offer})
 	log.Info("group offer sent; waiting for a private reply", "group", selected.Name, "offer_id", offerID)
 	return queue, closeOffer, nil
 }
