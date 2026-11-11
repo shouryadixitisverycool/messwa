@@ -15,28 +15,20 @@ import (
 	"log/slog"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
-	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/proto/waWeb"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
-	"google.golang.org/protobuf/proto"
 
 	"messwa/internal/config"
-	"messwa/internal/meals"
-	"messwa/internal/portal"
 	"messwa/internal/store"
 	"messwa/internal/wa"
 )
 
 //go:embed assets/qr-placeholder.png
 var placeholderQR []byte
-
-var errBuyerPassed = errors.New("buyer passed on the meal")
-var errBuyerTimedOut = errors.New("buyer payment window expired")
 
 func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args []string) error {
 	fs := flag.NewFlagSet("deliver-qr", flag.ContinueOnError)
@@ -66,18 +58,9 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	if *portalQR && *qr != "" {
 		return errors.New("choose either -portal-qr or -qr")
 	}
-	day, err := time.ParseInLocation("2006-01-02", *date, cfg.Location())
+	slot, err := findSlot(cfg, *date, *meal)
 	if err != nil {
-		return errors.New("-date must be YYYY-MM-DD")
-	}
-	var slot meals.Slot
-	for _, w := range meals.New(cfg).Windows(day) {
-		if w.Meal == *meal {
-			slot = w
-		}
-	}
-	if slot.Meal == "" {
-		return errors.New("-meal must name a configured meal")
+		return errors.New("-" + err.Error())
 	}
 	if !time.Now().Before(slot.End) {
 		return errors.New("meal has already ended")
@@ -90,42 +73,27 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 		}
 		jid = jid.ToNonAD()
 	}
-	if !decimalAmount.MatchString(*amount) || strings.Trim(*amount, "0.") == "" {
+	if *amount, err = normalizeAmount(*amount); err != nil {
 		return errors.New("-amount must be a positive INR value with two decimal places")
 	}
-	// Normalize without floats so e.g. 060.00 matches the received 60.00.
-	parts := strings.Split(*amount, ".")
-	parts[0] = strings.TrimLeft(parts[0], "0")
-	if parts[0] == "" {
-		parts[0] = "0"
-	}
-	*amount = parts[0] + "." + parts[1]
-	data, mime, width, height, err := readDeliveryImage(*qr)
+	data, _, _, _, err := readDeliveryImage(*qr)
 	if err != nil {
 		return err
 	}
-	imageHash := fmt.Sprintf("%x", sha256.Sum256(data))
-	var portalClient *portal.Client
-	var accountHash, mess, diet, portalMess string
-	mealLabel := *meal
+	s := &sale{
+		log: log, loc: cfg.Location(), date: *date, meal: *meal, end: slot.End, label: *meal,
+		image: data, testImage: *qr == "", imageHash: fmt.Sprintf("%x", sha256.Sum256(data)),
+		diagnostics: *diagnostics, assumeUnreadable: *assumeUnreadable,
+	}
 	if *portalQR {
-		portalClient, err = userPortal(ctx, cfg, *user)
+		portalClient, err := userPortal(ctx, cfg, *user)
 		if err != nil {
 			return err
 		}
-		current, err := portalClient.QRForMeal(ctx, *date, *meal, "")
-		if err != nil {
+		s.image, s.testImage = nil, false
+		if err := s.usePortal(ctx, portalClient, cfg.VegOnly); err != nil {
 			return err
 		}
-		accountHash = current.AccountHash
-		portalMess = current.Registration.Mess
-		mess, diet = current.Registration.MessDiet()
-		if diet == "" && cfg.VegOnly(mess) {
-			diet = "veg"
-		}
-		mealLabel = portalMealLabel(mess, diet, *meal)
-		// Bind restarts to the account, not the token that rotates daily.
-		imageHash = "portal:" + accountHash
 	}
 	c, err := wa.Open(ctx, cfg, log)
 	if err != nil {
@@ -142,315 +110,80 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 		return err
 	}
 	defer st.Close()
+	s.st, s.conn = st, waConn{c.WA}
+	s.send, s.sendPaid = c.WA.SendMessage, c.WA.SendMessage
 	commandCtx := ctx
 	ctx, cancel := context.WithDeadline(ctx, slot.End)
 	defer cancel()
 	defer c.WA.Disconnect()
-	paymentPrompt := *offer
-	armDelivery := st.ArmDelivery
-	var queue *offerQueue
-	if *group != "" {
-		exists, err := st.DeliveryExists(ctx, *date, *meal)
-		if err != nil {
-			return err
-		}
-		if exists {
-			return errors.New("meal already has a delivery reservation")
-		}
-		if err := c.WA.ConnectContext(ctx); err != nil {
-			return err
-		}
-		if !c.WA.WaitForConnection(20 * time.Second) {
-			return errors.New("WhatsApp connection not ready")
-		}
-		groupPost := *offer
-		price := "₹" + strings.TrimSuffix(*amount, ".00")
-		if strings.TrimSpace(groupPost) == "" {
-			groupPost = fmt.Sprintf("sell %s %s", mealLabel, price)
-			if *date != time.Now().In(cfg.Location()).Format("2006-01-02") {
-				groupPost += " (" + day.Format("2 Jan 2006") + ")"
-			}
-		}
-		replies, closeOffer, err := openGroupOffer(ctx, c, log, *group, groupPost)
-		if err != nil {
-			return err
-		}
-		defer closeOffer()
-		queue = replies
-		paymentPrompt = fmt.Sprintf("pay %s here via WhatsApp Pay, I'll send the QR", price)
-		if *qr == "" && !*portalQR {
-			paymentPrompt = fmt.Sprintf("pay %s here via WhatsApp Pay for the test QR", price)
-		}
-		armDelivery = st.ArmNewDelivery
-	}
-	tryBuyer := func(ctx context.Context, jid types.JID, d store.Delivery) error {
-		ctx, cancel := context.WithCancel(ctx)
-		defer cancel()
-		sendQR := func(recipient types.JID, id string) error {
-			if portalClient != nil {
-				current, err := portalClient.QRForMeal(ctx, d.Date, d.Meal, accountHash)
-				if err != nil {
+	if *peer != "" {
+		return s.takeTurn(ctx, jid, s.reservation(jid, *amount), turn{
+			arm:    st.ArmDelivery,
+			prompt: *offer,
+			listening: func() error {
+				if err := c.WA.Connect(); err != nil {
 					return err
 				}
-				if *group != "" && current.Registration.Mess != portalMess {
-					return errors.New("portal registration changed during the sale")
+				if (*diagnostics || *offer != "") && !c.WA.WaitForConnection(20*time.Second) {
+					return errors.New("WhatsApp connection not ready; offer was not sent")
 				}
-				data, mime, width, height, err = deliveryImageBytes(current.PNG)
-				if err != nil {
-					return err
-				}
-			}
-			up, err := c.WA.Upload(ctx, data, whatsmeow.MediaImage)
-			if err != nil {
-				return err
-			}
-			_, err = c.WA.SendMessage(ctx, recipient, &waE2E.Message{ImageMessage: &waE2E.ImageMessage{
-				Caption: proto.String(fmt.Sprintf("%s %s", d.Date, d.Meal)), Mimetype: proto.String(mime), Width: proto.Uint32(uint32(width)), Height: proto.Uint32(uint32(height)),
-				URL: &up.URL, DirectPath: &up.DirectPath, MediaKey: up.MediaKey, FileEncSHA256: up.FileEncSHA256, FileSHA256: up.FileSHA256, FileLength: &up.FileLength,
-			}}, whatsmeow.SendRequestExtra{ID: id})
-			return err
-		}
-		armedAt, err := armDelivery(ctx, d)
-		if err != nil {
-			return err
-		}
-		// WhatsApp event timestamps have second precision. Start at the next second
-		// so messages from just before the first arming cannot qualify.
-		armedAt = armedAt.Add(time.Second)
-		var payUntil time.Time
-		var deadline <-chan time.Time
-		if queue != nil {
-			payUntil = time.Now().Add(2 * time.Minute).Truncate(time.Second)
-			if slot.End.Before(payUntil) {
-				payUntil = slot.End
-			}
-			timer := time.NewTimer(time.Until(payUntil))
-			defer timer.Stop()
-			deadline = timer.C
-		}
-		done := make(chan error, 1)
-		recoveryDone := make(chan struct{}, 1)
-		pending := 0
-		var mu sync.Mutex
-		attempted := false
-		requestedPayments := map[string]context.CancelFunc{}
-		finish := func(e *events.Message, amountMissing bool) {
-			attempted = true
-			for _, stop := range requestedPayments {
-				stop()
-			}
-			if amountMissing {
-				log.Warn("payment amount unavailable after recovery; assuming agreed price",
-					"date", d.Date, "meal", d.Meal, "amount_assumed", d.Amount, "payment_id", e.Info.ID)
-			}
-			id := c.WA.GenerateMessageID()
-			paid := store.Payment{ID: e.Info.ID, At: e.Info.Timestamp, BuyerName: e.Info.PushName}
-			log.Info("payment assumed; sending meal image", "date", d.Date, "meal", d.Meal, "amount", d.Amount)
-			err := deliverOnce(ctx, st, d, paid, id, func() error { return sendQR(e.Info.Chat, id) })
-			if err != nil {
-				done <- err
-				return
-			}
-			log.Info("meal image sent", "date", d.Date, "meal", d.Meal, "message_id", id)
-			done <- nil
-		}
-		matchesBuyer := func(info types.MessageInfo) bool {
-			if info.IsFromMe || info.IsGroup {
-				return false
-			}
-			if info.Chat.ToNonAD() == jid || info.SenderAlt.ToNonAD() == jid {
-				return true
-			}
-			if info.Chat.Server == types.HiddenUserServer && jid.Server == types.DefaultUserServer {
-				pn, err := c.WA.Store.LIDs.GetPNForLID(ctx, info.Chat.ToNonAD())
-				return err == nil && pn.ToNonAD() == jid
-			}
-			return false
-		}
-		handler := c.WA.AddEventHandler(func(evt any) {
-			if *diagnostics {
-				switch e := evt.(type) {
-				case *events.Connected:
-					log.Info("WhatsApp connected")
-				case *events.Disconnected:
-					log.Warn("WhatsApp disconnected")
-				case *events.LoggedOut:
-					log.Warn("WhatsApp session logged out")
-				case *events.UndecryptableMessage:
-					if matchesBuyer(e.Info) {
-						log.Warn("could not decrypt buyer message", "at", e.Info.Timestamp, "unavailable", e.IsUnavailable)
-					}
-				}
-			}
-			e, ok := evt.(*events.Message)
-			if !ok {
-				return
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			if attempted || ctx.Err() != nil || !matchesBuyer(e.Info) {
-				return
-			}
-			stopRecovery := requestedPayments[e.Info.ID]
-			if !payUntil.IsZero() && (!e.Info.Timestamp.Before(payUntil) || (stopRecovery == nil && !time.Now().Before(payUntil))) {
-				return
-			}
-			if queue != nil && pending == 0 && !e.Info.Timestamp.Before(armedAt) && buyerPassed(e.Message) {
-				attempted = true
-				done <- errBuyerPassed
-				return
-			}
-			reason := deliveryRejection(e, d.Amount, armedAt, slot.End, time.Now())
-			if !errors.Is(reason, errTruncatedPayment) && stopRecovery != nil {
-				stopRecovery()
-			}
-			if reason != nil {
-				if errors.Is(reason, errTruncatedPayment) && stopRecovery == nil {
-					recoveryCtx, cancelRecovery := context.WithCancel(ctx)
-					requestedPayments[e.Info.ID] = cancelRecovery
-					pending++
-					if *diagnostics {
-						wire := e.Message.GetSendPaymentMessage()
-						log.Info("incomplete payment fields", "message_id", e.Info.ID, "transaction_data_chars", len(wire.GetTransactionData()),
-							"has_payment_info", e.SourceWebMsg.GetPaymentInfo() != nil,
-							"has_request_key", wire.GetRequestMessageKey() != nil)
-					}
-					// The primary phone can have the full payment when the linked
-					// device receives only a shortened copy. The response re-enters
-					// this handler and must pass the same checks before delivery.
-					chat, id := e.Info.Chat.ToNonAD(), e.Info.ID
-					go func() {
-						defer cancelRecovery()
-						waitForPaymentRecovery(recoveryCtx, func(requestCtx context.Context, attempt int) {
-							_, err := c.WA.SendPeerMessage(requestCtx, c.WA.BuildUnavailableMessageRequest(chat, chat, id))
-							if err != nil {
-								log.Warn("payment recovery request failed", "attempt", attempt, "err", err)
-							} else {
-								log.Info("requested full payment from primary device", "attempt", attempt)
-							}
-						})
-						mu.Lock()
-						defer mu.Unlock()
-						pending--
-						select {
-						case recoveryDone <- struct{}{}:
-						default:
-						}
-						if recoveryCtx.Err() != nil || attempted || !time.Now().Before(slot.End) {
-							return
-						}
-						if *assumeUnreadable {
-							finish(e, true)
-							return
-						}
-						log.Warn("payment amount unreadable after recovery; not sending the meal image. Check the buyer's chat, or rerun with -assume-unreadable-payment",
-							"date", d.Date, "meal", d.Meal, "payment_id", e.Info.ID)
-					}()
-				}
-				if *diagnostics {
-					log.Info("buyer message did not trigger delivery", "at", e.Info.Timestamp, "reason", reason.Error())
-				}
-				return
-			}
-			finish(e, false)
+				return nil
+			},
 		})
-		defer c.WA.RemoveEventHandler(handler)
-		if *group == "" {
-			if err := c.WA.Connect(); err != nil {
-				return err
-			}
-		}
-		if *diagnostics && !c.WA.WaitForConnection(20*time.Second) {
-			return errors.New("WhatsApp connection not ready")
-		}
-		if paymentPrompt != "" {
-			if !c.WA.WaitForConnection(20 * time.Second) {
-				return errors.New("WhatsApp connection not ready; offer was not sent")
-			}
-			prompt := paymentPrompt
-			if queue != nil {
-				prompt += fmt.Sprintf(". Please pay before %s. If you don't want the meal anymore, reply \"not interested\".", payUntil.In(cfg.Location()).Format("15:04:05"))
-			}
-			if _, err := c.WA.SendMessage(ctx, jid, &waE2E.Message{Conversation: proto.String(prompt)}); err != nil {
-				return fmt.Errorf("offer send failed or is uncertain; inspect chat before retrying: %w", err)
-			}
-			log.Info("offer sent to selected buyer")
-			if err := st.MarkOfferSent(ctx, d, time.Now()); err != nil {
-				log.Warn("could not record the offer time", "err", err)
-			}
-		}
-		fmt.Fprintf(os.Stderr, "Armed %s %s for INR %s, ending %s. Only a new payment message from the selected buyer can trigger delivery. Payment is assumed, not bank-verified.\n", d.Date, d.Meal, d.Amount, slot.End.Format(time.RFC3339))
-		select {
-		case err := <-done:
-			return err
-		case <-deadline:
-			for {
-				mu.Lock()
-				expired := pending == 0 && !attempted
-				if expired {
-					attempted = true
-				}
-				mu.Unlock()
-				if expired {
-					return errBuyerTimedOut
-				}
-				select {
-				case err := <-done:
-					return err
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-recoveryDone:
-				}
-			}
-		case <-ctx.Done():
-			return ctx.Err()
+	}
+	exists, err := st.DeliveryExists(ctx, *date, *meal)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return errors.New("meal already has a delivery reservation")
+	}
+	if err := c.WA.ConnectContext(ctx); err != nil {
+		return err
+	}
+	if !c.WA.WaitForConnection(20 * time.Second) {
+		return errors.New("WhatsApp connection not ready")
+	}
+	groupPost := *offer
+	if strings.TrimSpace(groupPost) == "" {
+		groupPost = offerText(cfg, s.label, *date, *amount, true)
+	}
+	queue, closeOffer, err := openGroupOffer(ctx, s.conn, s.send, log, *group, groupPost)
+	if err != nil {
+		return err
+	}
+	defer closeOffer()
+	return s.sellToQueue(ctx, commandCtx, queue, memoryJournal{amount: *amount, st: st}, 10*time.Minute, nil)
+}
+
+// normalizeAmount checks an INR amount with two decimal places and drops
+// leading zeros without floats, so 060.00 matches the received 60.00.
+func normalizeAmount(amount string) (string, error) {
+	if !decimalAmount.MatchString(amount) || strings.Trim(amount, "0.") == "" {
+		return "", errors.New("not a positive INR amount with two decimal places")
+	}
+	parts := strings.Split(amount, ".")
+	parts[0] = strings.TrimLeft(parts[0], "0")
+	if parts[0] == "" {
+		parts[0] = "0"
+	}
+	return parts[0] + "." + parts[1], nil
+}
+
+// offerText is the group post for a meal: "sell bakul non-veg lunch ₹60",
+// with the date when it isn't today. withPrice false leaves the price out,
+// so buyers ask for it in a DM.
+func offerText(cfg *config.Config, label, date, amount string, withPrice bool) string {
+	text := "sell " + label
+	if withPrice {
+		text += " ₹" + strings.TrimSuffix(amount, ".00")
+	}
+	if date != time.Now().In(cfg.Location()).Format("2006-01-02") {
+		if day, err := time.ParseInLocation("2006-01-02", date, cfg.Location()); err == nil {
+			text += " (" + day.Format("2 Jan 2006") + ")"
 		}
 	}
-	newReservation := func(peer types.JID) store.Delivery {
-		return store.Delivery{Date: *date, Meal: *meal, Peer: peer.String(), Amount: *amount, ImageHash: imageHash, ArmedAt: time.Now(), Mess: mess, Diet: diet}
-	}
-	if queue == nil {
-		return tryBuyer(ctx, jid, newReservation(jid))
-	}
-	wait, stopWaiting := context.WithTimeout(ctx, 10*time.Minute)
-	defer stopWaiting()
-	for {
-		peer, err := queue.next(wait)
-		if err != nil {
-			return err
-		}
-		stopWaiting()
-		wait = ctx
-		if portalClient != nil {
-			reg, err := portalClient.RequireRegistration(ctx, *date, *meal)
-			if err != nil {
-				return err
-			}
-			if reg.Mess != portalMess {
-				return errors.New("portal registration changed since the group offer")
-			}
-		}
-		d := newReservation(peer)
-		err = tryBuyer(ctx, peer, d)
-		if err == nil {
-			for _, waiting := range queue.closeAndDrain() {
-				notifyCtx, stop := context.WithTimeout(commandCtx, 5*time.Second)
-				_, notifyErr := c.WA.SendMessage(notifyCtx, waiting, &waE2E.Message{Conversation: proto.String("sorry sold")})
-				stop()
-				if notifyErr != nil {
-					log.Warn("could not notify queued buyer that meal sold", "err", notifyErr)
-				}
-			}
-			return nil
-		}
-		if !errors.Is(err, errBuyerPassed) && !errors.Is(err, errBuyerTimedOut) {
-			return err
-		}
-		if err := st.ReleaseUnpaidDelivery(ctx, d); err != nil {
-			return err
-		}
-		log.Info("buyer turn ended; checking queue", "reason", err)
-	}
+	return text
 }
 
 func buyerPassed(message *waE2E.Message) bool {

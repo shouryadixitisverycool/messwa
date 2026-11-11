@@ -62,7 +62,8 @@ func offerGroup(ctx context.Context, cfg *config.Config, log *slog.Logger, args 
 func postGroupOffer(ctx context.Context, c *wa.Client, log *slog.Logger, group, offer string, wait time.Duration) (types.JID, error) {
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
-	queue, closeOffer, err := openGroupOffer(ctx, c, log, group, offer)
+	conn := waConn{c.WA}
+	queue, closeOffer, err := openGroupOffer(ctx, conn, c.WA.SendMessage, log, group, offer)
 	if err != nil {
 		return types.EmptyJID, err
 	}
@@ -76,6 +77,13 @@ type offerQueue struct {
 	seen   map[types.JID]bool
 	ready  chan struct{}
 	closed bool
+	// join, when set, records a new buyer before they are queued. A buyer
+	// it refuses is dropped.
+	join func(types.JID) bool
+}
+
+func newOfferQueue() *offerQueue {
+	return &offerQueue{seen: make(map[types.JID]bool), ready: make(chan struct{}, 1)}
 }
 
 func (q *offerQueue) add(peer types.JID) {
@@ -84,11 +92,29 @@ func (q *offerQueue) add(peer types.JID) {
 	if q.closed || q.seen[peer] {
 		return
 	}
+	if q.join != nil && !q.join(peer) {
+		return
+	}
 	q.seen[peer] = true
 	q.buyers = append(q.buyers, peer)
 	select {
 	case q.ready <- struct{}{}:
 	default:
+	}
+}
+
+// restore puts back a buyer who was queued before a restart, without
+// recording them again.
+func (q *offerQueue) restore(peer types.JID, waiting bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.seen[peer] = true
+	if waiting {
+		q.buyers = append(q.buyers, peer)
+		select {
+		case q.ready <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -119,54 +145,82 @@ func (q *offerQueue) next(ctx context.Context) (types.JID, error) {
 	return types.EmptyJID, fmt.Errorf("waiting for a private reply: %w", ctx.Err())
 }
 
-func openGroupOffer(ctx context.Context, c *wa.Client, log *slog.Logger, group, offer string) (*offerQueue, func(), error) {
-	groups, err := c.Groups(ctx)
+// findGroup resolves an exact group name or JID among the joined groups.
+func findGroup(ctx context.Context, conn saleConn, group string) (types.JID, string, error) {
+	groups, err := conn.GetJoinedGroups(ctx)
 	if err != nil {
-		return nil, nil, err
+		return types.EmptyJID, "", err
 	}
-	var selected *wa.GroupSummary
-	for i := range groups {
-		g := &groups[i]
-		if g.JID != group && (strings.HasSuffix(group, "@g.us") || g.Name != group) {
+	var selected *types.GroupInfo
+	for _, g := range groups {
+		if g.JID.String() != group && (strings.HasSuffix(group, "@g.us") || g.Name != group) {
 			continue
 		}
 		if selected != nil {
-			return nil, nil, errors.New("group name is ambiguous; use its exact JID")
+			return types.EmptyJID, "", errors.New("group name is ambiguous; use its exact JID")
 		}
 		selected = g
 	}
 	if selected == nil {
-		return nil, nil, errors.New("no joined group matches -group")
+		return types.EmptyJID, "", errors.New("no joined group matches the requested group")
 	}
-	jid, err := types.ParseJID(selected.JID)
-	if err != nil || jid.Server != types.GroupServer || jid.User == "" {
-		return nil, nil, errors.New("selected group has an invalid JID")
+	if selected.JID.Server != types.GroupServer || selected.JID.User == "" {
+		return types.EmptyJID, "", errors.New("selected group has an invalid JID")
 	}
+	return selected.JID, selected.Name, nil
+}
 
-	offerID := c.WA.GenerateMessageID()
-	postedAt := time.Now().Truncate(time.Second)
-	queue := &offerQueue{seen: make(map[types.JID]bool), ready: make(chan struct{}, 1)}
-	handlerID := c.WA.AddEventHandler(func(evt any) {
+// postedOffer is one group post that buyers reply to privately.
+type postedOffer struct {
+	group    types.JID
+	id       string
+	postedAt time.Time
+}
+
+// watchOfferReplies queues everyone who replies privately to any of offers,
+// by phone number when WhatsApp tells us one.
+func watchOfferReplies(ctx context.Context, conn saleConn, queue *offerQueue, offers []postedOffer) func() {
+	handlerID := conn.AddEventHandler(func(evt any) {
 		e, ok := evt.(*events.Message)
-		if !ok || !privateOfferReply(e, jid, offerID, postedAt) || buyerPassed(e.Message) {
+		if !ok || buyerPassed(e.Message) {
+			return
+		}
+		matched := false
+		for _, o := range offers {
+			if privateOfferReply(e, o.group, o.id, o.postedAt) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
 			return
 		}
 		peer := e.Info.Chat.ToNonAD()
 		if alt := e.Info.SenderAlt.ToNonAD(); alt.User != "" && alt.Server == types.DefaultUserServer {
 			peer = alt
 		} else if peer.Server == types.HiddenUserServer {
-			if pn, err := c.WA.Store.LIDs.GetPNForLID(ctx, peer); err == nil && pn.User != "" {
-				peer = pn.ToNonAD()
+			if pn := conn.PNForLID(ctx, peer); pn.User != "" {
+				peer = pn
 			}
 		}
 		queue.add(peer)
 	})
-	closeOffer := func() { c.WA.RemoveEventHandler(handlerID) }
-	if _, err := c.WA.SendMessage(ctx, jid, &waE2E.Message{Conversation: proto.String(offer)}, whatsmeow.SendRequestExtra{ID: offerID}); err != nil {
+	return func() { conn.RemoveEventHandler(handlerID) }
+}
+
+func openGroupOffer(ctx context.Context, conn saleConn, send sendFunc, log *slog.Logger, group, offer string) (*offerQueue, func(), error) {
+	jid, name, err := findGroup(ctx, conn, group)
+	if err != nil {
+		return nil, nil, err
+	}
+	o := postedOffer{group: jid, id: conn.GenerateMessageID(), postedAt: time.Now().Truncate(time.Second)}
+	queue := newOfferQueue()
+	closeOffer := watchOfferReplies(ctx, conn, queue, []postedOffer{o})
+	if _, err := send(ctx, jid, &waE2E.Message{Conversation: proto.String(offer)}, whatsmeow.SendRequestExtra{ID: o.id}); err != nil {
 		closeOffer()
 		return nil, nil, fmt.Errorf("group offer send failed or is uncertain: %w", err)
 	}
-	log.Info("group offer sent; waiting for a private reply", "group", selected.Name, "offer_id", offerID)
+	log.Info("group offer sent; waiting for a private reply", "group", name, "offer_id", o.id)
 	return queue, closeOffer, nil
 }
 
