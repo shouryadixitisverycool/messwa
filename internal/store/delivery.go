@@ -19,7 +19,17 @@ CREATE TABLE IF NOT EXISTS qr_deliveries (
  payment_id TEXT UNIQUE,
  message_id TEXT NOT NULL DEFAULT '',
  PRIMARY KEY(date, meal)
-);`
+);
+CREATE TABLE IF NOT EXISTS offer_posts (
+ date TEXT NOT NULL,
+ meal TEXT NOT NULL,
+ chat TEXT NOT NULL,
+ message_id TEXT NOT NULL,
+ posted_at INTEGER NOT NULL,
+ reacted_at INTEGER,
+ PRIMARY KEY(chat, message_id)
+);
+CREATE INDEX IF NOT EXISTS offer_posts_slot ON offer_posts(date, meal);`
 
 // Columns added for the sales page. They only describe a delivery; none of
 // them takes part in arming or claiming it.
@@ -197,4 +207,53 @@ func (s *Store) Deliveries(ctx context.Context) ([]DeliveryRecord, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// OfferPost is a group post offering a meal. A meal can have several: one per
+// group, and another after a failed sale is offered again. They live apart
+// from qr_deliveries because a reservation row is deleted when a buyer
+// passes, while the posts still need their ✅ once the meal sells.
+type OfferPost struct {
+	Date, Meal string
+	Chat, ID   string // group JID and message ID
+	PostedAt   time.Time
+	ReactedAt  time.Time // when messwa last reacted ✅; zero if never
+}
+
+func (s *Store) RecordOfferPost(ctx context.Context, p OfferPost) error {
+	if p.Chat == "" || p.ID == "" {
+		return errors.New("offer post needs a group and a message ID")
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO offer_posts(date,meal,chat,message_id,posted_at) VALUES(?,?,?,?,?)
+ ON CONFLICT(chat,message_id) DO NOTHING`, p.Date, p.Meal, p.Chat, p.ID, p.PostedAt.Unix())
+	return err
+}
+
+// OfferPosts returns the meal's offer posts, oldest first.
+func (s *Store) OfferPosts(ctx context.Context, date, meal string) ([]OfferPost, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT chat,message_id,posted_at,coalesce(reacted_at,0) FROM offer_posts
+ WHERE date=? AND meal=? ORDER BY posted_at, chat, message_id`, date, meal)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []OfferPost
+	for rows.Next() {
+		p := OfferPost{Date: date, Meal: meal}
+		var posted, reacted int64
+		if err := rows.Scan(&p.Chat, &p.ID, &posted, &reacted); err != nil {
+			return nil, err
+		}
+		p.PostedAt = time.Unix(posted, 0)
+		if reacted != 0 {
+			p.ReactedAt = time.Unix(reacted, 0)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) MarkOfferReacted(ctx context.Context, chat, id string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE offer_posts SET reacted_at=? WHERE chat=? AND message_id=?`, at.Unix(), chat, id)
+	return err
 }
