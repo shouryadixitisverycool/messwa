@@ -4,7 +4,7 @@ messwa links to WhatsApp as a companion device (via [whatsmeow](https://github.c
 
 The WhatsApp access limits live in the binary. Ingest drops every chat outside the allowed set before anything touches disk, and WhatsApp MCP tools read only that stored data. Optional portal tools separately read your own registrations and current QR, using the mess API key saved on your messwa account.
 
-The default `run` service and MCP tools are read-only: no messages, read receipts or presence are sent. Your phone keeps showing messages as unread and notifications don't change. The separate, explicitly armed `deliver-qr` command can send one image after a matching payment message.
+By default the `run` service and MCP tools are read-only: no messages, read receipts or presence are sent. Your phone keeps showing messages as unread and notifications don't change. Two things can send, and both are off until you ask for them: the explicitly armed `deliver-qr` command, and sell tasks, which an admin starts over MCP once `[mcp] sell_tasks = true` is set (see [Sell tasks](#sell-tasks)).
 
 ## What gets stored
 
@@ -46,8 +46,9 @@ Everyone signs in to the dashboard with their own messwa account. There are two 
 | `insights.html`: market analytics, every seller's number and record | yes | no |
 | MCP `my_registrations`, `my_qr` | with their own mess key | with their own mess key |
 | MCP `list_recent_chats`, `read_unsaved_chat` | yes | no |
+| MCP sell tasks (when turned on) | yes | no |
 
-Everything tied to the one linked WhatsApp device belongs to admins: `deliver-qr`, the sales ledger, DMs and saved contacts. `login`, `groups` and `inspect-payment` are CLI-only and need shell access anyway. Make yourself the admin and everyone else a member.
+Everything tied to the one linked WhatsApp device belongs to admins: `deliver-qr`, sell tasks, the sales ledger, DMs and saved contacts. `login`, `groups` and `inspect-payment` are CLI-only and need shell access anyway. Make yourself the admin and everyone else a member.
 
 Each person saves their own mess API key on the account page (`/account.html`, the ACCOUNT button on the board). The key never leaves the server again after that. The page also changes your password and creates and revokes your MCP tokens.
 
@@ -111,7 +112,7 @@ The board shows sellers' names and phone numbers from the groups and nothing fro
 
 ### My sales
 
-`/sales.html` (the MY SALES button on the board) tracks the meals you sell with `deliver-qr`. Members get MY MEALS instead: the same ledger with their own registrations and no sales, regulars, price check or earnings. On the board's day track, a coin and the price replace the meal icon for any meal you sold or armed today.
+`/sales.html` (the MY SALES button on the board) tracks the meals you sell with `deliver-qr` or a sell task. Members get MY MEALS instead: the same ledger with their own registrations and no sales, regulars, price check or earnings. On the board's day track, a coin and the price replace the meal icon for any meal you sold or armed today.
 
 - **Sales ledger.** Days across, meals down, for the last four weeks (arrow keys page by week). A sold slot shows the price, the mess, and the buyer's pixel head. Each buyer always gets the same head. An armed slot drains like a listing until the meal ends. ATE means you used the registration yourself. WASTED means the meal ended unsold and unused. Dashed slots are registered meals that haven't ended. Hovering shows the buyer, their number, when they paid, how fast the QR went out, and the median ask for that meal.
 - **Saved this month.** The green bar is what your sales earned back against this month's mess bill. The striped part after it is what the month's wasted meals would have fetched at the median ask. The bill comes from the portal's `/registrations/bill`, the same read as IIITH-mess-MCP's `get_bill`: availed meals plus the projected cost of meals you're registered for, so it grows as you register. When the portal can't be read, the page uses `sales.monthly_fee` from `config.toml` instead.
@@ -156,13 +157,16 @@ To preview without the live service, `messwa dashboard -at "2026-11-02 12:45"` s
 | `read_unsaved_chat` | Message text for one unsaved number. Errors for saved contacts. Admins only |
 | `my_registrations` | Live portal registrations for a date range, including cancellation and usage fields. Uses the caller's own mess API key |
 | `my_qr` | Current portal QR as a PNG image. Sensitive; fetch again after token resets. Uses the caller's own mess API key |
+| `start_sell_task` | Only with `[mcp] sell_tasks = true`. Sells one of your registered meals: date, meal, `min_price`, `max_price` in rupees. Admins only |
+| `sell_task_status` | Only with `sell_tasks` on. One task by id, or the active and last 24 hours' tasks: state, posts, buyers, sale. Admins only |
+| `cancel_sell_task` | Only with `sell_tasks` on. Stops a task. Admins only |
 
-All tools are read-only.
+Every tool except `start_sell_task` and `cancel_sell_task` is read-only, and those two don't exist unless you turn them on.
 
 Each MCP request acts as a messwa user. A client sends `Authorization: Bearer mwa_...`, a token made on the account page or with `messwa user token`. Tokens are stored as SHA-256 hashes, shown once, and stop working on the next request after they're revoked or their user is disabled. Two more ways in act as the owner (the first admin):
 
 - No `Authorization` header, allowed only when `mcp.listen` is loopback and `MESSWA_MCP_TOKEN` is unset. This is how the Docker setup works today.
-- The shared `MESSWA_MCP_TOKEN`, kept so existing clients don't break. Setting it turns tokenless access off. Group posts and DM text are written by strangers. The server's instructions tell the agent to treat them as untrusted, but read-only tools are what actually limits the damage.
+- The shared `MESSWA_MCP_TOKEN`, kept so existing clients don't break. Setting it turns tokenless access off. Group posts and DM text are written by strangers. The server's instructions tell the agent to treat them as untrusted, but read-only tools are what actually limits the damage. Sell tasks are off by default for that reason. When on, the rules in [Sell tasks](#sell-tasks) hold whatever the agent asks for.
 
 ### Read your portal registrations
 
@@ -388,7 +392,8 @@ the image. Keep the same state database when restarting. Do not run two
 connections using the same linked-device session.
 
 This command is not exposed through MCP and does not implement automatic
-registration imports, scheduling, negotiation, buyer reassignment or refunds.
+registration imports, scheduling, negotiation or refunds. Sell tasks use the
+same sale code from inside `run`; see below.
 
 ### Payment diagnostic
 
@@ -424,4 +429,35 @@ a note in the final sample. Fixtures contain only a non-identifying prefix and
 synthetic note data. Tests cover malformed/truncated payloads, unknown note
 wrappers, duplicate note keys and Unicode. No Java objects are deserialized.
 
-The plan from `/home/sdixit/messbuysell/selling-instructions.md`, adapted to WhatsApp. You start a sell task (meal, price range). The agent posts "Selling Kadamba lunch" in the groups without a price, answers unsaved numbers who DM about it, negotiates within the range, then hands the chat to you. The binary enforces the rules: sends happen only during an active task, only to unsaved numbers who messaged first, never below the floor price, and rate-limited.
+### Sell tasks
+
+Sell tasks are step 1 of the selling plan in `instructions/selling-instructions.md`: you tell your agent "sell my lunch for between 30 and 60" and it calls `start_sell_task`. The task runs inside `run`, on its WhatsApp connection, so the board and the rest of MCP keep working during a sale. It uses the same code as `deliver-qr -group -portal-qr`: the registration check, the group post, the buyer queue, payment matching and the QR delivery.
+
+Turn them on in `config.toml` and restart `run`:
+
+```toml
+[mcp]
+sell_tasks = true
+```
+
+What a task does:
+
+1. Checks your portal registration for that meal with your saved mess API key, the same way `deliver-qr -portal-qr` does.
+2. Posts `sell bakul non-veg lunch` in the first group in `groups`, without the price. Group choice, the price and extras will come from a `[sell]` section in `config.toml` once that lands.
+3. Queues everyone who replies privately to that post, in reply order. A plain DM that doesn't quote the post doesn't count.
+4. Asks the first buyer to pay `max_price` within two minutes. They can reply `not interested`. Then the next buyer gets a turn, as in `deliver-qr -group`.
+5. Sends the QR after a matching WhatsApp Pay payment, tells the rest of the queue `sorry sold`, and ends as `sold`.
+
+A task also ends when you cancel it (`cancelled`), when the meal ends (`expired`), or on an error (`failed`, with the reason in `detail`). Ending without a sale releases the unpaid reservation, so you can start a new task for that meal. One meal can have only one active task, and none once it has a delivery record.
+
+`run` enforces these rules on every message, so the agent can't get around them:
+
+- Nothing is sent unless a task is active. The one exception is a QR for a payment that came in while the task was active. It still goes out if you cancel a moment later, and the task then ends as `sold`.
+- Besides its one group post, a task messages only people who replied privately to that post.
+- No buyer is asked for less than `min_price`, and the store refuses to reserve the meal below it. The payment must match the asked price exactly.
+- A task sends at most 6 messages a minute and 40 in total. All tasks together send at most 12 a minute.
+- A task stops at the meal's end time.
+
+Each send is written to the database before it goes out: the group post, each payment prompt, each `sorry sold`. The QR goes through the existing delivery ledger. When `run` restarts, it resumes active tasks before reconnecting and never repeats a claimed send. A buyer whose turn was under way keeps it, with at least 30 seconds after the restart, so a payment sent while `run` was down still counts. A post or QR send that was claimed but never confirmed is not retried. A task with an unconfirmed QR send ends as `failed`; check the buyer's chat. Turning `sell_tasks` off cancels active tasks on the next start.
+
+For now the task asks `max_price` and takes that as the deal. Negotiation will plug in where the task picks a buyer's price (`negotiator` in `sell_task.go`). Whatever it returns, the floor check above still applies.

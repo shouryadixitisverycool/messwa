@@ -365,7 +365,9 @@ func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 
 	ms := mcpserver.New(cfg, st, c)
 	ms.SetAccounts(acc)
-	_ = sell // the MCP tools come next
+	if cfg.MCP.SellTasks {
+		ms.SetSellTasks(sell)
+	}
 	if dashLn != nil {
 		go serve(ctx, log, dashLn, dashboard.Handler(cfg, ms, hub, acc))
 		log.Info("serving dashboard", "url", "http://"+cfg.Dash.Listen+"/")
