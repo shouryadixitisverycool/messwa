@@ -518,6 +518,27 @@ func (s *Store) Peers(ctx context.Context, since time.Time) ([]Peer, error) {
 	return out, rows.Err()
 }
 
+// LastSentTo is when you last sent a DM to whichever peer one of jids
+// names, as its JID or alternate ID. It is zero if you never did.
+func (s *Store) LastSentTo(ctx context.Context, jids ...string) (time.Time, error) {
+	if len(jids) == 0 {
+		return time.Time{}, nil
+	}
+	in := strings.TrimSuffix(strings.Repeat("?,", len(jids)), ",")
+	args := make([]any, 0, 2*len(jids))
+	for range 2 {
+		for _, j := range jids {
+			args = append(args, j)
+		}
+	}
+	var at int64
+	err := s.db.QueryRowContext(ctx, `SELECT coalesce(max(last_out),0) FROM dm_peers WHERE jid IN (`+in+`) OR alt IN (`+in+`)`, args...).Scan(&at)
+	if err != nil || at == 0 {
+		return time.Time{}, err
+	}
+	return time.Unix(at, 0), nil
+}
+
 func (s *Store) Peer(ctx context.Context, jid string) (*Peer, error) {
 	ps, err := s.Peers(ctx, time.Unix(0, 0))
 	if err != nil {

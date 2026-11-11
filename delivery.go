@@ -75,6 +75,9 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	if *peer != "" && *handoffFlag != "" {
 		return errors.New("-handoff applies only to group offers; -peer is already your own buyer")
 	}
+	if *peer != "" && overrides.acceptPlainDMs != nil {
+		return errors.New("-accept-plain-dms applies only to group offers; -peer is already your own buyer")
+	}
 	handoff := config.HandoffNever
 	if groupMode {
 		var err error
@@ -202,6 +205,10 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	}
 	posting := watchGroupOffer(ctx, s.conn, newOfferQueue())
 	defer posting.close()
+	if sell.AcceptPlainDMs {
+		fmt.Fprintln(os.Stderr, "accept_plain_dms is on: DMs that ask about the offer join the queue without quoting it.")
+		posting.acceptPlainDMs(newPlainDMs(cfg, st, log, s.mess, *meal, groupPost))
+	}
 	// Record each copy as it posts, so the ✅ after a sale reaches copies
 	// that went out after the first.
 	record := func(p postedOffer) { recordOffers(ctx, st, own, log, *date, *meal, []postedOffer{p}) }
@@ -292,11 +299,7 @@ func normalizeAmount(amount string) (string, error) {
 }
 
 func buyerPassed(message *waE2E.Message) bool {
-	text := message.GetConversation()
-	if text == "" {
-		text = message.GetExtendedTextMessage().GetText()
-	}
-	switch strings.Trim(strings.ToLower(strings.TrimSpace(text)), ".!?") {
+	switch strings.Trim(strings.ToLower(strings.TrimSpace(dmText(message))), ".!?") {
 	case "pass", "cancel", "no thanks", "not interested":
 		return true
 	default:

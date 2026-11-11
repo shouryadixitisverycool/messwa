@@ -25,7 +25,8 @@ import (
 //
 //   - nothing is sent unless the task is active;
 //   - besides the group post, messages go only to people who replied
-//     privately to that post;
+//     privately to that post, or with [sell] accept_plain_dms, DMed about
+//     it (see plain_dm.go);
 //   - no buyer is asked, and no delivery armed, below the floor price;
 //   - sends are rate-limited per task and across all tasks;
 //   - a task ends when its meal ends.
@@ -375,6 +376,9 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, ga
 	}
 	posting := watchGroupOffer(ctx, m.conn, queue)
 	defer posting.close()
+	if settings.AcceptPlainDMs {
+		posting.acceptPlainDMs(newPlainDMs(m.cfg, m.st, m.log.With("task", t.ID), s.mess, t.Meal, ""))
+	}
 	claimed := map[string]bool{}
 	for _, o := range offers {
 		claimed[o.Group] = true
@@ -688,7 +692,8 @@ func (g *taskGate) deliver(ctx context.Context, paid bool, to types.JID, msg *wa
 }
 
 // allowed lets a task post only the group offer it claimed, and message
-// only people who replied privately to that offer.
+// only the buyers its offer queued: people who replied privately to it, or
+// DMed about it with [sell] accept_plain_dms on.
 func (g *taskGate) allowed(ctx context.Context, to types.JID, extra []whatsmeow.SendRequestExtra) error {
 	to = to.ToNonAD()
 	if to.Server == types.GroupServer {

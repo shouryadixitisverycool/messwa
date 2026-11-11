@@ -18,16 +18,20 @@ type sellSettings struct {
 	PostGap       time.Duration
 	ShowPrice     bool
 	MentionExtras bool
+	// AcceptPlainDMs lets DMs about the offer that don't quote it join the
+	// buyer queue; see plainDMs.
+	AcceptPlainDMs bool
 }
 
 // sellFlags are the deliver-qr flags that override [sell] for one run. A
 // nil field means the flag wasn't passed.
 type sellFlags struct {
-	groups        []string
-	groupCount    *int
-	postGap       *time.Duration
-	showPrice     *bool
-	mentionExtras *bool
+	groups         []string
+	groupCount     *int
+	postGap        *time.Duration
+	showPrice      *bool
+	mentionExtras  *bool
+	acceptPlainDMs *bool
 }
 
 // pickGroups reports whether any flag picks offer groups.
@@ -54,6 +58,7 @@ func addSellFlags(fs *flag.FlagSet) func() sellFlags {
 	gap := fs.Duration("post-gap", 0, "pause between copies of the offer (overrides [sell] post_gap)")
 	price := fs.Bool("show-price", true, "put the price in the group post (overrides [sell] show_price)")
 	extras := fs.Bool("mention-extras", false, "list the meal's registered extras in the group post (overrides [sell] mention_extras)")
+	plain := fs.Bool("accept-plain-dms", false, "let DMs that ask about the offer without quoting it join the buyer queue (overrides [sell] accept_plain_dms)")
 	return func() sellFlags {
 		f := sellFlags{groups: groups}
 		fs.Visit(func(fl *flag.Flag) {
@@ -66,6 +71,8 @@ func addSellFlags(fs *flag.FlagSet) func() sellFlags {
 				f.showPrice = price
 			case "mention-extras":
 				f.mentionExtras = extras
+			case "accept-plain-dms":
+				f.acceptPlainDMs = plain
 			}
 		})
 		return f
@@ -76,9 +83,10 @@ func addSellFlags(fs *flag.FlagSet) func() sellFlags {
 // empty Groups means no group was picked.
 func resolveSellSettings(cfg *config.Config, f sellFlags) (sellSettings, error) {
 	s := sellSettings{
-		PostGap:       cfg.Sell.PostGap.Duration,
-		ShowPrice:     cfg.Sell.ShowPrice,
-		MentionExtras: cfg.Sell.MentionExtras,
+		PostGap:        cfg.Sell.PostGap.Duration,
+		ShowPrice:      cfg.Sell.ShowPrice,
+		MentionExtras:  cfg.Sell.MentionExtras,
+		AcceptPlainDMs: cfg.Sell.AcceptPlainDMs,
 	}
 	firstN := func(n int, name string) ([]string, error) {
 		if n < 1 || n > len(cfg.Groups) {
@@ -122,6 +130,9 @@ func resolveSellSettings(cfg *config.Config, f sellFlags) (sellSettings, error) 
 	}
 	if f.mentionExtras != nil {
 		s.MentionExtras = *f.mentionExtras
+	}
+	if f.acceptPlainDMs != nil {
+		s.AcceptPlainDMs = *f.acceptPlainDMs
 	}
 	return s, nil
 }

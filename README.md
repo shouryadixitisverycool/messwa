@@ -298,7 +298,8 @@ extras.
   -offer-text 'Test lunch offer for INR 1.00. Use Reply privately and wait for a DM before paying.'
 ```
 
-The first buyer must reply privately to the quoted post within ten minutes.
+The first buyer must reply privately to the quoted post within ten minutes
+(or DM about it, with [plain DMs](#offer-settings) on).
 Later buyers who quote the same offer join the queue in arrival order. Only
 the current buyer gets payment instructions. That buyer has up to two minutes
 to pay or can reply `not interested` to give up their turn. The bot finishes checking
@@ -335,6 +336,7 @@ included, no extras.
 | `show_price` | `-show-price` | `true` | Put the price in the group post |
 | `mention_extras` | `-mention-extras` | `false` | List the extras registered for that meal |
 | `handoff` | `-handoff` | `never` | When to hand the buyer's chat to you, see below |
+| `accept_plain_dms` | `-accept-plain-dms` | `false` | Let DMs that ask about the offer without quoting it join the queue, see below |
 
 With `groups` or `group_count` set, `deliver-qr` without `-peer` posts to
 those groups, so `-group` is no longer needed:
@@ -358,6 +360,33 @@ starts as soon as the first copy is posted and the rest follow `post_gap`
 apart. Once the meal sells or is handed off, no more copies go out. If one copy fails to post,
 the others still go out and replies to the failed one still count, in case
 WhatsApp posted it anyway. The command stops only when no copy posts.
+
+**Plain DMs.** By default only a private reply that quotes a copy of the
+offer counts. Plenty of buyers just DM "price?" or "is the kadamba lunch
+available" instead. With `accept_plain_dms = true` (or `-accept-plain-dms`)
+such a DM joins the same queue, after anyone already in it, if:
+
+- it's a new text DM sent after the first copy was posted, not an edit, and
+  doesn't quote some other message;
+- it asks about this offer. It names the offer's mess, or it asks the price
+  or whether the meal is available and either names the meal or is at most
+  8 words. A DM that names only another mess or another meal, or says "not
+  interested", doesn't count;
+- you haven't sent that person a DM in the 30 minutes before it, or since.
+  messwa reads this from the DM times `run` records, plus anything you send
+  from your phone while the offer is up. This keeps the bot out of a chat
+  you're already having.
+
+The buyer then gets the usual payment request and the same two minutes,
+and only a matching WhatsApp Pay payment from them releases the QR.
+Everything else works as for quoted replies: one turn per person, the floor
+price, and for sell tasks the send limits. With `handoff = "on_reply"` the
+first such DM hands the chat to you.
+
+The risk is that the bot answers someone who wasn't asking about the meal,
+such as a friend who opens with "how much?" about something else. They get
+one payment request they can ignore. The 30-minute rule only catches chats
+you've been in recently, so if that worries you, leave the setting off.
 
 **Extras.** The extras come from the portal's `/registrations/extras`, the
 same read as IIITH-mess-MCP's `get_extra_registrations`. Extras already eaten
@@ -570,8 +599,8 @@ sell_tasks = true
 What a task does:
 
 1. Checks your portal registration for that meal with your saved mess API key, the same way `deliver-qr -portal-qr` does.
-2. Posts the offer using the `[sell]` settings, like `deliver-qr` does with no flags (see [Offer settings](#offer-settings)): `groups` or `group_count`, `post_gap` between copies, `show_price` and `mention_extras`. With `show_price` the post shows `max_price`, e.g. `sell bakul non-veg lunch ₹60`. If `[sell]` names no groups, the task posts in the first group in `groups`. A group that can't be found is skipped; the task fails only if no copy posts.
-3. Queues everyone who replies privately to any copy, in reply order. A plain DM that doesn't quote a post doesn't count.
+2. Posts the offer using the `[sell]` settings, like `deliver-qr` does with no flags (see [Offer settings](#offer-settings)): `groups` or `group_count`, `post_gap` between copies, `show_price`, `mention_extras` and `accept_plain_dms`. With `show_price` the post shows `max_price`, e.g. `sell bakul non-veg lunch ₹60`. If `[sell]` names no groups, the task posts in the first group in `groups`. A group that can't be found is skipped; the task fails only if no copy posts.
+3. Queues everyone who replies privately to any copy, in reply order. A plain DM that doesn't quote a post counts only with `[sell] accept_plain_dms = true`, under the rules in [Offer settings](#offer-settings).
 4. Asks the first buyer to pay `max_price` within two minutes. They can reply `not interested`. Then the next buyer gets a turn, as in `deliver-qr -group`.
 5. Sends the QR after a matching WhatsApp Pay payment, stops posting copies, tells the rest of the queue `sorry sold`, reacts ✅ to the meal's offer posts, and ends as `sold`.
 
@@ -582,7 +611,7 @@ A task also ends when you cancel it (`cancelled`), when the meal ends (`expired`
 `run` enforces these rules on every message, so the agent can't get around them:
 
 - Nothing is sent unless a task is active. The one exception is a QR for a payment that came in while the task was active. It still goes out if you cancel a moment later, and the task then ends as `sold`.
-- Besides one claimed post per group, a task messages only people who replied privately to one of its posts. After the QR goes out it may also react ✅ to the meal's recorded offer posts, and to nothing else.
+- Besides one claimed post per group, a task messages only people its posts queued: those who replied privately to one, or with `accept_plain_dms`, DMed about it. After the QR goes out it may also react ✅ to the meal's recorded offer posts, and to nothing else.
 - No buyer is asked for less than `min_price`, and the store refuses to reserve the meal below it. The payment must match the asked price exactly.
 - A task sends at most 6 messages a minute and 40 in total. All tasks together send at most 12 a minute. The ✅ reactions after a sale skip the per-minute wait, so they don't time out behind the sale's own sends.
 - A task stops at the meal's end time.

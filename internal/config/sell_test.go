@@ -26,6 +26,18 @@ func TestHandoffSetting(t *testing.T) {
 	}
 }
 
+func TestAcceptPlainDMsSetting(t *testing.T) {
+	if Default().Sell.AcceptPlainDMs {
+		t.Fatal("plain DMs are accepted by default")
+	}
+	p := filepath.Join(t.TempDir(), "c.toml")
+	os.WriteFile(p, []byte("[sell]\naccept_plain_dms = true\n"), 0o600)
+	c, err := Load(p)
+	if err != nil || !c.Sell.AcceptPlainDMs {
+		t.Fatalf("accept_plain_dms = true loaded as %v, %v", c.Sell.AcceptPlainDMs, err)
+	}
+}
+
 func TestHandoffOverride(t *testing.T) {
 	for _, tc := range []struct {
 		configured     Handoff

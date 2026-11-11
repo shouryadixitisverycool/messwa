@@ -58,7 +58,8 @@ monthly_fee = 0
 [sell]
 # Group offers posted by `deliver-qr` without -peer, and by sell tasks.
 # Flags of the same name (-group, -group-count, -post-gap, -show-price,
-# -mention-extras, -handoff) override these for one deliver-qr run. Sell
+# -mention-extras, -handoff, -accept-plain-dms) override these for one
+# deliver-qr run. Sell
 # tasks use everything here except handoff, which start_sell_task sets per
 # task; with show_price they post the task's max price.
 #
@@ -81,6 +82,14 @@ mention_extras = false
 # replies privately to any copy of the offer, before the bot sends them
 # anything, and prints which chat to take over.
 handoff = "never"
+# Also treat a DM that doesn't quote the offer as a buyer, like "price?" or
+# "is the kadamba lunch available". It must arrive after the first copy is
+# posted, ask about this offer (name its mess, or ask the price or whether
+# it's available in a short message or one naming the meal, and name no
+# other mess or meal), and come from someone you haven't messaged in the
+# last 30 minutes. They get the same payment request as anyone else. Off by
+# default: with it on, the bot may answer people who never saw the post.
+accept_plain_dms = false
 
 # Seasons split the year for the insights page. In a term everyone is
 # registered with a mess, so the market is far busier than in a break, and the
