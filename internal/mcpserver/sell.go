@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -15,7 +16,7 @@ import (
 // follows (who it may message, the floor price, rate limits, the meal's end)
 // are enforced there, not by these tools.
 type SellTasks interface {
-	Start(ctx context.Context, userID int64, date, meal string, minRupees, maxRupees int) (int64, error)
+	Start(ctx context.Context, userID int64, date, meal string, minRupees, maxRupees int, handoff string) (int64, error)
 	Cancel(ctx context.Context, id int64) error
 }
 
@@ -26,7 +27,7 @@ func (s *Server) sellEnabled() bool { return s.sell != nil && s.cfg.MCP.SellTask
 
 const sellInstructions = `
 
-Sell tasks (admins only) sell one of your registered meals through WhatsApp. start_sell_task checks the registration, posts an offer in the mess group and asks everyone who replies privately to the post to pay, one at a time. The first matching WhatsApp Pay payment gets the meal's QR. The task asks max_price; it never asks for or accepts less than min_price. It ends when the meal sells, when it is cancelled, or when the meal ends. Check on it with sell_task_status and stop it with cancel_sell_task. Start a task only when the user asked you to sell that meal, at the prices they gave.`
+Sell tasks (admins only) sell one of your registered meals through WhatsApp. start_sell_task checks the registration, posts an offer in the mess groups set in config.toml and asks everyone who replies privately to a post to pay, one at a time. The first matching WhatsApp Pay payment gets the meal's QR, and the offer posts get a ✅. The task asks max_price; it never asks for or accepts less than min_price. With handoff "on_reply" the task instead stops at the first private reply, sends that buyer nothing, and sell_task_status shows who to message. It ends when the meal sells, when it hands off, when it is cancelled, or when the meal ends. Check on it with sell_task_status and stop it with cancel_sell_task. Start a task only when the user asked you to sell that meal, at the prices they gave.`
 
 func (s *Server) addSellTools(srv *mcp.Server) {
 	write := &mcp.ToolAnnotations{OpenWorldHint: ptr(true)}
@@ -45,6 +46,7 @@ type StartSellIn struct {
 	Meal     string `json:"meal" jsonschema:"breakfast, lunch, snacks or dinner"`
 	MinPrice int    `json:"min_price" jsonschema:"lowest price in rupees to accept; never asked or accepted below this"`
 	MaxPrice int    `json:"max_price" jsonschema:"price in rupees to ask first"`
+	Handoff  string `json:"handoff,omitempty" jsonschema:"never (default): the task runs the whole sale. on_reply: the first private reply ends the task and hands that buyer's chat to the user; the bot sends them nothing"`
 }
 
 type SellTaskIn struct {
@@ -63,7 +65,7 @@ type SellOfferOut struct {
 
 type SellBuyerOut struct {
 	Person
-	State    string `json:"state" jsonschema:"queued, offered (asked to pay), passed, timed_out, bought, skipped, or told_sold"`
+	State    string `json:"state" jsonschema:"queued, offered (asked to pay), passed, timed_out, bought, skipped, told_sold, or handed_off"`
 	Asked    string `json:"asked,omitempty" jsonschema:"price asked, INR"`
 	PayUntil string `json:"pay_until,omitempty"`
 }
@@ -71,7 +73,17 @@ type SellBuyerOut struct {
 type SellSaleOut struct {
 	Buyer  string `json:"buyer"`
 	Amount string `json:"amount"`
-	State  string `json:"state" jsonschema:"armed (waiting for payment), sending (payment claimed, QR going out), or sent"`
+	State  string `json:"state" jsonschema:"armed (waiting for payment), sending (payment claimed, QR going out), sent, or handed_off"`
+}
+
+// SellHandoffOut is the buyer a task handed to the user.
+type SellHandoffOut struct {
+	Buyer    Person   `json:"buyer"`
+	ChatLink string   `json:"chat_link,omitempty" jsonschema:"wa.me link to the buyer's chat; empty when WhatsApp hides their number"`
+	Asked    string   `json:"asked" jsonschema:"price the offer asked, INR"`
+	Others   []Person `json:"also_replied" jsonschema:"other buyers who replied before the handoff, in reply order"`
+	// Finish is what the user runs once they agree a price, with run stopped.
+	Finish string `json:"finish" jsonschema:"how to finish or drop the sale from the command line"`
 }
 
 type SellTaskOut struct {
@@ -80,16 +92,19 @@ type SellTaskOut struct {
 	Meal     string         `json:"meal"`
 	Mess     string         `json:"mess,omitempty"`
 	Diet     string         `json:"diet,omitempty"`
-	State    string         `json:"state" jsonschema:"active, sold, cancelled, expired, or failed"`
+	State    string         `json:"state" jsonschema:"active, sold, handed_off, cancelled, expired, or failed"`
 	Detail   string         `json:"detail,omitempty"`
 	MinPrice string         `json:"min_price"`
 	MaxPrice string         `json:"max_price"`
+	Handoff  string         `json:"handoff" jsonschema:"never or on_reply"`
 	Started  string         `json:"started"`
 	Ends     string         `json:"ends"`
 	Ended    string         `json:"ended,omitempty"`
 	Offers   []SellOfferOut `json:"offers"`
 	Buyers   []SellBuyerOut `json:"buyers"`
 	Sale     *SellSaleOut   `json:"sale,omitempty"`
+	// HandedOff is set once the task handed a buyer to the user.
+	HandedOff *SellHandoffOut `json:"handed_off,omitempty"`
 }
 
 type SellTasksOut struct {
@@ -116,7 +131,7 @@ func (s *Server) startSellTask(ctx context.Context, req *mcp.CallToolRequest, in
 	if err != nil {
 		return nil, SellTaskOut{}, err
 	}
-	id, err := s.sell.Start(ctx, uid, in.Date, in.Meal, in.MinPrice, in.MaxPrice)
+	id, err := s.sell.Start(ctx, uid, in.Date, in.Meal, in.MinPrice, in.MaxPrice, in.Handoff)
 	if err != nil {
 		return nil, SellTaskOut{}, err
 	}
@@ -176,7 +191,7 @@ func (s *Server) sellTask(ctx context.Context, id int64) (SellTaskOut, error) {
 func (s *Server) sellTaskOut(ctx context.Context, t store.SellTask) (SellTaskOut, error) {
 	out := SellTaskOut{
 		ID: t.ID, Date: t.Date, Meal: t.Meal, Mess: t.Mess, Diet: t.Diet, State: t.State, Detail: t.Detail,
-		MinPrice: store.FormatPaise(t.MinPaise), MaxPrice: store.FormatPaise(t.MaxPaise),
+		MinPrice: store.FormatPaise(t.MinPaise), MaxPrice: store.FormatPaise(t.MaxPaise), Handoff: t.Handoff,
 		Started: s.fmt(t.CreatedAt), Ends: s.fmt(t.EndsAt), Ended: s.fmt(t.EndedAt),
 		Offers: []SellOfferOut{}, Buyers: []SellBuyerOut{},
 	}
@@ -201,6 +216,29 @@ func (s *Server) sellTaskOut(ctx context.Context, t store.SellTask) (SellTaskOut
 	}
 	if d != nil {
 		out.Sale = &SellSaleOut{Buyer: d.Peer, Amount: d.Amount, State: state}
+	}
+	if d != nil && state == "handed_off" {
+		name, err := s.st.TaskBuyerName(ctx, t.ID)
+		if err != nil {
+			return out, err
+		}
+		h := &SellHandoffOut{Asked: d.Amount, Others: []Person{},
+			Finish: fmt.Sprintf("Agree a price in the chat, stop run, then: messwa deliver-qr -date %s -meal %s -peer %s -amount PRICE -portal-qr (add -user NAME unless the meal is the first admin's). To drop the sale: messwa release-handoff -date %s -meal %s, which is safe while run is up.", d.Date, d.Meal, d.Peer, d.Date, d.Meal)}
+		for _, b := range buyers {
+			switch {
+			case b.Peer == d.Peer:
+				h.Buyer = s.person(ctx, b.Peer, b.Alt, name)
+			case b.State == store.BuyerQueued:
+				h.Others = append(h.Others, s.person(ctx, b.Peer, b.Alt, ""))
+			}
+		}
+		if h.Buyer.JID == "" {
+			h.Buyer = s.person(ctx, d.Peer, "", name)
+		}
+		if h.Buyer.Phone != "" {
+			h.ChatLink = "https://wa.me/" + strings.TrimPrefix(h.Buyer.Phone, "+")
+		}
+		out.HandedOff = h
 	}
 	return out, nil
 }

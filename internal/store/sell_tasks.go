@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS sell_tasks (
  account_hash TEXT NOT NULL DEFAULT '',
  mess TEXT NOT NULL DEFAULT '',
  diet TEXT NOT NULL DEFAULT '',
+ handoff TEXT NOT NULL DEFAULT 'never',
  state TEXT NOT NULL DEFAULT 'active',
  detail TEXT NOT NULL DEFAULT '',
  created_at INTEGER NOT NULL,
@@ -57,6 +58,9 @@ const (
 	TaskCancelled = "cancelled"
 	TaskExpired   = "expired"
 	TaskFailed    = "failed"
+	// TaskHandedOff ended at the first private reply: that buyer's chat is
+	// yours, and the meal's delivery record is handed_off.
+	TaskHandedOff = "handed_off"
 )
 
 // Offer post states. A post left in OfferPosting was claimed but its send
@@ -77,6 +81,8 @@ const (
 	BuyerBought   = "bought"
 	BuyerSkipped  = "skipped"
 	BuyerToldSold = "told_sold"
+	// BuyerHandedOff is the buyer whose chat the task handed to you.
+	BuyerHandedOff = "handed_off"
 )
 
 type SellTask struct {
@@ -88,11 +94,13 @@ type SellTask struct {
 	UserID      int64
 	AccountHash string
 	Mess, Diet  string
-	State       string
-	Detail      string
-	CreatedAt   time.Time
-	EndsAt      time.Time
-	EndedAt     time.Time // zero while active
+	// Handoff is "never" or "on_reply", as in [sell] handoff.
+	Handoff   string
+	State     string
+	Detail    string
+	CreatedAt time.Time
+	EndsAt    time.Time
+	EndedAt   time.Time // zero while active
 }
 
 type SellOffer struct {
@@ -134,8 +142,11 @@ func (s *Store) CreateSellTask(ctx context.Context, t SellTask) (int64, error) {
 	if exists {
 		return 0, errors.New("a sell task for this meal is already running")
 	}
-	r, err := tx.ExecContext(ctx, `INSERT INTO sell_tasks(date,meal,min_paise,max_paise,user_id,account_hash,mess,diet,created_at,ends_at)
- VALUES(?,?,?,?,?,?,?,?,?,?)`, t.Date, t.Meal, t.MinPaise, t.MaxPaise, t.UserID, t.AccountHash, t.Mess, t.Diet, t.CreatedAt.Unix(), t.EndsAt.Unix())
+	if t.Handoff == "" {
+		t.Handoff = "never"
+	}
+	r, err := tx.ExecContext(ctx, `INSERT INTO sell_tasks(date,meal,min_paise,max_paise,user_id,account_hash,mess,diet,handoff,created_at,ends_at)
+ VALUES(?,?,?,?,?,?,?,?,?,?,?)`, t.Date, t.Meal, t.MinPaise, t.MaxPaise, t.UserID, t.AccountHash, t.Mess, t.Diet, t.Handoff, t.CreatedAt.Unix(), t.EndsAt.Unix())
 	if err != nil {
 		return 0, err
 	}
@@ -146,12 +157,12 @@ func (s *Store) CreateSellTask(ctx context.Context, t SellTask) (int64, error) {
 	return id, tx.Commit()
 }
 
-const sellTaskCols = `id,date,meal,min_paise,max_paise,user_id,account_hash,mess,diet,state,detail,created_at,ends_at,coalesce(ended_at,0)`
+const sellTaskCols = `id,date,meal,min_paise,max_paise,user_id,account_hash,mess,diet,handoff,state,detail,created_at,ends_at,coalesce(ended_at,0)`
 
 func scanSellTask(row interface{ Scan(...any) error }) (SellTask, error) {
 	var t SellTask
 	var created, ends, ended int64
-	err := row.Scan(&t.ID, &t.Date, &t.Meal, &t.MinPaise, &t.MaxPaise, &t.UserID, &t.AccountHash, &t.Mess, &t.Diet, &t.State, &t.Detail, &created, &ends, &ended)
+	err := row.Scan(&t.ID, &t.Date, &t.Meal, &t.MinPaise, &t.MaxPaise, &t.UserID, &t.AccountHash, &t.Mess, &t.Diet, &t.Handoff, &t.State, &t.Detail, &created, &ends, &ended)
 	t.CreatedAt, t.EndsAt = time.Unix(created, 0), time.Unix(ends, 0)
 	if ended != 0 {
 		t.EndedAt = time.Unix(ended, 0)
@@ -359,6 +370,47 @@ func (s *Store) ArmTaskDelivery(ctx context.Context, taskID int64, d Delivery) (
 		return time.Time{}, errors.Join(err, errors.New("meal already has a delivery record"))
 	}
 	return d.ArmedAt.Truncate(time.Second), tx.Commit()
+}
+
+// HandOffTaskDelivery records that an active task handed its first buyer
+// to you, like HandOffDelivery, and ties the record to the task. It fails
+// when the meal already has a delivery record.
+func (s *Store) HandOffTaskDelivery(ctx context.Context, taskID int64, d Delivery, buyerName string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var date, meal, state string
+	if err := tx.QueryRowContext(ctx, `SELECT date,meal,state FROM sell_tasks WHERE id=?`, taskID).Scan(&date, &meal, &state); err != nil {
+		return err
+	}
+	switch {
+	case state != TaskActive:
+		return fmt.Errorf("sell task is %s", state)
+	case date != d.Date || meal != d.Meal:
+		return errors.New("delivery is for a different meal than the task")
+	}
+	r, err := tx.ExecContext(ctx, `INSERT INTO qr_deliveries(date,meal,peer,amount,image_hash,armed_at,state,mess,diet,buyer_name,task_id)
+ VALUES(?,?,?,?,?,?,'handed_off',?,?,?,?) ON CONFLICT(date,meal) DO NOTHING`, d.Date, d.Meal, d.Peer, d.Amount, d.ImageHash, d.ArmedAt.Unix(), d.Mess, d.Diet, buyerName, taskID)
+	if err != nil {
+		return err
+	}
+	if n, err := r.RowsAffected(); err != nil || n != 1 {
+		return errors.Join(err, errors.New("meal already has a delivery record"))
+	}
+	return tx.Commit()
+}
+
+// TaskBuyerName is the WhatsApp push name recorded with a task's delivery,
+// from the payment or the handoff. It is empty when none was recorded.
+func (s *Store) TaskBuyerName(ctx context.Context, taskID int64) (string, error) {
+	var name string
+	err := s.db.QueryRowContext(ctx, `SELECT coalesce(buyer_name,'') FROM qr_deliveries WHERE task_id=?`, taskID).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return name, err
 }
 
 // TaskDelivery returns the delivery record a task armed, or nil.

@@ -30,6 +30,7 @@ type saleConn interface {
 	Upload(ctx context.Context, data []byte, kind whatsmeow.MediaType) (whatsmeow.UploadResponse, error)
 	SendPeerMessage(ctx context.Context, msg *waE2E.Message) (whatsmeow.SendResponse, error)
 	BuildUnavailableMessageRequest(chat, sender types.JID, id string) *waE2E.Message
+	BuildReaction(chat, sender types.JID, id types.MessageID, reaction string) *waE2E.Message
 	GetJoinedGroups(ctx context.Context) ([]*types.GroupInfo, error)
 	// PNForLID returns the phone-number JID for a LID, or an empty JID.
 	PNForLID(ctx context.Context, lid types.JID) types.JID
@@ -59,6 +60,9 @@ type mealPortal interface {
 var errBuyerPassed = errors.New("buyer passed on the meal")
 var errBuyerTimedOut = errors.New("buyer payment window expired")
 
+// errHandedOff ends a sale whose first buyer was handed to you.
+var errHandedOff = errors.New("sale handed off to you")
+
 // sale sells one meal over an open WhatsApp connection. deliver-qr and sell
 // tasks both drive it, so the payment checks, the one-delivery guard in the
 // store and the QR send are the same for both.
@@ -76,7 +80,6 @@ type sale struct {
 	end        time.Time
 	imageHash  string
 	mess, diet string
-	label      string // "bakul non-veg lunch", or just the meal
 
 	// With a portal, the QR is fetched right before each upload, and the
 	// registration is checked again before each buyer's turn.
@@ -90,6 +93,14 @@ type sale struct {
 
 	diagnostics      bool
 	assumeUnreadable bool
+
+	// handoff, when set, gets the first buyer from the queue instead of the
+	// bot, which sends them nothing. others are the buyers still queued.
+	// sellToQueue then returns errHandedOff.
+	handoff func(ctx context.Context, buyer types.JID, d store.Delivery, others []types.JID) error
+	// sold, when set, runs once the QR is out, before the queue hears
+	// "sorry sold". Group offers stop posting copies here.
+	sold func()
 }
 
 // findSlot returns the configured meal's window on date.
@@ -120,7 +131,6 @@ func (s *sale) usePortal(ctx context.Context, p mealPortal, vegOnly func(string)
 	if s.diet == "" && vegOnly(s.mess) {
 		s.diet = "veg"
 	}
-	s.label = portalMealLabel(s.mess, s.diet, s.meal)
 	s.imageHash = "portal:" + s.accountHash
 	return nil
 }
@@ -438,7 +448,7 @@ type resumedTurn struct {
 }
 
 // sellToQueue gives each buyer from q a turn, in reply order, until one
-// pays. firstWait limits how long to wait for the first reply; zero waits
+// pays, or hands the first buyer over when s.handoff is set. firstWait limits how long to wait for the first reply; zero waits
 // until ctx ends. notifyCtx outlives ctx for the "sorry sold" messages.
 func (s *sale) sellToQueue(ctx, notifyCtx context.Context, q *offerQueue, j saleJournal, firstWait time.Duration, resume *resumedTurn) error {
 	wait := ctx
@@ -477,6 +487,12 @@ func (s *sale) sellToQueue(ctx, notifyCtx context.Context, q *offerQueue, j sale
 				return err
 			}
 			d = s.reservation(buyer, amount)
+			if s.handoff != nil {
+				if err := s.handoff(ctx, buyer, d, q.closeAndDrain()); err != nil {
+					return err
+				}
+				return errHandedOff
+			}
 			payUntil := time.Now().Add(2 * time.Minute).Truncate(time.Second)
 			if s.end.Before(payUntil) {
 				payUntil = s.end
@@ -492,6 +508,9 @@ func (s *sale) sellToQueue(ctx, notifyCtx context.Context, q *offerQueue, j sale
 		}
 		err := s.takeTurn(ctx, buyer, d, t)
 		if err == nil {
+			if s.sold != nil {
+				s.sold()
+			}
 			if err := j.turnEnded(ctx, buyer, store.BuyerBought); err != nil {
 				s.log.Warn("could not record the sale", "err", err)
 			}

@@ -4,7 +4,7 @@ messwa links to WhatsApp as a companion device (via [whatsmeow](https://github.c
 
 The WhatsApp access limits live in the binary. Ingest drops every chat outside the allowed set before anything touches disk, and WhatsApp MCP tools read only that stored data. Optional portal tools separately read your own registrations and current QR, using the mess API key saved on your messwa account.
 
-By default the `run` service and MCP tools are read-only: no messages, read receipts or presence are sent. Your phone keeps showing messages as unread and notifications don't change. Two things can send, and both are off until you ask for them: the explicitly armed `deliver-qr` command, and sell tasks, which an admin starts over MCP once `[mcp] sell_tasks = true` is set (see [Sell tasks](#sell-tasks)).
+By default the `run` service and MCP tools are read-only: no messages, read receipts or presence are sent. Your phone keeps showing messages as unread and notifications don't change. Two things can send, and both are off until you ask for them: the explicitly armed `deliver-qr` command, and sell tasks, which an admin starts over MCP once `[mcp] sell_tasks = true` is set (see [Sell tasks](#sell-tasks)). After a sale, both react ✅ to their own offer posts. `mark-sold` sends only that ✅.
 
 ## What gets stored
 
@@ -288,7 +288,9 @@ sends the configured DM response once and exits.
 ### Group offer with payment and QR delivery
 
 Use `deliver-qr -group` to post an offer and finish the sale in the buyer's DM
-on the same connection. Set the fixed price with `-amount`.
+on the same connection. Set the fixed price with `-amount`. [Offer
+settings](#offer-settings) post to several groups, hide the price, or list
+extras.
 
 ```sh
 ./messwa deliver-qr -date 2026-11-04 -meal lunch \
@@ -317,6 +319,129 @@ group offer from the selected account's actual mess and diet.
 The command uses the same live portal API as IIITH-mess-MCP. It checks the
 registration before posting, checks it again before requesting payment, and
 fetches the current QR after a matching payment message.
+
+#### Offer settings
+
+The `[sell]` section of `config.toml` sets where the offer goes and what it
+says. Each setting has a flag of the same name that overrides it for one run.
+The defaults post what `deliver-qr -group` always posted: one group, price
+included, no extras.
+
+| Setting | Flag | Default | Does |
+| --- | --- | --- | --- |
+| `groups` | `-group`, repeatable | none | Groups to post to, by exact name or JID, in order |
+| `group_count` | `-group-count` | 0 | Post to the first N of the top-level `groups` instead. Set this or `groups`, not both |
+| `post_gap` | `-post-gap` | `15s` | Pause between copies, at least 3s |
+| `show_price` | `-show-price` | `true` | Put the price in the group post |
+| `mention_extras` | `-mention-extras` | `false` | List the extras registered for that meal |
+| `handoff` | `-handoff` | `never` | When to hand the buyer's chat to you, see below |
+
+With `groups` or `group_count` set, `deliver-qr` without `-peer` posts to
+those groups, so `-group` is no longer needed:
+
+```sh
+./messwa deliver-qr -date YYYY-MM-DD -meal lunch -amount 60.00 -portal-qr
+./messwa deliver-qr -date YYYY-MM-DD -meal lunch -amount 60.00 -portal-qr \
+  -group-count 1 -show-price=false -mention-extras
+```
+
+With `show_price = false` and `mention_extras = true` a Kadamba lunch goes out
+as `sell kadamba non-veg lunch + extras: Chicken 65`. The payment request DM
+always states the price. Settings only shape the offer built with
+`-portal-qr`; `-offer-text` is posted exactly as written.
+
+**Several groups.** Every copy feeds one buyer queue. The first private reply
+to any copy reserves the meal, later replies to any copy queue behind it, and
+a buyer who replies to two copies gets one turn. The delivery ledger still
+holds one reservation per date and meal, so only one QR goes out. The sale
+starts as soon as the first copy is posted and the rest follow `post_gap`
+apart. Once the meal sells or is handed off, no more copies go out. If one copy fails to post,
+the others still go out and replies to the failed one still count, in case
+WhatsApp posted it anyway. The command stops only when no copy posts.
+
+**Extras.** The extras come from the portal's `/registrations/extras`, the
+same read as IIITH-mess-MCP's `get_extra_registrations`. Extras already eaten
+or registered at another mess are left out. If the read fails, the offer goes
+out without extras and the log says why.
+
+### Taking over the chat yourself
+
+The selling plan has the bot hand the chat to you so you can negotiate. Set
+`handoff` in `[sell]` in `config.toml`, or pass `-handoff` to override it for
+one run:
+
+| `handoff` | What the bot does when a buyer replies privately |
+| --- | --- |
+| `never` (default) | Asks them to pay the `-amount` and sends the QR when they do |
+| `on_reply` | Sends them nothing and hands the chat to you |
+
+```sh
+./messwa deliver-qr -date 2026-11-04 -meal lunch \
+  -group 'Test group' -amount 60.00 -portal-qr -handoff on_reply
+```
+
+With `on_reply`, the first private reply to any copy ends the command and
+stops further copies. It prints the buyer's name and number, a `wa.me` link
+to their chat, and anyone else who had replied by then, and logs the same. The bot stops listening, so later replies
+reach only your phone. The ledger records the meal as handed off, and the
+sales page shows it with a HANDOFF stamp and the `-amount` the offer asked.
+
+Finish the sale one of two ways:
+
+- Agree a price in the chat, then let the bot collect it and send the QR.
+  The command to run is in the handoff output:
+
+  ```sh
+  ./messwa deliver-qr -date 2026-11-04 -meal lunch \
+    -peer '91XXXXXXXXXX@s.whatsapp.net' -amount 50.00 -portal-qr
+  ```
+
+  This is the one-meal delivery below. It takes over the handed-off meal with
+  whichever buyer and price you give, so you can also sell to someone else
+  who replied. The sale then counts on the sales page like any other.
+- If the sale falls through, free the meal so a new `deliver-qr -group` can
+  offer it:
+
+  ```sh
+  ./messwa release-handoff -date 2026-11-04 -meal lunch
+  ```
+
+  This changes only the database, so it's safe while `run` is up. It refuses
+  meals that are armed, paid or sent.
+
+If you send the QR from your phone instead, messwa never sees the payment.
+The meal stays handed off on the sales page and doesn't count toward
+earnings. If the portal shows you ate it, the page shows ATE.
+
+### Marking the meal sold
+
+`deliver-qr -group` records each offer post's group and message ID in the
+data database, one row per copy as it posts. Once a QR reaches the `sent` state, the command reacts ✅ to
+every offer post recorded for that date and meal, in any group and from any
+earlier `deliver-qr -group` run. This also happens after a `-peer` delivery
+for a meal that was offered in a group first. A reaction that fails is logged
+as a warning and the sale still counts.
+
+If you finish a sale yourself, for example after taking over the buyer's
+chat, tick the posts by hand. Stop `run` first, like the other sending
+commands:
+
+```sh
+./messwa mark-sold -date 2026-11-04 -meal lunch
+```
+
+It errors when no offer post is recorded for that meal. Posts you made from
+your phone aren't recorded; react to those from the phone. Running it again
+sends the ✅ again, which also restores one you removed. It exits with an
+error if any reaction failed, after trying the rest.
+
+WhatsApp doesn't deliver a message back to the device that sent it, so `run`
+never sees an offer or ✅ that messwa sent. `deliver-qr` and `mark-sold`
+write both into the group log themselves, as posts from the linked account,
+for groups listed in `config.toml`. The board then shows the offer as your
+listing, and the ✅ marks it sold like any seller's tick. A ✅ you add or
+remove from your phone arrives as a normal event. The sales page doesn't
+change: `mark-sold` doesn't record a buyer or price.
 
 ### One-meal QR delivery
 
@@ -379,7 +504,8 @@ details and known incomplete transactions do not qualify. The WhatsApp event
 does not independently verify that funds arrived.
 
 The data database stores the buyer, amount, image hash or portal-account binding, arming time, payment
-message ID, outgoing image ID and state for each date/meal. It never stores
+message ID, outgoing image ID and state for each date/meal, plus the group
+and message ID of each offer post and when messwa reacted to it. It never stores
 the raw payment payload. Repeated events and restarts cannot automatically
 send the same slot twice. An armed slot can resume only with the same buyer,
 price and image. A payment message cannot claim another meal.
@@ -392,8 +518,9 @@ the image. Keep the same state database when restarting. Do not run two
 connections using the same linked-device session.
 
 This command is not exposed through MCP and does not implement automatic
-registration imports, scheduling, negotiation or refunds. Sell tasks use the
-same sale code from inside `run`; see below.
+registration imports, scheduling, negotiation or refunds. To negotiate,
+use `-handoff on_reply` (see [Taking over the chat yourself](#taking-over-the-chat-yourself)).
+Sell tasks use the same sale code from inside `run`; see below.
 
 ### Payment diagnostic
 
@@ -431,7 +558,7 @@ wrappers, duplicate note keys and Unicode. No Java objects are deserialized.
 
 ### Sell tasks
 
-Sell tasks are step 1 of the selling plan in `instructions/selling-instructions.md`: you tell your agent "sell my lunch for between 30 and 60" and it calls `start_sell_task`. The task runs inside `run`, on its WhatsApp connection, so the board and the rest of MCP keep working during a sale. It uses the same code as `deliver-qr -group -portal-qr`: the registration check, the group post, the buyer queue, payment matching and the QR delivery.
+Sell tasks are step 1 of the selling plan in `instructions/selling-instructions.md`: you tell your agent "sell my lunch for between 30 and 60" and it calls `start_sell_task`. The task runs inside `run`, on its WhatsApp connection, so the board and the rest of MCP keep working during a sale. It uses the same code as `deliver-qr -group -portal-qr`: the registration check, the group posts, the buyer queue, payment matching, the QR delivery and the ✅ on the posts.
 
 Turn them on in `config.toml` and restart `run`:
 
@@ -443,21 +570,23 @@ sell_tasks = true
 What a task does:
 
 1. Checks your portal registration for that meal with your saved mess API key, the same way `deliver-qr -portal-qr` does.
-2. Posts `sell bakul non-veg lunch` in the first group in `groups`, without the price. Group choice, the price and extras will come from a `[sell]` section in `config.toml` once that lands.
-3. Queues everyone who replies privately to that post, in reply order. A plain DM that doesn't quote the post doesn't count.
+2. Posts the offer using the `[sell]` settings, like `deliver-qr` does with no flags (see [Offer settings](#offer-settings)): `groups` or `group_count`, `post_gap` between copies, `show_price` and `mention_extras`. With `show_price` the post shows `max_price`, e.g. `sell bakul non-veg lunch ₹60`. If `[sell]` names no groups, the task posts in the first group in `groups`. A group that can't be found is skipped; the task fails only if no copy posts.
+3. Queues everyone who replies privately to any copy, in reply order. A plain DM that doesn't quote a post doesn't count.
 4. Asks the first buyer to pay `max_price` within two minutes. They can reply `not interested`. Then the next buyer gets a turn, as in `deliver-qr -group`.
-5. Sends the QR after a matching WhatsApp Pay payment, tells the rest of the queue `sorry sold`, and ends as `sold`.
+5. Sends the QR after a matching WhatsApp Pay payment, stops posting copies, tells the rest of the queue `sorry sold`, reacts ✅ to the meal's offer posts, and ends as `sold`.
+
+`[sell] handoff` doesn't apply to tasks. Instead `start_sell_task` takes `handoff`, `never` by default. With `on_reply`, step 4 doesn't happen: the first private reply stops the copies and ends the task as `handed_off`, and the bot sends that buyer nothing. The meal's delivery record is handed off, as with `deliver-qr -handoff on_reply`, so the sales page shows HANDOFF. `sell_task_status` returns the buyer's name, number and `wa.me` link, who else replied, and the `deliver-qr -peer` and `release-handoff` commands to finish or drop the sale.
 
 A task also ends when you cancel it (`cancelled`), when the meal ends (`expired`), or on an error (`failed`, with the reason in `detail`). Ending without a sale releases the unpaid reservation, so you can start a new task for that meal. One meal can have only one active task, and none once it has a delivery record.
 
 `run` enforces these rules on every message, so the agent can't get around them:
 
 - Nothing is sent unless a task is active. The one exception is a QR for a payment that came in while the task was active. It still goes out if you cancel a moment later, and the task then ends as `sold`.
-- Besides its one group post, a task messages only people who replied privately to that post.
+- Besides one claimed post per group, a task messages only people who replied privately to one of its posts. After the QR goes out it may also react ✅ to the meal's recorded offer posts, and to nothing else.
 - No buyer is asked for less than `min_price`, and the store refuses to reserve the meal below it. The payment must match the asked price exactly.
-- A task sends at most 6 messages a minute and 40 in total. All tasks together send at most 12 a minute.
+- A task sends at most 6 messages a minute and 40 in total. All tasks together send at most 12 a minute. The ✅ reactions after a sale skip the per-minute wait, so they don't time out behind the sale's own sends.
 - A task stops at the meal's end time.
 
-Each send is written to the database before it goes out: the group post, each payment prompt, each `sorry sold`. The QR goes through the existing delivery ledger. When `run` restarts, it resumes active tasks before reconnecting and never repeats a claimed send. A buyer whose turn was under way keeps it, with at least 30 seconds after the restart, so a payment sent while `run` was down still counts. A post or QR send that was claimed but never confirmed is not retried. A task with an unconfirmed QR send ends as `failed`; check the buyer's chat. Turning `sell_tasks` off cancels active tasks on the next start.
+Each send is written to the database before it goes out: each group post, each payment prompt, each `sorry sold`. The QR goes through the existing delivery ledger. When `run` restarts, it resumes active tasks before reconnecting and never repeats a claimed send. Replies to copies from before the restart still count, and groups that had no copy yet get one, `post_gap` apart. A buyer whose turn was under way keeps it, with at least 30 seconds after the restart, so a payment sent while `run` was down still counts. A post or QR send that was claimed but never confirmed is not retried. A task with an unconfirmed QR send ends as `failed`; check the buyer's chat. Turning `sell_tasks` off cancels active tasks on the next start.
 
 For now the task asks `max_price` and takes that as the deal. Negotiation will plug in where the task picks a buyer's price (`negotiator` in `sell_task.go`). Whatever it returns, the floor check above still applies.

@@ -26,10 +26,10 @@ type fakeSell struct {
 	cancels []int64
 }
 
-func (f *fakeSell) Start(ctx context.Context, userID int64, date, meal string, minRupees, maxRupees int) (int64, error) {
+func (f *fakeSell) Start(ctx context.Context, userID int64, date, meal string, minRupees, maxRupees int, handoff string) (int64, error) {
 	f.started = append(f.started, userID)
 	return f.st.CreateSellTask(ctx, store.SellTask{Date: date, Meal: meal, MinPaise: int64(minRupees) * 100, MaxPaise: int64(maxRupees) * 100,
-		UserID: userID, CreatedAt: time.Now(), EndsAt: time.Now().Add(time.Hour)})
+		UserID: userID, Handoff: handoff, CreatedAt: time.Now(), EndsAt: time.Now().Add(time.Hour)})
 }
 
 func (f *fakeSell) Cancel(ctx context.Context, id int64) error {
@@ -152,5 +152,45 @@ func TestSellToolsNeedSettingAndAdmin(t *testing.T) {
 	json.Unmarshal(b, &task)
 	if task.State != store.TaskCancelled || len(sell.cancels) != 1 {
 		t.Fatalf("after cancel %+v", task)
+	}
+
+	// A task started with handoff on_reply shows who to message once it
+	// hands off.
+	start["handoff"] = "on_reply"
+	res, err = on.CallTool(ctx, &mcp.CallToolParams{Name: "start_sell_task", Arguments: start})
+	if err != nil || res.IsError {
+		t.Fatalf("handoff start: %v %+v", err, res)
+	}
+	b, _ = json.Marshal(res.StructuredContent)
+	json.Unmarshal(b, &task)
+	if task.Handoff != "on_reply" {
+		t.Fatalf("handoff task = %+v", task)
+	}
+	buyer, other := "911111111111@s.whatsapp.net", "912222222222@s.whatsapp.net"
+	for _, p := range []string{buyer, other} {
+		if _, err := st.AddSellTaskBuyer(ctx, task.ID, p, p, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := store.Delivery{Date: "2026-11-11", Meal: "lunch", Peer: buyer, Amount: "60.00", ImageHash: "portal:x", ArmedAt: time.Now()}
+	if err := st.HandOffTaskDelivery(ctx, task.ID, d, "Asha"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.MoveSellTaskBuyer(ctx, task.ID, buyer, store.BuyerQueued, store.BuyerHandedOff, "", time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.EndSellTask(ctx, task.ID, store.TaskHandedOff, "handed off", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	res, err = on.CallTool(ctx, &mcp.CallToolParams{Name: "sell_task_status", Arguments: map[string]any{"id": task.ID}})
+	if err != nil || res.IsError {
+		t.Fatalf("handoff status: %v %+v", err, res)
+	}
+	b, _ = json.Marshal(res.StructuredContent)
+	json.Unmarshal(b, &list)
+	h := list.Tasks[0].HandedOff
+	if h == nil || h.Buyer.Name != "Asha" || h.Buyer.Phone != "+911111111111" || h.ChatLink != "https://wa.me/911111111111" || h.Asked != "60.00" ||
+		len(h.Others) != 1 || h.Others[0].Phone != "+912222222222" || !strings.Contains(h.Finish, "-peer "+buyer) {
+		t.Fatalf("handed_off = %+v", h)
 	}
 }

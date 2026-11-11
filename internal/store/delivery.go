@@ -19,7 +19,17 @@ CREATE TABLE IF NOT EXISTS qr_deliveries (
  payment_id TEXT UNIQUE,
  message_id TEXT NOT NULL DEFAULT '',
  PRIMARY KEY(date, meal)
-);`
+);
+CREATE TABLE IF NOT EXISTS offer_posts (
+ date TEXT NOT NULL,
+ meal TEXT NOT NULL,
+ chat TEXT NOT NULL,
+ message_id TEXT NOT NULL,
+ posted_at INTEGER NOT NULL,
+ reacted_at INTEGER,
+ PRIMARY KEY(chat, message_id)
+);
+CREATE INDEX IF NOT EXISTS offer_posts_slot ON offer_posts(date, meal);`
 
 // Columns added for the sales page. They only describe a delivery; none of
 // them takes part in arming or claiming it.
@@ -86,9 +96,43 @@ func (s *Store) ReleaseUnpaidDelivery(ctx context.Context, d Delivery) error {
 	return err
 }
 
-// An existing slot can only resume with the exact same buyer, price and image.
+// HandOffDelivery records that you took over the sale with d.Peer, so the
+// slot is reserved but the bot sends nothing and waits for no payment.
+// buyerName is the buyer's WhatsApp push name, if known.
+func (s *Store) HandOffDelivery(ctx context.Context, d Delivery, buyerName string) error {
+	r, err := s.db.ExecContext(ctx, `INSERT INTO qr_deliveries(date,meal,peer,amount,image_hash,armed_at,state,mess,diet,buyer_name)
+ VALUES(?,?,?,?,?,?,'handed_off',?,?,?) ON CONFLICT(date,meal) DO NOTHING`, d.Date, d.Meal, d.Peer, d.Amount, d.ImageHash, d.ArmedAt.Unix(), d.Mess, d.Diet, buyerName)
+	if err != nil {
+		return err
+	}
+	if n, err := r.RowsAffected(); err != nil || n != 1 {
+		return errors.Join(err, errors.New("meal already has a delivery record"))
+	}
+	return nil
+}
+
+// ReleaseHandoff frees a handed-off slot so it can be offered again. It
+// touches nothing in any other state and reports whether a slot was freed.
+func (s *Store) ReleaseHandoff(ctx context.Context, date, meal string) (bool, error) {
+	r, err := s.db.ExecContext(ctx, `DELETE FROM qr_deliveries WHERE date=? AND meal=? AND state='handed_off'`, date, meal)
+	if err != nil {
+		return false, err
+	}
+	n, err := r.RowsAffected()
+	return n == 1, err
+}
+
+// An existing slot can only resume with the exact same buyer, price and image,
+// except a handed-off one: you own that sale, so arming it takes whatever
+// buyer, price and image you give.
 func (s *Store) ArmDelivery(ctx context.Context, d Delivery) (time.Time, error) {
-	_, err := s.insertDelivery(ctx, d)
+	_, err := s.db.ExecContext(ctx, `UPDATE qr_deliveries SET peer=?,amount=?,image_hash=?,armed_at=?,state='armed',offer_at=NULL,
+ buyer_name=CASE WHEN peer=? THEN buyer_name ELSE '' END
+ WHERE date=? AND meal=? AND state='handed_off'`, d.Peer, d.Amount, d.ImageHash, d.ArmedAt.Unix(), d.Peer, d.Date, d.Meal)
+	if err != nil {
+		return time.Time{}, err
+	}
+	_, err = s.insertDelivery(ctx, d)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -171,7 +215,8 @@ type DeliveryRecord struct {
 	ArmedAt, OfferAt, PaidAt, SentAt time.Time // zero when unknown
 }
 
-// Deliveries returns every armed, sending and sent meal, oldest first.
+// Deliveries returns every recorded meal, oldest first: armed, handed_off,
+// sending and sent.
 func (s *Store) Deliveries(ctx context.Context) ([]DeliveryRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT d.date,d.meal,d.peer,d.amount,d.state,d.mess,d.diet,
  CASE WHEN d.buyer_name != '' THEN d.buyer_name ELSE coalesce((SELECT p.push_name FROM dm_peers p WHERE d.peer IN (p.jid, p.alt) AND p.push_name != '' LIMIT 1), '') END,
@@ -199,4 +244,53 @@ func (s *Store) Deliveries(ctx context.Context) ([]DeliveryRecord, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// OfferPost is a group post offering a meal. A meal can have several: one per
+// group, and another after a failed sale is offered again. They live apart
+// from qr_deliveries because a reservation row is deleted when a buyer
+// passes, while the posts still need their ✅ once the meal sells.
+type OfferPost struct {
+	Date, Meal string
+	Chat, ID   string // group JID and message ID
+	PostedAt   time.Time
+	ReactedAt  time.Time // when messwa last reacted ✅; zero if never
+}
+
+func (s *Store) RecordOfferPost(ctx context.Context, p OfferPost) error {
+	if p.Chat == "" || p.ID == "" {
+		return errors.New("offer post needs a group and a message ID")
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO offer_posts(date,meal,chat,message_id,posted_at) VALUES(?,?,?,?,?)
+ ON CONFLICT(chat,message_id) DO NOTHING`, p.Date, p.Meal, p.Chat, p.ID, p.PostedAt.Unix())
+	return err
+}
+
+// OfferPosts returns the meal's offer posts, oldest first.
+func (s *Store) OfferPosts(ctx context.Context, date, meal string) ([]OfferPost, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT chat,message_id,posted_at,coalesce(reacted_at,0) FROM offer_posts
+ WHERE date=? AND meal=? ORDER BY posted_at, chat, message_id`, date, meal)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []OfferPost
+	for rows.Next() {
+		p := OfferPost{Date: date, Meal: meal}
+		var posted, reacted int64
+		if err := rows.Scan(&p.Chat, &p.ID, &posted, &reacted); err != nil {
+			return nil, err
+		}
+		p.PostedAt = time.Unix(posted, 0)
+		if reacted != 0 {
+			p.ReactedAt = time.Unix(reacted, 0)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) MarkOfferReacted(ctx context.Context, chat, id string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE offer_posts SET reacted_at=? WHERE chat=? AND message_id=?`, at.Unix(), chat, id)
+	return err
 }

@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -26,6 +27,7 @@ type Config struct {
 	MCP     MCP      `toml:"mcp"`
 	Dash    Dash     `toml:"dashboard"`
 	Sales   Sales    `toml:"sales"`
+	Sell    Sell     `toml:"sell"`
 
 	loc *time.Location
 }
@@ -154,6 +156,10 @@ func Default() *Config {
 		},
 		DMs: DMs{Retention: duration{72 * time.Hour}},
 		MCP: MCP{Listen: "127.0.0.1:8766", TokenEnv: "MESSWA_MCP_TOKEN"},
+		Sell: Sell{
+			PostGap:   duration{15 * time.Second},
+			ShowPrice: true,
+		},
 	}
 }
 
@@ -171,7 +177,29 @@ func (c *Config) validate() error {
 			return fmt.Errorf("meal %s ends: %w", m.Name, err)
 		}
 	}
+	if err := c.validateSell(); err != nil {
+		return err
+	}
 	return validateSeasons(c.Seasons)
+}
+
+func (c *Config) validateSell() error {
+	s := c.Sell
+	if len(s.Groups) > 0 && s.GroupCount != 0 {
+		return fmt.Errorf("sell: set groups or group_count, not both")
+	}
+	if s.GroupCount < 0 || s.GroupCount > len(c.Groups) {
+		return fmt.Errorf("sell.group_count must be between 0 and the %d configured groups", len(c.Groups))
+	}
+	for _, g := range s.Groups {
+		if strings.TrimSpace(g) == "" {
+			return fmt.Errorf("sell.groups has an empty entry")
+		}
+	}
+	if s.PostGap.Duration < MinPostGap {
+		return fmt.Errorf("sell.post_gap must be at least %s", MinPostGap)
+	}
+	return nil
 }
 
 func (c *Config) Location() *time.Location {

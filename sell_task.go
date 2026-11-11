@@ -49,21 +49,23 @@ const resumeGrace = 30 * time.Second
 var errTaskInactive = errors.New("sell task is not active; nothing was sent")
 var errCancelledByUser = errors.New("cancelled")
 
-// sellOptions decides how a task posts its offer. The [sell] section of
-// config.toml will set these; until it does, a task posts in the first
-// configured group and leaves the price out, so buyers ask in a DM.
-type sellOptions struct {
-	Groups       []string // group JIDs or exact names
-	MentionPrice bool
+// taskSellSettings is how a task posts its offer: the [sell] section, in
+// the first configured group when [sell] picks none. With show_price the
+// post shows the task's max price.
+func taskSellSettings(cfg *config.Config) (sellSettings, error) {
+	s, err := resolveSellSettings(cfg, sellFlags{})
+	if err == nil && len(s.Groups) == 0 && len(cfg.Groups) > 0 {
+		s.Groups = cfg.Groups[:1]
+	}
+	return s, err
 }
 
-func sellOptionsFrom(cfg *config.Config) sellOptions {
-	var o sellOptions
-	if len(cfg.Groups) > 0 {
-		o.Groups = cfg.Groups[:1]
-	}
-	return o
-}
+// handedOffError ends a task that handed its first buyer to you. detail
+// says who, for sell_task_status.
+type handedOffError struct{ detail string }
+
+func (e handedOffError) Error() string { return "handed off: " + e.detail }
+func (e handedOffError) Unwrap() error { return errHandedOff }
 
 // negotiator decides what to ask a buyer, in paise. This is the seam for
 // negotiation: a negotiator can talk to the buyer and return the price
@@ -88,6 +90,9 @@ type sellManager struct {
 	portalFor func(ctx context.Context, userID int64) (mealPortal, error)
 	negotiate negotiator
 	limits    *sendLimits
+	// own writes the task's offer posts and ✅ into the group log, since
+	// run never gets events for messages it sent itself.
+	own ownGroupLog
 
 	base    context.Context // run's context; tasks stop with it and resume next start
 	mu      sync.Mutex
@@ -101,18 +106,24 @@ type runningTask struct {
 }
 
 func newSellManager(ctx context.Context, cfg *config.Config, log *slog.Logger, st *store.Store, conn saleConn, send sendFunc,
-	connected func(time.Duration) bool, portalFor func(context.Context, int64) (mealPortal, error)) *sellManager {
+	connected func(time.Duration) bool, portalFor func(context.Context, int64) (mealPortal, error), own ownGroupLog) *sellManager {
 	return &sellManager{
 		cfg: cfg, log: log.With("component", "sell"), st: st, conn: conn, send: send, connected: connected,
-		portalFor: portalFor, negotiate: openAtMax, limits: newSendLimits(), base: ctx, running: map[int64]*runningTask{},
+		portalFor: portalFor, negotiate: openAtMax, limits: newSendLimits(), own: own, base: ctx, running: map[int64]*runningTask{},
 	}
 }
 
 // Start checks the registration, records the task and starts selling in
-// the background. Prices are whole rupees.
-func (m *sellManager) Start(ctx context.Context, userID int64, date, meal string, minRupees, maxRupees int) (int64, error) {
+// the background. Prices are whole rupees. handoff is "never" (or empty)
+// or "on_reply", which ends the task at the first private reply and hands
+// that buyer's chat to you.
+func (m *sellManager) Start(ctx context.Context, userID int64, date, meal string, minRupees, maxRupees int, handoff string) (int64, error) {
 	if minRupees <= 0 || maxRupees < minRupees || maxRupees > 10000 {
 		return 0, errors.New("min_price must be at least 1 and max_price between min_price and 10000")
+	}
+	h, err := config.ParseHandoff(handoff)
+	if err != nil {
+		return 0, err
 	}
 	slot, err := findSlot(m.cfg, date, meal)
 	if err != nil {
@@ -121,7 +132,9 @@ func (m *sellManager) Start(ctx context.Context, userID int64, date, meal string
 	if !time.Now().Before(slot.End) {
 		return 0, errors.New("meal has already ended")
 	}
-	if len(sellOptionsFrom(m.cfg).Groups) == 0 {
+	if settings, err := taskSellSettings(m.cfg); err != nil {
+		return 0, err
+	} else if len(settings.Groups) == 0 {
 		return 0, errors.New("no group to post the offer in; add the mess groups to config.toml")
 	}
 	p, err := m.portalFor(ctx, userID)
@@ -133,13 +146,13 @@ func (m *sellManager) Start(ctx context.Context, userID int64, date, meal string
 		return 0, err
 	}
 	t := store.SellTask{Date: date, Meal: meal, MinPaise: int64(minRupees) * 100, MaxPaise: int64(maxRupees) * 100,
-		UserID: userID, AccountHash: s.accountHash, Mess: s.mess, Diet: s.diet, CreatedAt: time.Now(), EndsAt: slot.End}
+		UserID: userID, AccountHash: s.accountHash, Mess: s.mess, Diet: s.diet, Handoff: string(h), CreatedAt: time.Now(), EndsAt: slot.End}
 	if t.ID, err = m.st.CreateSellTask(ctx, t); err != nil {
 		return 0, err
 	}
 	t.State = store.TaskActive
 	m.launch(t, s, nil)
-	m.log.Info("sell task started", "task", t.ID, "date", date, "meal", meal, "min", minRupees, "max", maxRupees)
+	m.log.Info("sell task started", "task", t.ID, "date", date, "meal", meal, "min", minRupees, "max", maxRupees, "handoff", h)
 	return t.ID, nil
 }
 
@@ -209,7 +222,7 @@ func (m *sellManager) Resume(ctx context.Context, enabled bool) error {
 }
 
 func (m *sellManager) newSale(date, meal string, end time.Time) *sale {
-	return &sale{log: m.log, loc: m.cfg.Location(), conn: m.conn, st: m.st, date: date, meal: meal, end: end, label: meal}
+	return &sale{log: m.log, loc: m.cfg.Location(), conn: m.conn, st: m.st, date: date, meal: meal, end: end}
 }
 
 func (m *sellManager) launch(t store.SellTask, s *sale, ready chan struct{}) {
@@ -245,16 +258,21 @@ func (m *sellManager) launch(t store.SellTask, s *sale, ready chan struct{}) {
 			m.log.Info("sell task paused until run restarts", "task", t.ID)
 			return
 		}
-		m.end(t, state, detail)
+		if m.end(t, state, detail) == store.TaskSold {
+			m.tickOffers(t, gate)
+		}
 	}()
 }
 
 // outcome maps how runTask ended to the task's final state. An empty state
 // means run is shutting down and the task resumes on the next start.
 func (m *sellManager) outcome(ctx context.Context, err error) (string, string) {
+	var handedOff handedOffError
 	switch cause := context.Cause(ctx); {
 	case err == nil:
 		return store.TaskSold, "QR delivered after a matching payment"
+	case errors.As(err, &handedOff):
+		return store.TaskHandedOff, handedOff.detail
 	case errors.Is(cause, errCancelledByUser):
 		return store.TaskCancelled, "cancelled"
 	case m.base.Err() != nil:
@@ -266,10 +284,10 @@ func (m *sellManager) outcome(ctx context.Context, err error) (string, string) {
 	}
 }
 
-// end releases an unpaid reservation and records the task's final state.
-// A delivery left mid-send makes the task failed, since only the buyer's
-// chat can tell whether the QR went out.
-func (m *sellManager) end(t store.SellTask, state, detail string) {
+// end releases an unpaid reservation and records the task's final state,
+// which it returns. A delivery left mid-send makes the task failed, since
+// only the buyer's chat can tell whether the QR went out.
+func (m *sellManager) end(t store.SellTask, state, detail string) string {
 	ctx := context.WithoutCancel(m.base)
 	if state != store.TaskSold {
 		d, dstate, err := m.st.TaskDelivery(ctx, t.ID)
@@ -288,9 +306,25 @@ func (m *sellManager) end(t store.SellTask, state, detail string) {
 	}
 	if _, err := m.st.EndSellTask(ctx, t.ID, state, detail, time.Now()); err != nil {
 		m.log.Error("end sell task", "task", t.ID, "err", err)
-		return
+		return ""
 	}
 	m.log.Info("sell task ended", "task", t.ID, "state", state, "detail", detail)
+	return state
+}
+
+// tickOffers reacts ✅ to the meal's offer posts once its QR is out, like
+// deliver-qr does, so the board shows the listing as sold. It also ticks
+// posts from an earlier deliver-qr for the same meal.
+func (m *sellManager) tickOffers(t store.SellTask, gate *taskGate) {
+	if !m.connected(30 * time.Second) {
+		m.log.Warn("WhatsApp is not connected; mark the offer posts sold by hand", "task", t.ID)
+		return
+	}
+	ctx, stop := context.WithTimeout(context.WithoutCancel(m.base), time.Minute)
+	defer stop()
+	if _, _, err := reactSold(ctx, m.st, m.own, gate.react, m.log, t.Date, t.Meal); err != nil {
+		m.log.Warn("could not read the offer posts to mark them sold", "task", t.ID, "err", err)
+	}
 }
 
 // runTask posts the offer (unless it already went out) and sells to the
@@ -319,6 +353,10 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, ga
 	}
 	s.send, s.sendPaid = gate.send, gate.sendPaid
 	j := &taskJournal{st: m.st, t: t, negotiate: m.negotiate}
+	settings, err := taskSellSettings(m.cfg)
+	if err != nil {
+		return err
+	}
 	queue := newOfferQueue()
 	queue.join = func(peer, chat types.JID) bool {
 		added, err := m.st.AddSellTaskBuyer(ctx, t.ID, peer.String(), chat.String(), time.Now())
@@ -335,64 +373,154 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, ga
 	if err != nil {
 		return err
 	}
+	posting := watchGroupOffer(ctx, m.conn, queue)
+	defer posting.close()
+	claimed := map[string]bool{}
 	for _, o := range offers {
+		claimed[o.Group] = true
 		group, err := types.ParseJID(o.Group)
-		if err != nil || o.State == store.OfferFailed {
+		if err != nil {
 			continue
 		}
-		stop := watchOfferReplies(ctx, m.conn, queue, []postedOffer{{group: group, id: o.ID, postedAt: o.PostedAt}})
-		defer stop()
+		// A failed send may still have reached the group, so replies to
+		// it count, as they did before the restart.
+		posting.watch(postedOffer{Chat: group, ID: o.ID, At: o.PostedAt})
 	}
 	if resume == nil {
 		listening()
 	}
-	if len(offers) == 0 {
-		if !m.connected(30 * time.Second) {
-			return errors.New("WhatsApp is not connected; the offer was not posted")
-		}
-		text := offerText(m.cfg, s.label, t.Date, store.FormatPaise(t.MaxPaise), sellOptionsFrom(m.cfg).MentionPrice)
-		posted := 0
-		for _, g := range sellOptionsFrom(m.cfg).Groups {
-			stop, err := m.post(ctx, t, gate, queue, g, text)
-			if err != nil {
-				m.log.Warn("offer post failed", "task", t.ID, "group", g, "err", err)
-				continue
-			}
-			defer stop()
-			posted++
-		}
-		if posted == 0 {
-			return errors.New("the offer could not be posted in any group")
-		}
+	if err := m.postCopies(ctx, t, s, gate, posting, settings, claimed); err != nil {
+		return err
 	}
 	if resume != nil {
 		resume.listening = listening
 	}
-	return s.sellToQueue(ctx, context.WithoutCancel(ctx), queue, j, 0, resume)
+	s.sold = func() { posting.stop() }
+	var detail string
+	if t.Handoff == string(config.HandoffOnReply) {
+		s.handoff = func(ctx context.Context, buyer types.JID, d store.Delivery, others []types.JID) error {
+			posting.stop()
+			var err error
+			detail, err = m.handOff(ctx, t, buyer, d, queue.name(buyer), others)
+			return err
+		}
+	}
+	err = s.sellToQueue(ctx, context.WithoutCancel(ctx), queue, j, 0, resume)
+	if errors.Is(err, errHandedOff) {
+		return handedOffError{detail: detail}
+	}
+	return err
 }
 
-// post claims, watches and sends one group offer.
-func (m *sellManager) post(ctx context.Context, t store.SellTask, gate *taskGate, queue *offerQueue, group, text string) (func(), error) {
-	jid, name, err := findGroup(ctx, m.conn, group)
+// postCopies posts the offer to every [sell] group that has no copy from
+// this task yet, post_gap apart, in the background. When no copy went out
+// before, it waits for the first one and fails if none posts.
+func (m *sellManager) postCopies(ctx context.Context, t store.SellTask, s *sale, gate *taskGate, posting *groupOffer, settings sellSettings, claimed map[string]bool) error {
+	first := len(claimed) == 0
+	if !m.connected(30 * time.Second) {
+		if first {
+			return errors.New("WhatsApp is not connected; the offer was not posted")
+		}
+		m.log.Warn("WhatsApp is not connected; posting no further copies", "task", t.ID)
+		return nil
+	}
+	joined, err := m.conn.GetJoinedGroups(ctx)
 	if err != nil {
-		return nil, err
+		if first {
+			return err
+		}
+		m.log.Warn("could not list groups; posting no further copies", "task", t.ID, "err", err)
+		return nil
 	}
-	o := postedOffer{group: jid, id: m.conn.GenerateMessageID(), postedAt: time.Now().Truncate(time.Second)}
-	if err := m.st.ClaimOfferPost(ctx, t.ID, jid.String(), o.id, o.postedAt); err != nil {
-		return nil, err
+	var targets []offerTarget
+	for _, g := range settings.Groups {
+		target, err := pickGroup(joined, g)
+		if err != nil {
+			m.log.Warn("not posting the offer to this group", "task", t.ID, "group", g, "err", err)
+			continue
+		}
+		if !claimed[target.JID.String()] {
+			targets = append(targets, target)
+		}
 	}
-	stop := watchOfferReplies(ctx, m.conn, queue, []postedOffer{o})
-	if _, err := gate.send(ctx, jid, &waE2E.Message{Conversation: proto.String(text)}, whatsmeow.SendRequestExtra{ID: o.id}); err != nil {
-		// A failed send may still have reached WhatsApp, so keep watching
-		// for replies but never post again.
-		m.st.SetOfferState(ctx, t.ID, o.id, store.OfferFailed)
-		return stop, fmt.Errorf("group offer send failed or is uncertain: %w", err)
+	if len(targets) == 0 {
+		if first {
+			return errors.New("the offer could not be posted in any group")
+		}
+		return nil
 	}
-	if err := m.st.SetOfferState(ctx, t.ID, o.id, store.OfferPosted); err != nil {
-		m.log.Warn("could not record the offer post", "task", t.ID, "err", err)
+	var extras []string
+	if ep, ok := s.portal.(extrasPortal); ok && settings.MentionExtras {
+		extras = readExtras(ctx, ep, m.log, t.Date, t.Meal, s.mess)
 	}
-	m.log.Info("sell task offer posted", "task", t.ID, "group", name, "offer_id", o.id)
-	return stop, nil
+	text := offerText(offerDetails{Mess: s.mess, Diet: s.diet, Meal: t.Meal, Price: rupees(store.FormatPaise(t.MaxPaise)),
+		ShowPrice: settings.ShowPrice, Day: offerDay(m.cfg, t.Date), Extras: extras})
+	record := func(p postedOffer) { recordOffers(ctx, m.st, m.own, m.log, t.Date, t.Meal, []postedOffer{p}) }
+	var delay time.Duration
+	if !first {
+		delay = settings.PostGap
+	}
+	posting.post(ctx, m.log, targets, delay, settings.PostGap, m.taskCopy(t, gate, text), record)
+	if !first {
+		return nil
+	}
+	if err := posting.waitPosted(); err != nil {
+		return fmt.Errorf("the offer could not be posted in any group: %w", err)
+	}
+	return nil
+}
+
+// taskCopy claims each copy in the store before the gate sends it, so a
+// restart never posts to the same group twice.
+func (m *sellManager) taskCopy(t store.SellTask, gate *taskGate, text string) sendCopy {
+	return func(ctx context.Context, o *groupOffer, g offerTarget) (postedOffer, error) {
+		p := postedOffer{Chat: g.JID, GroupName: g.Name, ID: m.conn.GenerateMessageID(), At: time.Now().Truncate(time.Second), Text: text}
+		if err := m.st.ClaimOfferPost(ctx, t.ID, g.JID.String(), p.ID, p.At); err != nil {
+			return p, err
+		}
+		o.watch(p)
+		resp, err := gate.send(ctx, g.JID, &waE2E.Message{Conversation: proto.String(text)}, whatsmeow.SendRequestExtra{ID: p.ID})
+		// The copy's state must be written even if posting stopped mid-send.
+		stateCtx := context.WithoutCancel(ctx)
+		if err != nil {
+			// It may still have reached WhatsApp, so replies keep counting,
+			// but it is never sent again.
+			if serr := m.st.SetOfferState(stateCtx, t.ID, p.ID, store.OfferFailed); serr != nil {
+				m.log.Warn("could not record the failed offer post", "task", t.ID, "err", serr)
+			}
+			return p, fmt.Errorf("group offer send failed or is uncertain: %w", err)
+		}
+		if err := m.st.SetOfferState(stateCtx, t.ID, p.ID, store.OfferPosted); err != nil {
+			m.log.Warn("could not record the offer post", "task", t.ID, "err", err)
+		}
+		p.At = firstTime(resp.Timestamp, p.At)
+		m.log.Info("sell task offer posted", "task", t.ID, "group", g.Name, "offer_id", p.ID)
+		return p, nil
+	}
+}
+
+// handOff records that the task hands buyer to you and returns what
+// sell_task_status shows about it. The bot has sent the buyer nothing.
+func (m *sellManager) handOff(ctx context.Context, t store.SellTask, buyer types.JID, d store.Delivery, name string, others []types.JID) (string, error) {
+	if err := m.st.HandOffTaskDelivery(ctx, t.ID, d, name); err != nil {
+		return "", err
+	}
+	if _, err := m.st.MoveSellTaskBuyer(ctx, t.ID, buyer.String(), store.BuyerQueued, store.BuyerHandedOff, d.Amount, time.Time{}); err != nil {
+		m.log.Warn("could not record the handed-off buyer", "task", t.ID, "err", err)
+	}
+	who := buyer.String()
+	if buyer.Server == types.DefaultUserServer {
+		who = "+" + buyer.User
+	}
+	if name != "" {
+		who = name + " (" + who + ")"
+	}
+	detail := fmt.Sprintf("handed the chat with %s to you; the bot sent them nothing. The offer asked INR %s.", who, d.Amount)
+	if len(others) > 0 {
+		detail += fmt.Sprintf(" %d other buyer(s) replied too.", len(others))
+	}
+	m.log.Info("sell task handed the sale to you", "task", t.ID, "buyer", d.Peer, "name", name, "asked", d.Amount)
+	return detail, nil
 }
 
 // restore rebuilds the queue from the store and finds a buyer whose turn
@@ -513,6 +641,34 @@ func (g *taskGate) sendPaid(ctx context.Context, to types.JID, msg *waE2E.Messag
 		return whatsmeow.SendResponse{}, errors.New("no claimed payment for this task")
 	}
 	return g.deliver(ctx, true, to, msg, extra...)
+}
+
+// react sends a ✅ to one of the meal's recorded offer posts. Like sendPaid
+// it skips the active check, but only once the task's QR went out.
+func (g *taskGate) react(ctx context.Context, chat types.JID, target, emoji string) (string, time.Time, error) {
+	d, state, err := g.m.st.TaskDelivery(ctx, g.id)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	if d == nil || state != "sent" {
+		return "", time.Time{}, errors.New("a task reacts to offer posts only after its QR went out")
+	}
+	posts, err := g.m.st.OfferPosts(ctx, d.Date, d.Meal)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	known := false
+	for _, p := range posts {
+		known = known || (p.Chat == chat.String() && p.ID == target)
+	}
+	if !known {
+		return "", time.Time{}, errors.New("not one of this meal's recorded offer posts")
+	}
+	// No rate limit: there is one reaction per recorded post, after the
+	// sale, and waiting behind the sale's own sends could time them out.
+	// An empty sender marks the target as our own message.
+	resp, err := g.m.send(ctx, chat, g.m.conn.BuildReaction(chat, types.EmptyJID, target, emoji))
+	return resp.ID, resp.Timestamp, err
 }
 
 func (g *taskGate) deliver(ctx context.Context, paid bool, to types.JID, msg *waE2E.Message, extra ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error) {

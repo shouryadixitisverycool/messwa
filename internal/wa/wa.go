@@ -51,6 +51,13 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Client, e
 
 func (c *Client) LoggedIn() bool { return c.WA.Store.ID != nil }
 
+// Self returns the linked account the way ingest names a sender: phone-number
+// JID first, LID second, plus its push name.
+func (c *Client) Self(ctx context.Context) (jid, alt, name string) {
+	jid, alt = c.identity(ctx, c.WA.Store.GetJID(), c.WA.Store.GetLID())
+	return jid, alt, c.WA.Store.PushName
+}
+
 // Login links this program as a companion device, by QR code or, when
 // phone is given (country code + number, digits only), by pairing code.
 // It returns once paired and leaves the client connected, because the

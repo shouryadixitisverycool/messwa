@@ -55,6 +55,33 @@ listen = "127.0.0.1:8767"
 # 0 hides the bar's target then.
 monthly_fee = 0
 
+[sell]
+# Group offers posted by `deliver-qr` without -peer, and by sell tasks.
+# Flags of the same name (-group, -group-count, -post-gap, -show-price,
+# -mention-extras, -handoff) override these for one deliver-qr run. Sell
+# tasks use everything here except handoff, which start_sell_task sets per
+# task; with show_price they post the task's max price.
+#
+# Which groups an offer goes to: exact names or JIDs, posted in this order...
+# groups = ["Mess Buy Sell", "120363000000000002@g.us"]
+# ...or the first N of the top-level `groups`. Set one of the two, not both.
+# With neither, deliver-qr needs -group or -group-count.
+# group_count = 2
+# Pause between copies of one offer, at least 3s. The sale starts after the
+# first copy; a sold or handed-off offer posts no more copies.
+post_gap = "15s"
+# Put the price in the group post. The payment request DM always states it.
+show_price = true
+# List the extras you registered for that meal in the post, read from the
+# mess portal (needs -portal-qr). If the read fails, the offer goes out
+# without them.
+mention_extras = false
+# When a group offer hands a buyer's chat to you. "never" runs the whole
+# sale: payment request, then the QR. "on_reply" stops as soon as a buyer
+# replies privately to any copy of the offer, before the bot sends them
+# anything, and prints which chat to take over.
+handoff = "never"
+
 # Seasons split the year for the insights page. In a term everyone is
 # registered with a mess, so the market is far busier than in a break, and the
 # page never averages the two together unless you pick ALL SEASONS. Dates are

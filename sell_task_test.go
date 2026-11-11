@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -29,6 +30,8 @@ type sentMessage struct {
 	text string
 	qr   bool
 	id   string
+	// reaction and target are set for a reaction to target.
+	reaction, target string
 }
 
 // fakeConn stands in for the WhatsApp connection. Events are delivered by
@@ -81,6 +84,10 @@ func (f *fakeConn) BuildUnavailableMessageRequest(types.JID, types.JID, string) 
 	return &waE2E.Message{}
 }
 
+func (f *fakeConn) BuildReaction(chat, _ types.JID, id types.MessageID, reaction string) *waE2E.Message {
+	return &waE2E.Message{ReactionMessage: &waE2E.ReactionMessage{Text: proto.String(reaction), Key: &waCommon.MessageKey{RemoteJID: proto.String(chat.String()), ID: proto.String(id)}}}
+}
+
 func (f *fakeConn) GetJoinedGroups(context.Context) ([]*types.GroupInfo, error) { return f.groups, nil }
 
 func (f *fakeConn) PNForLID(_ context.Context, lid types.JID) types.JID {
@@ -92,7 +99,8 @@ func (f *fakeConn) PNForLID(_ context.Context, lid types.JID) types.JID {
 func (f *fakeConn) send(_ context.Context, to types.JID, msg *waE2E.Message, extra ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	m := sentMessage{to: to, text: msg.GetConversation(), qr: msg.GetImageMessage() != nil}
+	m := sentMessage{to: to, text: msg.GetConversation(), qr: msg.GetImageMessage() != nil,
+		reaction: msg.GetReactionMessage().GetText(), target: msg.GetReactionMessage().GetKey().GetID()}
 	if len(extra) > 0 {
 		m.id = extra[0].ID
 	}
@@ -157,7 +165,7 @@ func newSellFixture(t *testing.T, path string) *sellFixture {
 func (f *sellFixture) manager(ctx context.Context) *sellManager {
 	return newSellManager(ctx, f.cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), f.st, f.conn, f.conn.send,
 		func(time.Duration) bool { return true },
-		func(context.Context, int64) (mealPortal, error) { return fakeMealPortal{mess: "bakul-nonveg"}, nil })
+		func(context.Context, int64) (mealPortal, error) { return fakeMealPortal{mess: "bakul-nonveg"}, nil }, ownGroupLog{})
 }
 
 func (f *sellFixture) task(id int64) store.SellTask {
@@ -226,16 +234,18 @@ func TestSellTaskSellsToFirstPayingBuyer(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		m := f.manager(ctx)
-		id, err := m.Start(ctx, 0, f.date, "lunch", 1, 1)
+		id, err := m.Start(ctx, 0, f.date, "lunch", 1, 1, "")
 		if err != nil {
 			t.Fatal(err)
 		}
 		synctest.Wait()
 		posts := sentTo(f.conn.messages(), f.group)
-		if len(posts) != 1 || posts[0].text != "sell bakul non-veg lunch" {
+		// [sell] show_price defaults to true, so the post shows the max.
+		if len(posts) != 1 || posts[0].text != "sell bakul non-veg lunch ₹1" {
 			t.Fatalf("group posts = %+v", posts)
 		}
-		if _, err := m.Start(ctx, 0, f.date, "lunch", 1, 1); err == nil {
+		offerID := posts[0].id
+		if _, err := m.Start(ctx, 0, f.date, "lunch", 1, 1, ""); err == nil {
 			t.Fatal("second task for the same meal started")
 		}
 
@@ -286,6 +296,14 @@ func TestSellTaskSellsToFirstPayingBuyer(t *testing.T) {
 		if _, state, _ := f.st.TaskDelivery(ctx, id); state != "sent" {
 			t.Fatalf("delivery is %q", state)
 		}
+		// The sale ticks the offer post, and only that post.
+		group := sentTo(f.conn.messages(), f.group)
+		if len(group) != 2 || group[1].reaction != soldReaction || group[1].target != offerID {
+			t.Fatalf("group messages after the sale = %+v, want the post then a ✅ on it", group)
+		}
+		if _, _, err := gate.react(ctx, f.group, "someone-elses-post", soldReaction); err == nil {
+			t.Fatal("gate let a reaction through to a post that isn't the meal's offer")
+		}
 		if _, err := gate.send(ctx, buyerB, &waE2E.Message{Conversation: proto.String("hi")}); err != errTaskInactive {
 			t.Fatalf("ended task could still send: %v", err)
 		}
@@ -298,7 +316,7 @@ func TestSellTaskResumesWithoutResending(t *testing.T) {
 		f := newSellFixture(t, path)
 		first, stopRun := context.WithCancel(t.Context())
 		m := f.manager(first)
-		id, err := m.Start(first, 0, f.date, "lunch", 1, 1)
+		id, err := m.Start(first, 0, f.date, "lunch", 1, 1, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -358,7 +376,7 @@ func TestResumedTurnTakesPaymentSentWhileDown(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newSellFixture(t, path)
 		first, stopRun := context.WithCancel(t.Context())
-		id, err := f.manager(first).Start(first, 0, f.date, "lunch", 1, 1)
+		id, err := f.manager(first).Start(first, 0, f.date, "lunch", 1, 1, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -396,7 +414,7 @@ func TestSellTaskNeverAsksBelowFloor(t *testing.T) {
 		defer cancel()
 		m := f.manager(ctx)
 		m.negotiate = func(_ context.Context, t store.SellTask, _ types.JID) (int64, error) { return t.MinPaise - 1, nil }
-		id, err := m.Start(ctx, 0, f.date, "lunch", 30, 60)
+		id, err := m.Start(ctx, 0, f.date, "lunch", 30, 60, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -429,7 +447,7 @@ func TestSellTaskTurnsAndExpiry(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		m := f.manager(ctx)
-		id, err := m.Start(ctx, 0, f.date, "lunch", 1, 1)
+		id, err := m.Start(ctx, 0, f.date, "lunch", 1, 1, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -470,7 +488,7 @@ func TestCancelSellTaskReleasesReservation(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		m := f.manager(ctx)
-		id, err := m.Start(ctx, 0, f.date, "lunch", 1, 1)
+		id, err := m.Start(ctx, 0, f.date, "lunch", 1, 1, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -494,7 +512,7 @@ func TestCancelSellTaskReleasesReservation(t *testing.T) {
 			t.Fatal("a cancelled task sent a message")
 		}
 		// The meal can be put up again.
-		if _, err := m.Start(ctx, 0, f.date, "lunch", 1, 1); err != nil {
+		if _, err := m.Start(ctx, 0, f.date, "lunch", 1, 1, ""); err != nil {
 			t.Fatalf("restart after cancel: %v", err)
 		}
 	})
