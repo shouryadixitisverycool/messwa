@@ -359,10 +359,16 @@ for separate people. The portal can still invalidate an image after it is sent.
 
 Delivery requires a new incoming WhatsApp Pay `sendPaymentMessage` from the
 selected buyer, after arming and before the meal ends. If the amount is
-missing, the bot requests the full message from the primary device. After up
-to six recovery requests within 40 seconds, it assumes the agreed amount and
-sends the QR automatically if the sale is still open. The bot logs the
-assumption and records the triggering message ID.
+missing, the bot requests the full message from the primary device, up to six
+times within 40 seconds. If the amount is still unreadable after that, it
+logs a warning and sends nothing. In a group sale the buyer's two minutes then
+run out as usual. Check the buyer's chat and deliver by hand if they paid.
+
+`-assume-unreadable-payment` changes that: the bot assumes the agreed amount
+and sends the QR if the sale is still open, and logs the assumption with the
+triggering message ID. Anyone who can make WhatsApp deliver a payment message
+without a readable amount then gets the QR without paying, so leave it off
+unless you check payments yourself afterwards.
 
 Normal text, screenshots, other buyers, expired messages, mismatched payment
 details and known incomplete transactions do not qualify. The WhatsApp event

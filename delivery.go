@@ -50,6 +50,7 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	user := fs.String("user", "", "with -portal-qr, whose mess API key to use; defaults to the first admin")
 	offer := fs.String("offer-text", "", "group post with -group, or optional private offer with -peer")
 	diagnostics := fs.Bool("diagnostics", false, "log delivery checks for the selected buyer without message contents")
+	assumeUnreadable := fs.Bool("assume-unreadable-payment", false, "send the QR when a payment's amount stays unreadable after recovery, assuming the agreed price")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -335,9 +336,15 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 						case recoveryDone <- struct{}{}:
 						default:
 						}
-						if recoveryCtx.Err() == nil && !attempted && time.Now().Before(slot.End) {
-							finish(e, true)
+						if recoveryCtx.Err() != nil || attempted || !time.Now().Before(slot.End) {
+							return
 						}
+						if *assumeUnreadable {
+							finish(e, true)
+							return
+						}
+						log.Warn("payment amount unreadable after recovery; not sending the meal image. Check the buyer's chat, or rerun with -assume-unreadable-payment",
+							"date", d.Date, "meal", d.Meal, "payment_id", e.Info.ID)
 					}()
 				}
 				if *diagnostics {
