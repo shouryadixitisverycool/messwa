@@ -8,9 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waWeb"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
@@ -43,6 +45,34 @@ func TestDeliveryPaymentGate(t *testing.T) {
 	if err := deliveryRejection(short, "1.00", armed, ends, now); !errors.Is(err, errTruncatedPayment) {
 		t.Fatalf("expected recovery for the incomplete payment, got %v", err)
 	}
+	meta := &waWeb.PaymentInfo{
+		Status: waWeb.PaymentInfo_COMPLETE.Enum(), TxnStatus: waWeb.PaymentInfo_SUCCESS.Enum(),
+		Currency: proto.String("INR"), Amount1000: proto.Uint64(2370), TransactionTimestamp: proto.Uint64(uint64(now.Unix())),
+	}
+	short.SourceWebMsg = &waWeb.WebMessageInfo{PaymentInfo: meta}
+	if !qualifiesForDelivery(short, "2.37", armed, ends, now) || qualifiesForDelivery(short, "1.00", armed, ends, now) {
+		t.Fatal("expected the exact amount from completed payment metadata")
+	}
+	meta.Amount1000 = proto.Uint64(2371)
+	if err := deliveryRejection(short, "2.37", armed, ends, now); err == nil || errors.Is(err, errTruncatedPayment) {
+		t.Fatal("sub-paise amount could trigger fallback")
+	}
+	meta.Amount1000 = proto.Uint64(2370)
+	meta.TxnStatus = waWeb.PaymentInfo_FAILED.Enum()
+	if err := deliveryRejection(short, "2.37", armed, ends, now); err == nil || errors.Is(err, errTruncatedPayment) {
+		t.Fatal("failed payment could trigger fallback")
+	}
+	meta.Status, meta.TxnStatus = nil, nil
+	if err := deliveryRejection(short, "1.00", armed, ends, now); err == nil || errors.Is(err, errTruncatedPayment) {
+		t.Fatal("readable wrong amount with unknown status could trigger fallback")
+	}
+	short.SourceWebMsg = nil
+	oldPayload, _ := base64.StdEncoding.DecodeString(observedPaymentPrefix)
+	short.Message.SendPaymentMessage.TransactionData = proto.String(base64.StdEncoding.EncodeToString(oldPayload[:28]))
+	if err := deliveryRejection(short, "1.00", armed, ends, now); err == nil || errors.Is(err, errTruncatedPayment) {
+		t.Fatal("old transaction in a truncated payload could trigger fallback")
+	}
+	short.Message.SendPaymentMessage.TransactionData = proto.String("")
 	short.Info.Timestamp = armed.Add(-time.Second)
 	if err := deliveryRejection(short, "1.00", armed, ends, now); errors.Is(err, errTruncatedPayment) {
 		t.Fatal("old payment must be rejected before recovery")
@@ -77,6 +107,26 @@ func TestDeliveryPaymentGate(t *testing.T) {
 	if qualifiesForDelivery(good(), "1.00", armed, now, now) {
 		t.Fatal("expired meal accepted")
 	}
+}
+
+func TestPaymentRecoveryWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		start := time.Now()
+		attempts := 0
+		waitForPaymentRecovery(ctx, func(context.Context, int) { attempts++ })
+		if attempts != 6 || time.Since(start) != 30*time.Second || ctx.Err() != nil {
+			t.Fatalf("recovery attempts = %d, elapsed = %s, context = %v", attempts, time.Since(start), ctx.Err())
+		}
+		waitForPaymentRecovery(ctx, func(context.Context, int) {
+			attempts++
+			cancel()
+		})
+		if attempts != 7 || ctx.Err() == nil {
+			t.Fatal("recovery kept retrying after cancellation")
+		}
+	})
 }
 
 func TestDeliverOnce(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"go.mau.fi/whatsmeow"
@@ -61,9 +62,67 @@ func offerGroup(ctx context.Context, cfg *config.Config, log *slog.Logger, args 
 func postGroupOffer(ctx context.Context, c *wa.Client, log *slog.Logger, group, offer string, wait time.Duration) (types.JID, error) {
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
-	groups, err := c.Groups(ctx)
+	queue, closeOffer, err := openGroupOffer(ctx, c, log, group, offer)
 	if err != nil {
 		return types.EmptyJID, err
+	}
+	defer closeOffer()
+	return queue.next(ctx)
+}
+
+type offerQueue struct {
+	mu     sync.Mutex
+	buyers []types.JID
+	seen   map[types.JID]bool
+	ready  chan struct{}
+	closed bool
+}
+
+func (q *offerQueue) add(peer types.JID) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed || q.seen[peer] {
+		return
+	}
+	q.seen[peer] = true
+	q.buyers = append(q.buyers, peer)
+	select {
+	case q.ready <- struct{}{}:
+	default:
+	}
+}
+
+func (q *offerQueue) closeAndDrain() []types.JID {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.closed = true
+	waiting := q.buyers
+	q.buyers = nil
+	return waiting
+}
+
+func (q *offerQueue) next(ctx context.Context) (types.JID, error) {
+	for ctx.Err() == nil {
+		q.mu.Lock()
+		if len(q.buyers) > 0 {
+			peer := q.buyers[0]
+			q.buyers = q.buyers[1:]
+			q.mu.Unlock()
+			return peer, nil
+		}
+		q.mu.Unlock()
+		select {
+		case <-q.ready:
+		case <-ctx.Done():
+		}
+	}
+	return types.EmptyJID, fmt.Errorf("waiting for a private reply: %w", ctx.Err())
+}
+
+func openGroupOffer(ctx context.Context, c *wa.Client, log *slog.Logger, group, offer string) (*offerQueue, func(), error) {
+	groups, err := c.Groups(ctx)
+	if err != nil {
+		return nil, nil, err
 	}
 	var selected *wa.GroupSummary
 	for i := range groups {
@@ -72,45 +131,43 @@ func postGroupOffer(ctx context.Context, c *wa.Client, log *slog.Logger, group, 
 			continue
 		}
 		if selected != nil {
-			return types.EmptyJID, errors.New("group name is ambiguous; use its exact JID")
+			return nil, nil, errors.New("group name is ambiguous; use its exact JID")
 		}
 		selected = g
 	}
 	if selected == nil {
-		return types.EmptyJID, errors.New("no joined group matches -group")
+		return nil, nil, errors.New("no joined group matches -group")
 	}
 	jid, err := types.ParseJID(selected.JID)
 	if err != nil || jid.Server != types.GroupServer || jid.User == "" {
-		return types.EmptyJID, errors.New("selected group has an invalid JID")
+		return nil, nil, errors.New("selected group has an invalid JID")
 	}
 
 	offerID := c.WA.GenerateMessageID()
 	postedAt := time.Now().Truncate(time.Second)
-	buyer := make(chan types.JID, 1)
+	queue := &offerQueue{seen: make(map[types.JID]bool), ready: make(chan struct{}, 1)}
 	handlerID := c.WA.AddEventHandler(func(evt any) {
 		e, ok := evt.(*events.Message)
-		if !ok || !privateOfferReply(e, jid, offerID, postedAt) {
+		if !ok || !privateOfferReply(e, jid, offerID, postedAt) || buyerPassed(e.Message) {
 			return
 		}
-		select {
-		case buyer <- e.Info.Chat:
-		default:
+		peer := e.Info.Chat.ToNonAD()
+		if alt := e.Info.SenderAlt.ToNonAD(); alt.User != "" && alt.Server == types.DefaultUserServer {
+			peer = alt
+		} else if peer.Server == types.HiddenUserServer {
+			if pn, err := c.WA.Store.LIDs.GetPNForLID(ctx, peer); err == nil && pn.User != "" {
+				peer = pn.ToNonAD()
+			}
 		}
+		queue.add(peer)
 	})
-	defer c.WA.RemoveEventHandler(handlerID)
+	closeOffer := func() { c.WA.RemoveEventHandler(handlerID) }
 	if _, err := c.WA.SendMessage(ctx, jid, &waE2E.Message{Conversation: proto.String(offer)}, whatsmeow.SendRequestExtra{ID: offerID}); err != nil {
-		return types.EmptyJID, fmt.Errorf("group offer send failed or is uncertain: %w", err)
+		closeOffer()
+		return nil, nil, fmt.Errorf("group offer send failed or is uncertain: %w", err)
 	}
 	log.Info("group offer sent; waiting for a private reply", "group", selected.Name, "offer_id", offerID)
-	select {
-	case peer := <-buyer:
-		if err := ctx.Err(); err != nil {
-			return types.EmptyJID, err
-		}
-		return peer, nil
-	case <-ctx.Done():
-		return types.EmptyJID, fmt.Errorf("waiting for a private reply: %w", ctx.Err())
-	}
+	return queue, closeOffer, nil
 }
 
 func privateOfferReply(e *events.Message, group types.JID, offerID string, postedAt time.Time) bool {

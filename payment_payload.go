@@ -37,22 +37,28 @@ func decodePaymentPayload(s string) (*paymentPayloadSummary, error) {
 	if err != nil {
 		return nil, errors.New("invalid payment base64")
 	}
-	if len(b) < 36 {
+	if len(b) < 16 {
 		return nil, errTruncatedPayment
-	}
-	currency, next, err := parcelString(b, 16)
-	if err != nil || currency != "INR" || next+4 > len(b) {
-		return nil, errors.New("unrecognized payment currency/layout")
-	}
-	encoding := binary.LittleEndian.Uint32(b[next:])
-	amount, _, err := parcelString(b, next+4)
-	if err != nil || !decimalAmount.MatchString(amount) {
-		return nil, errors.New("unrecognized payment amount/layout")
 	}
 	ms := int64(binary.LittleEndian.Uint64(b[8:16]))
 	t := time.UnixMilli(ms).UTC()
 	if t.Year() < 2020 || t.Year() > 2100 {
 		return nil, errors.New("unrecognized payment timestamp/layout")
+	}
+	if len(b) < 28 {
+		return &paymentPayloadSummary{Timestamp: t}, errTruncatedPayment
+	}
+	currency, next, err := parcelString(b, 16)
+	if err != nil || currency != "INR" {
+		return nil, errors.New("unrecognized payment currency/layout")
+	}
+	if len(b) < next+8 {
+		return &paymentPayloadSummary{Currency: currency, Timestamp: t}, errTruncatedPayment
+	}
+	encoding := binary.LittleEndian.Uint32(b[next:])
+	amount, _, err := parcelString(b, next+4)
+	if err != nil || !decimalAmount.MatchString(amount) {
+		return nil, errors.New("unrecognized payment amount/layout")
 	}
 	return &paymentPayloadSummary{
 		Currency: currency, Amount: amount, Timestamp: t,
