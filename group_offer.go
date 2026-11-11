@@ -77,22 +77,25 @@ type offerQueue struct {
 	seen   map[types.JID]bool
 	ready  chan struct{}
 	closed bool
-	// join, when set, records a new buyer before they are queued. A buyer
-	// it refuses is dropped.
-	join func(types.JID) bool
+	// join, when set, records a new buyer before they are queued, with the
+	// chat they replied from. A buyer it refuses is dropped.
+	join func(peer, chat types.JID) bool
 }
 
 func newOfferQueue() *offerQueue {
 	return &offerQueue{seen: make(map[types.JID]bool), ready: make(chan struct{}, 1)}
 }
 
-func (q *offerQueue) add(peer types.JID) {
+func (q *offerQueue) add(peer types.JID) { q.addFrom(peer, peer) }
+
+// addFrom queues peer, who replied from chat (their LID chat, say).
+func (q *offerQueue) addFrom(peer, chat types.JID) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.closed || q.seen[peer] {
 		return
 	}
-	if q.join != nil && !q.join(peer) {
+	if q.join != nil && !q.join(peer, chat) {
 		return
 	}
 	q.seen[peer] = true
@@ -203,7 +206,7 @@ func watchOfferReplies(ctx context.Context, conn saleConn, queue *offerQueue, of
 				peer = pn
 			}
 		}
-		queue.add(peer)
+		queue.addFrom(peer, e.Info.Chat.ToNonAD())
 	})
 	return func() { conn.RemoveEventHandler(handlerID) }
 }

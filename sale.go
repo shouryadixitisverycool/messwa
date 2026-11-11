@@ -433,6 +433,8 @@ type resumedTurn struct {
 	buyer    types.JID
 	d        store.Delivery
 	payUntil time.Time
+	// listening runs once the buyer's payments are watched again.
+	listening func()
 }
 
 // sellToQueue gives each buyer from q a turn, in reply order, until one
@@ -453,6 +455,9 @@ func (s *sale) sellToQueue(ctx, notifyCtx context.Context, q *offerQueue, j sale
 			buyer, d = resume.buyer, resume.d
 			// The prompt went out before the restart; only listen again.
 			t = turn{arm: s.st.ArmDelivery, payUntil: resume.payUntil}
+			if listening := resume.listening; listening != nil {
+				t.listening = func() error { listening(); return nil }
+			}
 			resume = nil
 		} else {
 			var err error

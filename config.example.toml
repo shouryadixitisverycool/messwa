@@ -33,6 +33,11 @@ listen = "127.0.0.1:8766"
 # On loopback, requests without a token act as the first admin, unless this
 # env var holds a shared token, which then acts as the first admin instead.
 token_env = "MESSWA_MCP_TOKEN"
+# Lets admins start sell tasks over MCP (start_sell_task, sell_task_status,
+# cancel_sell_task). A task posts an offer in a group and messages the people
+# who reply to it, from the linked WhatsApp account. Off by default, and every
+# other MCP tool stays read-only either way.
+sell_tasks = false
 
 [dashboard]
 # The listings dashboard, behind sign-in. It shows sellers' phone numbers,
