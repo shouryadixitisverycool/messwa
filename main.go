@@ -51,8 +51,10 @@ commands:
                                 fetch the current portal QR into a private PNG file
   offer-group -group NAME_OR_JID -offer-text TEXT -reply-text TEXT [-wait 10m]
                                 post once and answer the first private text reply to that post
-  deliver-qr -date DATE -meal MEAL (-peer JID | -group NAME_OR_JID) -amount INR [-offer-text TEXT] [-qr IMAGE | -portal-qr [-user NAME]]
+  deliver-qr -date DATE -meal MEAL (-peer JID | -group NAME_OR_JID [-handoff never|on_reply]) -amount INR [-offer-text TEXT] [-qr IMAGE | -portal-qr [-user NAME]]
                                 arm one meal's QR delivery after a matching payment message
+  release-handoff -date DATE -meal MEAL
+                                free a meal handed to you by -handoff on_reply so it can be offered again
   mark-sold -date DATE -meal MEAL
                                 react ✅ to the meal's offer posts, for a sale finished by hand
 
@@ -105,6 +107,8 @@ func main() {
 		err = offerGroup(ctx, cfg, log, args)
 	case "deliver-qr":
 		err = deliverQR(ctx, cfg, log, args)
+	case "release-handoff":
+		err = releaseHandoff(ctx, cfg, os.Stdout, args)
 	case "mark-sold":
 		err = markSold(ctx, cfg, log, args)
 	case "import-history":

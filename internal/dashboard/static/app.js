@@ -230,7 +230,8 @@ function renderDay() {
       // A meal you sold or armed today shows a coin and its price instead.
       g.classList.add('coin', mine.state);
       g.append(svgEl(icon('coin')), el('b', '', rupees(mine.amount)));
-      g.title = `${cap(s.meal)} ${hm(s.start)}-${hm(s.end)}: ${mine.state === 'armed' ? `waiting for ${rupees(mine.amount)}` : `sold for ${rupees(mine.amount)}`}`;
+      const what = { armed: `waiting for ${rupees(mine.amount)}`, handoff: `handed to you, offer asked ${rupees(mine.amount)}` }[mine.state] || `sold for ${rupees(mine.amount)}`;
+      g.title = `${cap(s.meal)} ${hm(s.start)}-${hm(s.end)}: ${what}`;
     } else {
       g.append(svgEl(icon(s.meal)));
       g.title = `${cap(s.meal)} ${hm(s.start)}-${hm(s.end)}`;

@@ -94,9 +94,43 @@ func (s *Store) ReleaseUnpaidDelivery(ctx context.Context, d Delivery) error {
 	return err
 }
 
-// An existing slot can only resume with the exact same buyer, price and image.
+// HandOffDelivery records that you took over the sale with d.Peer, so the
+// slot is reserved but the bot sends nothing and waits for no payment.
+// buyerName is the buyer's WhatsApp push name, if known.
+func (s *Store) HandOffDelivery(ctx context.Context, d Delivery, buyerName string) error {
+	r, err := s.db.ExecContext(ctx, `INSERT INTO qr_deliveries(date,meal,peer,amount,image_hash,armed_at,state,mess,diet,buyer_name)
+ VALUES(?,?,?,?,?,?,'handed_off',?,?,?) ON CONFLICT(date,meal) DO NOTHING`, d.Date, d.Meal, d.Peer, d.Amount, d.ImageHash, d.ArmedAt.Unix(), d.Mess, d.Diet, buyerName)
+	if err != nil {
+		return err
+	}
+	if n, err := r.RowsAffected(); err != nil || n != 1 {
+		return errors.Join(err, errors.New("meal already has a delivery record"))
+	}
+	return nil
+}
+
+// ReleaseHandoff frees a handed-off slot so it can be offered again. It
+// touches nothing in any other state and reports whether a slot was freed.
+func (s *Store) ReleaseHandoff(ctx context.Context, date, meal string) (bool, error) {
+	r, err := s.db.ExecContext(ctx, `DELETE FROM qr_deliveries WHERE date=? AND meal=? AND state='handed_off'`, date, meal)
+	if err != nil {
+		return false, err
+	}
+	n, err := r.RowsAffected()
+	return n == 1, err
+}
+
+// An existing slot can only resume with the exact same buyer, price and image,
+// except a handed-off one: you own that sale, so arming it takes whatever
+// buyer, price and image you give.
 func (s *Store) ArmDelivery(ctx context.Context, d Delivery) (time.Time, error) {
-	_, err := s.insertDelivery(ctx, d)
+	_, err := s.db.ExecContext(ctx, `UPDATE qr_deliveries SET peer=?,amount=?,image_hash=?,armed_at=?,state='armed',offer_at=NULL,
+ buyer_name=CASE WHEN peer=? THEN buyer_name ELSE '' END
+ WHERE date=? AND meal=? AND state='handed_off'`, d.Peer, d.Amount, d.ImageHash, d.ArmedAt.Unix(), d.Peer, d.Date, d.Meal)
+	if err != nil {
+		return time.Time{}, err
+	}
+	_, err = s.insertDelivery(ctx, d)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -179,7 +213,8 @@ type DeliveryRecord struct {
 	ArmedAt, OfferAt, PaidAt, SentAt time.Time // zero when unknown
 }
 
-// Deliveries returns every armed, sending and sent meal, oldest first.
+// Deliveries returns every recorded meal, oldest first: armed, handed_off,
+// sending and sent.
 func (s *Store) Deliveries(ctx context.Context) ([]DeliveryRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT d.date,d.meal,d.peer,d.amount,d.state,d.mess,d.diet,
  CASE WHEN d.buyer_name != '' THEN d.buyer_name ELSE coalesce((SELECT p.push_name FROM dm_peers p WHERE d.peer IN (p.jid, p.alt) AND p.push_name != '' LIMIT 1), '') END,
