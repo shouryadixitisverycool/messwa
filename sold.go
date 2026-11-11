@@ -20,12 +20,14 @@ import (
 // has sold. The default [sold] config counts it.
 const soldReaction = "✅"
 
-// postedOffer is one group post that offered a meal.
+// postedOffer is one group post that offered a meal. One offer can go out
+// as several copies, one per group.
 type postedOffer struct {
-	Chat types.JID
-	ID   string
-	At   time.Time
-	Text string
+	Chat      types.JID
+	GroupName string
+	ID        string
+	At        time.Time
+	Text      string
 }
 
 // sendReaction reacts to one of the linked account's own group posts and

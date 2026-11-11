@@ -1,0 +1,179 @@
+package main
+
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"strings"
+	"time"
+
+	"messwa/internal/config"
+	"messwa/internal/portal"
+)
+
+// sellSettings is the [sell] section after one run's flags are applied.
+type sellSettings struct {
+	// Groups the offer goes to, by exact name or JID, in posting order.
+	Groups        []string
+	PostGap       time.Duration
+	ShowPrice     bool
+	MentionExtras bool
+}
+
+// sellFlags are the deliver-qr flags that override [sell] for one run. A
+// nil field means the flag wasn't passed.
+type sellFlags struct {
+	groups        []string
+	groupCount    *int
+	postGap       *time.Duration
+	showPrice     *bool
+	mentionExtras *bool
+}
+
+// pickGroups reports whether any flag picks offer groups.
+func (f sellFlags) pickGroups() bool { return len(f.groups) > 0 || f.groupCount != nil }
+
+// stringsFlag collects a flag that may be given more than once.
+type stringsFlag []string
+
+func (s *stringsFlag) String() string { return strings.Join(*s, ", ") }
+func (s *stringsFlag) Set(v string) error {
+	if strings.TrimSpace(v) == "" {
+		return errors.New("must not be empty")
+	}
+	*s = append(*s, v)
+	return nil
+}
+
+// addSellFlags registers the [sell] override flags on fs. Call the returned
+// function after fs.Parse to read which of them were passed.
+func addSellFlags(fs *flag.FlagSet) func() sellFlags {
+	var groups stringsFlag
+	fs.Var(&groups, "group", "post the offer to this exact group name or JID and wait for a private reply; repeat for more groups (overrides [sell] groups)")
+	count := fs.Int("group-count", 0, "post the offer to the first N configured groups (overrides [sell] group_count)")
+	gap := fs.Duration("post-gap", 0, "pause between copies of the offer (overrides [sell] post_gap)")
+	price := fs.Bool("show-price", true, "put the price in the group post (overrides [sell] show_price)")
+	extras := fs.Bool("mention-extras", false, "list the meal's registered extras in the group post (overrides [sell] mention_extras)")
+	return func() sellFlags {
+		f := sellFlags{groups: groups}
+		fs.Visit(func(fl *flag.Flag) {
+			switch fl.Name {
+			case "group-count":
+				f.groupCount = count
+			case "post-gap":
+				f.postGap = gap
+			case "show-price":
+				f.showPrice = price
+			case "mention-extras":
+				f.mentionExtras = extras
+			}
+		})
+		return f
+	}
+}
+
+// resolveSellSettings applies one run's flags over cfg's [sell] section. An
+// empty Groups means no group was picked.
+func resolveSellSettings(cfg *config.Config, f sellFlags) (sellSettings, error) {
+	s := sellSettings{
+		PostGap:       cfg.Sell.PostGap.Duration,
+		ShowPrice:     cfg.Sell.ShowPrice,
+		MentionExtras: cfg.Sell.MentionExtras,
+	}
+	firstN := func(n int, name string) ([]string, error) {
+		if n < 1 || n > len(cfg.Groups) {
+			return nil, fmt.Errorf("%s must be between 1 and the %d configured groups", name, len(cfg.Groups))
+		}
+		return cfg.Groups[:n], nil
+	}
+	var groups []string
+	var err error
+	switch {
+	case len(f.groups) > 0 && f.groupCount != nil:
+		return s, errors.New("choose -group or -group-count, not both")
+	case len(f.groups) > 0:
+		groups = f.groups
+	case f.groupCount != nil:
+		groups, err = firstN(*f.groupCount, "-group-count")
+	case len(cfg.Sell.Groups) > 0:
+		groups = cfg.Sell.Groups
+	case cfg.Sell.GroupCount > 0:
+		groups, err = firstN(cfg.Sell.GroupCount, "sell.group_count")
+	}
+	if err != nil {
+		return s, err
+	}
+	seen := map[string]bool{}
+	for _, g := range groups {
+		g = strings.TrimSpace(g)
+		if !seen[g] {
+			seen[g] = true
+			s.Groups = append(s.Groups, g)
+		}
+	}
+	if f.postGap != nil {
+		if *f.postGap < config.MinPostGap {
+			return s, fmt.Errorf("-post-gap must be at least %s", config.MinPostGap)
+		}
+		s.PostGap = *f.postGap
+	}
+	if f.showPrice != nil {
+		s.ShowPrice = *f.showPrice
+	}
+	if f.mentionExtras != nil {
+		s.MentionExtras = *f.mentionExtras
+	}
+	return s, nil
+}
+
+// offerDetails is what a built group offer says.
+type offerDetails struct {
+	Mess string
+	// Diet is "veg", "nonveg", "egg" or empty.
+	Diet string
+	Meal string
+	// Price is the asking price as posted, e.g. "₹60".
+	Price     string
+	ShowPrice bool
+	// Day labels a meal that isn't today's, e.g. "5 Nov 2026". Empty for today.
+	Day    string
+	Extras []string
+}
+
+// offerText builds the group post, e.g.
+// "sell kadamba non-veg lunch ₹60 (5 Nov 2026) + extras: Chicken 65, Lassi".
+func offerText(o offerDetails) string {
+	parts := []string{"sell", portalMealLabel(o.Mess, o.Diet, o.Meal)}
+	if o.ShowPrice && o.Price != "" {
+		parts = append(parts, o.Price)
+	}
+	if o.Day != "" {
+		parts = append(parts, "("+o.Day+")")
+	}
+	text := strings.Join(strings.Fields(strings.Join(parts, " ")), " ")
+	if len(o.Extras) > 0 {
+		text += " + extras: " + strings.Join(o.Extras, ", ")
+	}
+	return text
+}
+
+// offerExtras picks the extra names to mention for a meal at mess: the ones
+// not yet availed and registered at that mess, once each, in portal order.
+func offerExtras(rows []portal.ExtraRegistration, mess string) []string {
+	var names []string
+	seen := map[string]bool{}
+	for _, r := range rows {
+		if r.Availed() {
+			continue
+		}
+		if extraMess, _ := (portal.Registration{Mess: r.Mess}).MessDiet(); extraMess != "" && mess != "" && extraMess != mess {
+			continue
+		}
+		name := strings.Join(strings.Fields(r.Name), " ")
+		if key := strings.ToLower(name); name != "" && !seen[key] {
+			seen[key] = true
+			names = append(names, name)
+		}
+	}
+	return names
+}

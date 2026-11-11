@@ -43,35 +43,47 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	date := fs.String("date", "", "meal date, YYYY-MM-DD in the configured timezone")
 	meal := fs.String("meal", "", "configured meal name")
 	peer := fs.String("peer", "", "reserved buyer's full WhatsApp JID")
-	group := fs.String("group", "", "post an offer to this exact group name or JID and wait for a private reply")
 	amount := fs.String("amount", "", "agreed INR amount, e.g. 60.00")
 	qr := fs.String("qr", "", "PNG or JPEG image to send (defaults to an embedded, labelled test image)")
 	portalQR := fs.Bool("portal-qr", false, "fetch the current QR from the portal immediately before delivery, with -user's mess API key")
 	user := fs.String("user", "", "with -portal-qr, whose mess API key to use; defaults to the first admin")
-	offer := fs.String("offer-text", "", "group post with -group, or optional private offer with -peer")
+	offer := fs.String("offer-text", "", "group post, posted as written, or optional private offer with -peer")
 	diagnostics := fs.Bool("diagnostics", false, "log delivery checks for the selected buyer without message contents")
 	assumeUnreadable := fs.Bool("assume-unreadable-payment", false, "send the QR when a payment's amount stays unreadable after recovery, assuming the agreed price")
-	handoffFlag := fs.String("handoff", "", "with -group, overrides [sell] handoff for this run: never or on_reply")
+	readSellFlags := addSellFlags(fs)
+	handoffFlag := fs.String("handoff", "", "for a group offer, overrides [sell] handoff for this run: never or on_reply")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
-	if (*peer == "") == (*group == "") {
-		return errors.New("choose either -peer or -group")
+	overrides := readSellFlags()
+	if *peer != "" && overrides.pickGroups() {
+		return errors.New("choose either -peer or -group/-group-count")
 	}
-	if *group != "" && !*portalQR && strings.TrimSpace(*offer) == "" {
-		return errors.New("-group requires -offer-text or -portal-qr")
+	var sell sellSettings
+	if *peer == "" {
+		var err error
+		if sell, err = resolveSellSettings(cfg, overrides); err != nil {
+			return err
+		}
+		if len(sell.Groups) == 0 {
+			return errors.New("choose -peer, or -group/-group-count, or set groups or group_count under [sell] in the config")
+		}
+	}
+	groupMode := len(sell.Groups) > 0
+	if groupMode && !*portalQR && strings.TrimSpace(*offer) == "" {
+		return errors.New("a group offer requires -offer-text or -portal-qr")
 	}
 	if *portalQR && *qr != "" {
 		return errors.New("choose either -portal-qr or -qr")
 	}
 	if *peer != "" && *handoffFlag != "" {
-		return errors.New("-handoff applies only to -group; -peer is already your own buyer")
+		return errors.New("-handoff applies only to group offers; -peer is already your own buyer")
 	}
 	handoff := config.HandoffNever
-	if *group != "" {
+	if groupMode {
 		var err error
 		if handoff, err = cfg.Sell.Handoff.Resolve(*handoffFlag); err != nil {
 			return err
@@ -118,7 +130,7 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	imageHash := fmt.Sprintf("%x", sha256.Sum256(data))
 	var portalClient *portal.Client
 	var accountHash, mess, diet, portalMess string
-	mealLabel := *meal
+	var extras []string
 	if *portalQR {
 		portalClient, err = userPortal(ctx, cfg, *user)
 		if err != nil {
@@ -134,7 +146,16 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 		if diet == "" && cfg.VegOnly(mess) {
 			diet = "veg"
 		}
-		mealLabel = portalMealLabel(mess, diet, *meal)
+		if groupMode && sell.MentionExtras && strings.TrimSpace(*offer) == "" {
+			// Extras are a nice-to-have in the post. A failed read never
+			// blocks the sale.
+			rows, err := portalClient.ExtraRegistrations(ctx, *date, *meal)
+			if err != nil {
+				log.Warn("could not read extra registrations; posting the offer without extras", "err", err)
+			} else {
+				extras = offerExtras(rows, mess)
+			}
+		}
 		// Bind restarts to the account, not the token that rotates daily.
 		imageHash = "portal:" + accountHash
 	}
@@ -161,7 +182,11 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	paymentPrompt := *offer
 	armDelivery := st.ArmDelivery
 	var queue *offerQueue
-	if *group != "" {
+	var posting *groupOffer
+	if groupMode {
+		if sell.MentionExtras && (!*portalQR || strings.TrimSpace(*offer) != "") {
+			log.Info("extras are only listed in the offer built with -portal-qr and no -offer-text")
+		}
 		exists, err := st.DeliveryExists(ctx, *date, *meal)
 		if err != nil {
 			return err
@@ -178,18 +203,21 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 		groupPost := *offer
 		price := "₹" + strings.TrimSuffix(*amount, ".00")
 		if strings.TrimSpace(groupPost) == "" {
-			groupPost = fmt.Sprintf("sell %s %s", mealLabel, price)
+			details := offerDetails{Mess: mess, Diet: diet, Meal: *meal, Price: price, ShowPrice: sell.ShowPrice, Extras: extras}
 			if *date != time.Now().In(cfg.Location()).Format("2006-01-02") {
-				groupPost += " (" + day.Format("2 Jan 2006") + ")"
+				details.Day = day.Format("2 Jan 2006")
 			}
+			groupPost = offerText(details)
 		}
-		replies, closeOffer, err := openGroupOffer(ctx, c, log, *group, groupPost)
+		// Record each copy as it posts, so the ✅ after a sale reaches copies
+		// that went out after the first.
+		record := func(p postedOffer) { recordOffers(ctx, st, own, log, *date, *meal, []postedOffer{p}) }
+		posting, err = openGroupOffer(ctx, c, log, sell.Groups, groupPost, sell.PostGap, record)
 		if err != nil {
 			return err
 		}
-		defer closeOffer()
-		queue = replies
-		recordOffers(ctx, st, own, log, *date, *meal, queue.posts)
+		defer posting.close()
+		queue = posting.queue
 		paymentPrompt = fmt.Sprintf("pay %s here via WhatsApp Pay, I'll send the QR", price)
 		if *qr == "" && !*portalQR {
 			paymentPrompt = fmt.Sprintf("pay %s here via WhatsApp Pay for the test QR", price)
@@ -208,7 +236,7 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 				if err != nil {
 					return err
 				}
-				if *group != "" && current.Registration.Mess != portalMess {
+				if groupMode && current.Registration.Mess != portalMess {
 					return errors.New("portal registration changed during the sale")
 				}
 				data, mime, width, height, err = deliveryImageBytes(current.PNG)
@@ -371,7 +399,7 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 			finish(e, false)
 		})
 		defer c.WA.RemoveEventHandler(handler)
-		if *group == "" {
+		if !groupMode {
 			if err := c.WA.Connect(); err != nil {
 				return err
 			}
@@ -462,10 +490,16 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 		}
 		d := newReservation(peer)
 		if handoff.HandsOffOnReply() {
+			// You have a buyer, so post no more copies.
+			posted := posting.stop()
+			log.Info("offer handed off", "copies_posted", len(posted))
 			return handOff(ctx, st, log, os.Stdout, d, queue.name(peer), resumeFlags(*portalQR, *user, *qr), queue.closeAndDrain())
 		}
 		err = tryBuyer(ctx, peer, d)
 		if err == nil {
+			// Post no more copies of a sold offer.
+			posted := posting.stop()
+			log.Info("offer sold", "copies_posted", len(posted))
 			for _, waiting := range queue.closeAndDrain() {
 				notifyCtx, stop := context.WithTimeout(commandCtx, 5*time.Second)
 				_, notifyErr := c.WA.SendMessage(notifyCtx, waiting, &waE2E.Message{Conversation: proto.String("sorry sold")})
