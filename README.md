@@ -314,6 +314,55 @@ The command uses the same live portal API as IIITH-mess-MCP. It checks the
 registration before posting, checks it again before requesting payment, and
 fetches the current QR after a matching payment message.
 
+### Taking over the chat yourself
+
+The selling plan has the bot hand the chat to you so you can negotiate. Set
+`handoff` in `[sell]` in `config.toml`, or pass `-handoff` to override it for
+one run:
+
+| `handoff` | What the bot does when a buyer replies privately |
+| --- | --- |
+| `never` (default) | Asks them to pay the `-amount` and sends the QR when they do |
+| `on_reply` | Sends them nothing and hands the chat to you |
+
+```sh
+./messwa deliver-qr -date 2026-11-04 -meal lunch \
+  -group 'Test group' -amount 60.00 -portal-qr -handoff on_reply
+```
+
+With `on_reply`, the first private reply ends the command. It prints the
+buyer's name and number, a `wa.me` link to their chat, and anyone else who had
+replied by then, and logs the same. The bot stops listening, so later replies
+reach only your phone. The ledger records the meal as handed off, and the
+sales page shows it with a HANDOFF stamp and the `-amount` the offer asked.
+
+Finish the sale one of two ways:
+
+- Agree a price in the chat, then let the bot collect it and send the QR.
+  The command to run is in the handoff output:
+
+  ```sh
+  ./messwa deliver-qr -date 2026-11-04 -meal lunch \
+    -peer '91XXXXXXXXXX@s.whatsapp.net' -amount 50.00 -portal-qr
+  ```
+
+  This is the one-meal delivery below. It takes over the handed-off meal with
+  whichever buyer and price you give, so you can also sell to someone else
+  who replied. The sale then counts on the sales page like any other.
+- If the sale falls through, free the meal so a new `deliver-qr -group` can
+  offer it:
+
+  ```sh
+  ./messwa release-handoff -date 2026-11-04 -meal lunch
+  ```
+
+  This changes only the database, so it's safe while `run` is up. It refuses
+  meals that are armed, paid or sent.
+
+If you send the QR from your phone instead, messwa never sees the payment.
+The meal stays handed off on the sales page and doesn't count toward
+earnings. If the portal shows you ate it, the page shows ATE.
+
 ### One-meal QR delivery
 
 Stop `run` or `inspect-payment` before using the same linked session. Arm one
@@ -388,7 +437,8 @@ the image. Keep the same state database when restarting. Do not run two
 connections using the same linked-device session.
 
 This command is not exposed through MCP and does not implement automatic
-registration imports, scheduling, negotiation, buyer reassignment or refunds.
+registration imports, scheduling, negotiation or refunds. To negotiate,
+use `-handoff on_reply` (see [Taking over the chat yourself](#taking-over-the-chat-yourself)).
 
 ### Payment diagnostic
 

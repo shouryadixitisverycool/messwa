@@ -283,7 +283,7 @@ function cellNode(date, c) {
   n.dataset.k = `${date}|${c.meal}`;
   n.style.setProperty('--m', messColor(c.mess));
   const s = c.sale != null ? D.sales[c.sale] : null;
-  if (c.state === 'sold' || c.state === 'sending' || c.state === 'armed') {
+  if (c.state === 'sold' || c.state === 'sending' || c.state === 'armed' || c.state === 'handoff') {
     if (c.diet) n.append(span('diet', dietMark(c.diet)));
     n.append(span('face', face(s.buyer)), span('messg', messIcon(c.mess)));
     const v = s.amount;
@@ -291,6 +291,7 @@ function cellNode(date, c) {
     p.append(el('span', 'r', '₹'), Number.isInteger(v) ? String(v) : v.toFixed(2));
     n.append(p);
     if (c.state === 'sending') n.append(el('span', 'ticked'));
+    if (c.state === 'handoff') n.append(el('span', 'stamp long', 'HANDOFF'));
     if (c.state === 'armed') {
       n.append(el('div', 'glint'));
       const bar = el('div', 'bar'), i = el('i');
@@ -339,6 +340,12 @@ function cellLines(date, c) {
     if (s.offer_at) lines.push([{ t: 'Offer sent ', c: 'c7' }, { t: hm(s.offer_at), c: 'c8' }]);
     lines.push([{ t: 'Window closes ', c: 'c7' }, { t: hm(c.end), c: 'ce' }, { t: ` (in ${dur(c.end - now())})`, c: 'c8' }]);
     lines.push({ rar: 'ARMED' + diet, c: 'ce' });
+  } else if (c.state === 'handoff') {
+    lines.push([{ t: 'Handed to you ', c: 'c7' }, { t: hm(s.armed_at), c: 'c8' }, { t: ' when ', c: 'c7' }, who(s), { t: ' replied', c: 'c7' }]);
+    if (s.phone && s.name) lines.push([{ t: 'Phone ', c: 'c7' }, { t: fmtPhone(s.phone), c: 'c8' }]);
+    lines.push([{ t: 'Offer asked ', c: 'c7' }, { t: rupees(s.amount), c: 'c6' }]);
+    lines.push(null, [{ t: 'The bot sent this buyer nothing. Finish with deliver-qr -peer, or free the meal with release-handoff.', c: 'c8' }]);
+    lines.push({ rar: 'HANDED OFF' + diet, c: 'c6' });
   } else if (c.state === 'ate') {
     lines.push([{ t: 'You ate this one.', c: 'c7' }], { rar: 'EATEN' + diet, c: 'c7' });
   } else if (c.state === 'wasted') {

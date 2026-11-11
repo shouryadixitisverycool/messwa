@@ -171,6 +171,26 @@ func TestSales(t *testing.T) {
 		t.Errorf("mine %+v", b.Mine)
 	}
 
+	// Handed-off meals show as handoff and earn nothing, unless you ate it.
+	for _, h := range []store.Delivery{
+		{Date: "2026-11-03", Meal: "dinner", Peer: "919800000000@s.whatsapp.net", Amount: "70.00", ImageHash: "h", ArmedAt: time.Date(2026, 11, 3, 12, 30, 0, 0, loc)},
+		{Date: "2026-11-02", Meal: "breakfast", Peer: "919800000000@s.whatsapp.net", Amount: "40.00", ImageHash: "h", ArmedAt: time.Date(2026, 11, 2, 7, 0, 0, 0, loc)},
+	} {
+		if err := st.HandOffDelivery(ctx, h, "Ravi"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s = get()
+	if c := cellAt(s, "2026-11-03", "dinner"); c.State != "handoff" || c.Sale == nil || s.Sales[*c.Sale].Name != "Ravi" || s.Sales[*c.Sale].Amount != 70 {
+		t.Errorf("handed-off dinner %+v", c)
+	}
+	if c := cellAt(s, "2026-11-02", "breakfast"); c.State != "ate" {
+		t.Errorf("handed-off breakfast you ate shows %s", c.State)
+	}
+	if s.Month.Earned != 55 || s.Month.Sold != 1 {
+		t.Errorf("handoffs counted as sales: %+v", s.Month)
+	}
+
 	// A member sees their own registrations and none of the owner's sales.
 	member := srv.as(t, accounts.Member)
 	readRegistrations = func(_ context.Context, _ *accounts.Accounts, userID int64, _, _ string) ([]portal.Registration, error) {

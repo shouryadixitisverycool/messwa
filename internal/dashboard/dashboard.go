@@ -55,7 +55,7 @@ type state struct {
 
 type mine struct {
 	Meal   string  `json:"meal"`
-	State  string  `json:"state"` // sold, sending, armed
+	State  string  `json:"state"` // sold, sending, armed, handoff
 	Amount float64 `json:"amount"`
 }
 
@@ -198,7 +198,7 @@ func mineToday(ctx context.Context, cfg *config.Config, srv *mcpserver.Server) (
 		if d.Date != today {
 			continue
 		}
-		state := map[string]string{"sent": "sold", "sending": "sending", "armed": "armed"}[d.State]
+		state := map[string]string{"sent": "sold", "sending": "sending", "armed": "armed", "handed_off": "handoff"}[d.State]
 		if state == "" {
 			continue
 		}

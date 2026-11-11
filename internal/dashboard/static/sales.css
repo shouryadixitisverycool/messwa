@@ -55,6 +55,8 @@
 .cell.is-open .ghost { opacity: .32; }
 .cell.is-unknown .ghost { color: var(--dim); font: 700 16px var(--sans); }
 .cell.is-sending .ticked { background: var(--egg); }
+.cell.is-handoff > :not(.stamp) { opacity: .4; }
+.cell.is-handoff .stamp { color: var(--egg); }
 .cell .face { position: absolute; top: var(--c); right: var(--c); width: var(--ci); height: var(--ci); }
 
 .lside { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }

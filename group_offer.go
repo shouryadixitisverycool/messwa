@@ -76,6 +76,27 @@ type offerQueue struct {
 	seen   map[types.JID]bool
 	ready  chan struct{}
 	closed bool
+	// names holds each buyer's WhatsApp push name from their first reply.
+	names map[types.JID]string
+}
+
+// addNamed queues a buyer and remembers the name on their first reply.
+func (q *offerQueue) addNamed(peer types.JID, name string) {
+	q.mu.Lock()
+	if !q.closed && !q.seen[peer] && name != "" {
+		if q.names == nil {
+			q.names = make(map[types.JID]string)
+		}
+		q.names[peer] = name
+	}
+	q.mu.Unlock()
+	q.add(peer)
+}
+
+func (q *offerQueue) name(peer types.JID) string {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.names[peer]
 }
 
 func (q *offerQueue) add(peer types.JID) {
@@ -159,7 +180,7 @@ func openGroupOffer(ctx context.Context, c *wa.Client, log *slog.Logger, group, 
 				peer = pn.ToNonAD()
 			}
 		}
-		queue.add(peer)
+		queue.addNamed(peer, e.Info.PushName)
 	})
 	closeOffer := func() { c.WA.RemoveEventHandler(handlerID) }
 	if _, err := c.WA.SendMessage(ctx, jid, &waE2E.Message{Conversation: proto.String(offer)}, whatsmeow.SendRequestExtra{ID: offerID}); err != nil {

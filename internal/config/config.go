@@ -26,6 +26,7 @@ type Config struct {
 	MCP     MCP      `toml:"mcp"`
 	Dash    Dash     `toml:"dashboard"`
 	Sales   Sales    `toml:"sales"`
+	Sell    Sell     `toml:"sell"`
 
 	loc *time.Location
 }

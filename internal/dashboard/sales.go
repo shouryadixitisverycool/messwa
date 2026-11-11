@@ -53,6 +53,7 @@ type salesDay struct {
 //	sold     the buyer paid and the QR went out
 //	sending  the buyer paid; the send was interrupted and may not have arrived
 //	armed    waiting for the buyer's payment
+//	handoff  a buyer replied and the bot handed the chat to you; how it ended is unknown
 //	ate      you used the registration yourself
 //	wasted   the meal ended unsold and unused
 //	open     registered, not sold yet, and the meal hasn't ended
@@ -75,7 +76,8 @@ type sale struct {
 	Mess   string  `json:"mess,omitempty"`
 	Diet   string  `json:"diet,omitempty"`
 	Amount float64 `json:"amount"`
-	// State is sold, sending, armed, or lapsed (armed but the meal ended).
+	// State is sold, sending, armed, lapsed (armed but the meal ended), or
+	// handoff (you took over the chat; Amount is what the offer asked).
 	State string `json:"state"`
 	// Buyer groups a buyer's sales: their phone number when known, else the JID.
 	Buyer   string   `json:"buyer"`
@@ -257,7 +259,7 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 	}
 	byMeal := map[string]int{}
 	for _, d := range ds {
-		if d.State != "armed" && d.State != "sending" && d.State != "sent" {
+		if d.State != "armed" && d.State != "sending" && d.State != "sent" && d.State != "handed_off" {
 			continue
 		}
 		day, err := time.ParseInLocation("2006-01-02", d.Date, loc)
@@ -278,6 +280,8 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 			s.State = "sold"
 		case d.State == "sending":
 			s.State = "sending"
+		case d.State == "handed_off":
+			s.State = "handoff"
 		case !end.IsZero() && !now.Before(end):
 			s.State = "lapsed"
 		default:
@@ -334,6 +338,9 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 				c.Mess, c.Diet, c.Sale = s.Mess, s.Diet, &i
 			}
 			switch {
+			case sold && out.Sales[i].State == "handoff" && availed(rs):
+				// You kept the meal after taking the chat over.
+				c.State = "ate"
 			case sold && out.Sales[i].State != "lapsed":
 				c.State = out.Sales[i].State
 			case out.Portal != "":

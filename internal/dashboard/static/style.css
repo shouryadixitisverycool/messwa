@@ -107,7 +107,8 @@ button.nav-link { cursor: pointer; }
 .seg-glyph.now { opacity: 1; }
 .seg-glyph.coin { width: auto; display: flex; align-items: center; gap: 3px; opacity: 1; font: 400 8px Pixel; color: var(--gold); white-space: nowrap; }
 .seg-glyph.coin svg { width: 11px; height: 11px; flex: none; }
-.seg-glyph.coin.armed b { color: var(--muted); }
+.seg-glyph.coin.armed b, .seg-glyph.coin.handoff b { color: var(--muted); }
+.seg-glyph.coin.handoff svg { opacity: .5; }
 .seg-glyph.coin.armed svg { border-radius: 50%; animation: ring 1.8s infinite; }
 @keyframes ring { 0% { box-shadow: 0 0 0 0 rgba(255, 197, 61, .6); } 70% { box-shadow: 0 0 0 6px rgba(255, 197, 61, 0); } 100% { box-shadow: 0 0 0 0 rgba(255, 197, 61, 0); } }
 .now-mark { position: absolute; top: -5px; bottom: -5px; width: 2px; margin-left: -1px; border-radius: 2px; background: #fff; box-shadow: 0 0 8px #fff8; }
