@@ -18,12 +18,14 @@ type Config struct {
 
 	Meals  []Meal `toml:"meals"`
 	Messes []Mess `toml:"messes"`
-	Dedupe Dedupe `toml:"dedupe"`
-	Sold   Sold   `toml:"sold"`
-	DMs    DMs    `toml:"dms"`
-	MCP    MCP    `toml:"mcp"`
-	Dash   Dash   `toml:"dashboard"`
-	Sales  Sales  `toml:"sales"`
+	// Seasons split the year into terms and breaks for the insights page.
+	Seasons []Season `toml:"seasons"`
+	Dedupe  Dedupe   `toml:"dedupe"`
+	Sold    Sold     `toml:"sold"`
+	DMs     DMs      `toml:"dms"`
+	MCP     MCP      `toml:"mcp"`
+	Dash    Dash     `toml:"dashboard"`
+	Sales   Sales    `toml:"sales"`
 
 	loc *time.Location
 }
@@ -138,7 +140,8 @@ func Default() *Config {
 			{Name: "palash", Aliases: []string{"palas", "plsh"}, VegOnly: true},
 			{Name: "bakul", Aliases: []string{"bkl"}},
 		},
-		Dedupe: Dedupe{Window: duration{24 * time.Hour}},
+		Seasons: defaultSeasons(),
+		Dedupe:  Dedupe{Window: duration{24 * time.Hour}},
 		Sold: Sold{
 			Emojis:       []string{"✅", "✔", "☑", "👍"},
 			ClosedEmojis: []string{"❌", "✖", "🚫"},
@@ -164,7 +167,7 @@ func (c *Config) validate() error {
 			return fmt.Errorf("meal %s ends: %w", m.Name, err)
 		}
 	}
-	return nil
+	return validateSeasons(c.Seasons)
 }
 
 func (c *Config) Location() *time.Location {

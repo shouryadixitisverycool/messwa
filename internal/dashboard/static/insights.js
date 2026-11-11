@@ -12,13 +12,17 @@ let pick = null; // the slot in the inspector: { mess, wd, meal }
 let failed = false;
 
 const PREFS = 'messwa.insights';
-const F = { weeks: 4, mess: 'all', diet: 'all', metric: 'rate' };
+// season is a season's key, '' for whichever one today is in, or 'all'.
+const F = { season: '', weeks: 4, mess: 'all', diet: 'all', metric: 'rate' };
 try { Object.assign(F, JSON.parse(localStorage.getItem(PREFS) || '{}')); } catch { /* private mode */ }
 // A link like insights.html?mess=bakul&metric=ask opens that view.
 for (const [k, v] of new URLSearchParams(location.search)) if (k in F) F[k] = k === 'weeks' ? parseInt(v, 10) || 0 : v;
-const savePrefs = () => { try { localStorage.setItem(PREFS, JSON.stringify(F)); } catch { /* ignore */ } };
+// A past season isn't remembered, so the next visit opens on today's.
+const savePrefs = () => { try { localStorage.setItem(PREFS, JSON.stringify({ ...F, season: F.season === 'all' ? 'all' : '' })); } catch { /* ignore */ } };
 
 const RANGES = [[4, '4 WEEKS'], [8, '8 WEEKS'], [12, '12 WEEKS'], [0, 'ALL']];
+const TERM = '#7aa7ff', BREAK = 'var(--gold)'; // season kinds
+const MAX_SEASONS = 6; // chips and comparison bars
 const METRICS = [['rate', 'SOLD %'], ['listed', 'LISTED'], ['ask', 'ASK'], ['wanted', 'WANTED']];
 const WD = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const WD_LONG = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -73,9 +77,9 @@ function T(parent, x, y, text, attrs) {
   e.textContent = text;
   return e;
 }
-function chart(host, h) {
+function chart(host, h, min = 240) {
   host.replaceChildren();
-  const w = Math.max(240, Math.floor(host.clientWidth));
+  const w = Math.max(min, Math.floor(host.clientWidth));
   const s = S('svg', { width: w, height: h, viewBox: `0 0 ${w} ${h}` }, host);
   return [s, w];
 }
@@ -109,12 +113,16 @@ function yAxis(s, x0, x1, y, max, fmt = (v) => String(v)) {
 
 async function load() {
   try {
-    const r = await fetch(`api/insights?weeks=${F.weeks}`, { cache: 'no-store' });
+    const q = new URLSearchParams({ weeks: F.weeks, season: F.season });
+    const r = await fetch(`api/insights?${q}`, { cache: 'no-store' });
     if (r.status === 401) return toLogin();
     if (!r.ok) throw new Error(await r.text());
     D = await r.json();
     parse();
     failed = false;
+    // An unknown season key falls back to today's on the server.
+    if (F.season && F.season !== 'all' && F.season !== D.season) F.season = '';
+    renderFilters();
   } catch (e) {
     failed = true;
     if (!D) {
@@ -141,6 +149,24 @@ function parse() {
   });
 }
 
+// ---------- seasons ----------
+
+const seasonYear = (s) => s.from.slice(0, 4);
+const seasonLabel = (s) => (s ? `${s.name} ${seasonYear(s)}` : 'All seasons');
+const seasonChip = (s) => `${s.name.replace(/ term$/i, '')} '${seasonYear(s).slice(2)}`.toUpperCase();
+const seasonByKey = (k) => D.seasons.find((s) => s.key === k);
+const seasonColor = (s) => (s.term ? TERM : BREAK);
+const seasonKind = (s) => (s.term ? 'Term: everyone is registered with a mess' : 'Break: only people who registered themselves');
+// shownSeasons are the latest seasons with data, plus today's.
+const shownSeasons = () => D.seasons.filter((s) => s.days || s.key === D.current).slice(-MAX_SEASONS);
+const seasonTip = (s) => () => [
+  [{ t: seasonLabel(s), c: 'nm', color: seasonColor(s) }],
+  [{ t: `${fmtDay(s.from)} to ${fmtDay(s.to)}`, c: 'c7' }],
+  [{ t: seasonKind(s), c: 'c8' }],
+  null,
+  [{ t: s.days ? `${s.days} day${s.days === 1 ? '' : 's'} of data` : 'No data yet', c: 'c6' }],
+];
+
 // servings is how many of each weekday the data covers, Monday first.
 function servings() {
   const n = [0, 0, 0, 0, 0, 0, 0];
@@ -164,9 +190,10 @@ function slot(rows, mess, wd, meal, nServ) {
 function renderFilters() {
   const group = (box, items, on, set) => {
     box.replaceChildren();
-    for (const [v, label, iconMarkup] of items) {
+    for (const [v, label, iconMarkup, tipFn] of items) {
       const b = el('button', 'win' + (on(v) ? ' on' : ''));
       b.type = 'button';
+      if (tipFn) tip(b, tipFn);
       if (iconMarkup) {
         const i = svgEl(iconMarkup);
         i.setAttribute('width', 11); i.setAttribute('height', 11);
@@ -180,6 +207,11 @@ function renderFilters() {
       box.append(b);
     }
   };
+  const sel = F.season || D.current;
+  const swatch = (s) => pix(['xxx', 'xxx', 'xxx'], { x: s.term ? TERM : '#ffc53d' });
+  group($('fSeason'), [...shownSeasons().map((s) => [s.key, seasonChip(s), swatch(s), seasonTip(s)]),
+    ['all', 'ALL SEASONS', null, () => [[{ t: 'All seasons', c: 'nm' }], [{ t: 'Terms and breaks together. Weekday patterns blend two different markets.', c: 'c7' }]]]],
+  (v) => v === sel, (v) => { F.season = v === D.current ? '' : v; pick = null; savePrefs(); load(); renderFilters(); });
   group($('fRange'), RANGES, (v) => F.weeks === v, (v) => { F.weeks = v; savePrefs(); load(); renderFilters(); });
   group($('fMess'), [['all', 'ALL MESSES'], ...D.messes.map((m) => [m.name, m.name.toUpperCase(), messIcon(m.name)])], (v) => F.mess === v,
     (v) => { F.mess = v; if (pick && v !== 'all' && pick.mess !== v) pick = null; savePrefs(); renderFilters(); render(); });
@@ -195,8 +227,10 @@ function render() {
   const empty = !R.some(isOffer);
   $('notice').hidden = !empty && !failed;
   if (failed) $('notice').textContent = 'Lost the connection to messwa; showing the last data.';
+  else if (empty && D.first) $('notice').textContent = `No ended listings from ${seasonLabel(seasonByKey(D.season))} in this range yet. Pick another season above.`;
   else if (empty) $('notice').textContent = 'No ended listings stored yet. messwa run writes one row per listing every hour, once its meal is over.';
   renderOverview();
+  renderSeasons();
   renderBoards();
   renderDiet();
   renderHours();
@@ -205,7 +239,9 @@ function render() {
 }
 
 function renderOverview() {
-  const days = D.first ? daysBetween(D.first, D.today) + 1 : 0;
+  // A past season's range runs to its end, so count only the dates with data.
+  const dates = [...new Set(R.map((r) => r.date))].sort();
+  const days = dates.length, since = dates[0], until = dates[dates.length - 1];
   $('collectV').textContent = days >= GOAL_DAYS ? `${Math.floor(days / 7)} weeks` : `${days} of ${GOAL_DAYS} days`;
   $('collectBar').style.setProperty('--days', GOAL_DAYS);
   $('collectFill').style.setProperty('width', `${Math.min(100, (days / GOAL_DAYS) * 100)}%`);
@@ -213,10 +249,15 @@ function renderOverview() {
   $('collectRow').replaceChildren();
   const span = (html) => { const s = el('span'); s.append(...html); return s; };
   $('collectRow').append(
-    span([el('b', '', D.first ? `Since ${fmtDay(D.first)}` : 'Nothing yet'), document.createTextNode(` · every weekday slot seen ${lo === Math.max(...sv) ? `${lo}×` : `${lo}–${Math.max(...sv)}×`} in this range`)]),
+    span([el('b', '', days ? `Since ${fmtDay(since)}` : 'Nothing yet'), document.createTextNode(` · every weekday slot seen ${lo === Math.max(...sv) ? `${lo}×` : `${lo}–${Math.max(...sv)}×`} in this range`)]),
     span([document.createTextNode(days >= GOAL_DAYS ? 'Weekly patterns are on solid ground' : `Weekly patterns firm up after ${GOAL_DAYS - days} more days`)]),
   );
-  $('ovMeta').textContent = D.rows.length ? `${fmtShort(D.from)} to ${fmtShort(D.today)}, ended meals only` : '';
+  const kinds = new Set(D.seasons.filter((s) => s.days && s.from <= D.to && s.to >= D.from).map((s) => s.term));
+  if (D.season === 'all' && kinds.size > 1) {
+    $('collectRow').append(span([el('b', 'warn', 'Terms and breaks mixed'), document.createTextNode(' · weekday patterns blend two different markets')]));
+  }
+  const where = seasonLabel(seasonByKey(D.season));
+  $('ovMeta').textContent = days ? `${where} · ${fmtShort(since)} to ${fmtShort(until)}, ended meals only` : where;
 
   const rows = view(), off = rows.filter(isOffer), sold = off.filter((r) => r.sold);
   const waits = sold.filter((r) => r.sold >= r.first).map((r) => r.sold - r.first);
@@ -246,6 +287,72 @@ function renderOverview() {
   kpi(ma == null ? null : rupees(ma), 'MEDIAN ASK', `${pcs(asks.length, sells.length)} state a price`);
   kpi(want.length.toLocaleString('en-IN'), 'WANTED', `${pcs(want.filter((r) => r.sold).length, want.length)} found a seller`);
   kpi(sellers.size.toLocaleString('en-IN'), 'SELLERS', `${buyers.size.toLocaleString('en-IN')} asked to buy`);
+}
+
+// ---------- terms vs breaks ----------
+
+// renderSeasons compares whole seasons side by side from the totals, which
+// follow the mess and diet filters but not the range.
+function renderSeasons() {
+  const c = Object.fromEntries(D.total_cols.map((k, i) => [k, i]));
+  const shown = D.seasons.map((s, i) => ({ ...s, i })).filter((s) => s.days).slice(-MAX_SEASONS);
+  const agg = shown.map((s) => ({ s, offers: 0, sold: 0, wanted: 0, askSum: 0, asks: 0 }));
+  const at = new Map(shown.map((s, j) => [s.i, agg[j]]));
+  for (const t of D.totals) {
+    const a = at.get(t[c.season]);
+    if (!a || (F.mess !== 'all' && t[c.mess] !== F.mess) || (F.diet !== 'all' && t[c.diet] !== F.diet)) continue;
+    a.offers += t[c.offers]; a.sold += t[c.sold]; a.wanted += t[c.wanted]; a.askSum += t[c.ask_sum]; a.asks += t[c.asks];
+  }
+  const count = (v) => (v >= 10 ? String(Math.round(v)) : v.toFixed(1));
+  const metrics = [
+    ['Listings a day', (a) => a.offers / a.s.days, count, 0],
+    ['Sold', (a) => (a.offers ? a.sold / a.offers : null), (v) => `${Math.round(v * 100)}%`, 1],
+    ['Average ask', (a) => (a.asks ? a.askSum / a.asks : null), (v) => `₹${Math.round(v)}`, 0],
+    ['Wanted a day', (a) => a.wanted / a.s.days, count, 0],
+  ];
+  const host = $('seasons');
+  host.replaceChildren();
+  const note = $('snNote');
+  const kinds = new Set(shown.map((s) => s.term));
+  const cur = seasonByKey(D.current);
+  note.hidden = kinds.size !== 1 || !cur;
+  if (!note.hidden) {
+    const other = cur.term ? 'break' : 'term';
+    note.textContent = `Only ${cur.term ? 'terms' : 'breaks'} so far. ${seasonLabel(D.next)} starts ${fmtDay(D.next.from)}, and the first ${other} shows up next to this one from then.`;
+  }
+  if (!shown.length) return;
+
+  for (const [name, fn, fmt, isRate] of metrics) {
+    const box = el('div', 'mini');
+    const ch = el('div');
+    box.append(el('h4', '', name), ch);
+    host.append(box);
+    const h = 138, b = 34, top = 16;
+    const [s, w] = chart(ch, h, 140);
+    const vals = agg.map(fn);
+    const max = isRate ? 1 : niceMax(Math.max(...vals.filter((v) => v != null), 0.001)), y = (v) => h - b - ((h - b - top) * v) / max;
+    S('line', { x1: 0, x2: w, y1: h - b, y2: h - b, stroke: '#2b3346' }, s);
+    const bw = w / agg.length, cw = Math.min(30, bw - 10);
+    agg.forEach((a, i) => {
+      const v = vals[i], x0 = i * bw, cx = x0 + (bw - cw) / 2, on = D.season === 'all' || a.s.key === D.season;
+      const g = S('g', { class: 'h' }, s);
+      S('rect', { class: 'hit', x: x0, y: 0, width: bw, height: h }, g);
+      if (v != null && v > 0) S('path', { class: 'mk', d: barV(cx, y(v), cw, h - b - y(v)), fill: seasonColor(a.s), opacity: on ? 1 : 0.45 }, g);
+      T(g, x0 + bw / 2, (v == null ? h - b : y(v)) - 5, v == null ? '-' : fmt(v), { 'text-anchor': 'middle', class: 'v' });
+      const word = a.s.name.split(' ')[0];
+      T(g, x0 + bw / 2, h - b + 14, bw > 64 ? word : word.slice(0, 3), { 'text-anchor': 'middle', style: on ? 'fill:var(--text)' : '' });
+      T(g, x0 + bw / 2, h - b + 27, `'${seasonYear(a.s).slice(2)}`, { 'text-anchor': 'middle' });
+      tip(g, () => [
+        [{ t: seasonLabel(a.s), c: 'nm', color: seasonColor(a.s) }],
+        [{ t: `${a.s.days} day${a.s.days === 1 ? '' : 's'} of data, ${fmtShort(a.s.from)} to ${fmtShort(a.s.to)}`, c: 'c8' }],
+        null,
+        [{ t: 'Listed ', c: 'c7' }, { t: `${a.offers.toLocaleString('en-IN')} (${count(a.offers / a.s.days)} a day)`, c: 'cf' }],
+        [{ t: 'Sold ', c: 'c7' }, { t: `${a.sold.toLocaleString('en-IN')} (${pcs(a.sold, a.offers)})`, c: 'cf' }],
+        [{ t: 'Average ask ', c: 'c7' }, { t: a.asks ? `₹${Math.round(a.askSum / a.asks)} from ${a.asks.toLocaleString('en-IN')}` : 'no prices', c: a.asks ? 'c6' : 'c8' }],
+        [{ t: 'Wanted ', c: 'c7' }, { t: `${a.wanted.toLocaleString('en-IN')} (${count(a.wanted / a.s.days)} a day)`, c: 'cf' }],
+      ]);
+    });
+  }
 }
 
 // ---------- weekly menu board ----------
@@ -739,6 +846,7 @@ $('navIcon').append(svgEl(icon('prev')));
 $('salesIcon').append(svgEl(icon('coin')));
 me().then(userLink).catch(() => {});
 $('ovIcon').append(svgEl(icon('paper')));
+$('snIcon').append(svgEl(icon('chart')));
 $('wkIcon').append(svgEl(icon('clock')));
 $('dietIcon').append(svgEl(icon('lunch')));
 $('hrIcon').append(svgEl(icon('clock')));

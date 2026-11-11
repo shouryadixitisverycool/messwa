@@ -30,6 +30,7 @@
   </header>
 
   <div class="filters" id="filters" aria-label="Filters">
+    <div class="wins" id="fSeason" aria-label="Season"></div>
     <div class="wins" id="fRange" aria-label="Range"></div>
     <div class="wins" id="fMess" aria-label="Mess"></div>
     <div class="wins" id="fDiet" aria-label="Diet"></div>
@@ -49,6 +50,17 @@
       <div class="saved-row" id="collectRow"></div>
     </div>
     <div class="kpis six" id="kpis"></div>
+  </section>
+
+  <section class="chest" aria-label="Terms and breaks">
+    <div class="chest-head">
+      <span class="head-icon" id="snIcon"></span>
+      <span class="head-name">Terms vs breaks</span>
+      <span class="head-meta">Whole seasons side by side. Follows the mess and diet filters, not the range.</span>
+      <span class="pleg"><span><i class="lt"></i>term</span><span><i class="lk"></i>break</span></span>
+    </div>
+    <div class="seasons" id="seasons"></div>
+    <p class="empty-note" id="snNote" hidden></p>
   </section>
 
   <section class="chest" aria-label="Weekly menu board">
