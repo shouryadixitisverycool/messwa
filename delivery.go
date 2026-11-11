@@ -51,6 +51,7 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	diagnostics := fs.Bool("diagnostics", false, "log delivery checks for the selected buyer without message contents")
 	assumeUnreadable := fs.Bool("assume-unreadable-payment", false, "send the QR when a payment's amount stays unreadable after recovery, assuming the agreed price")
 	readSellFlags := addSellFlags(fs)
+	handoffFlag := fs.String("handoff", "", "for a group offer, overrides [sell] handoff for this run: never or on_reply")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -77,6 +78,16 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	}
 	if *portalQR && *qr != "" {
 		return errors.New("choose either -portal-qr or -qr")
+	}
+	if *peer != "" && *handoffFlag != "" {
+		return errors.New("-handoff applies only to group offers; -peer is already your own buyer")
+	}
+	handoff := config.HandoffNever
+	if groupMode {
+		var err error
+		if handoff, err = cfg.Sell.Handoff.Resolve(*handoffFlag); err != nil {
+			return err
+		}
 	}
 	day, err := time.ParseInLocation("2006-01-02", *date, cfg.Location())
 	if err != nil {
@@ -163,6 +174,7 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 		return err
 	}
 	defer st.Close()
+	own := newOwnGroupLog(ctx, cfg, st, c)
 	commandCtx := ctx
 	ctx, cancel := context.WithDeadline(ctx, slot.End)
 	defer cancel()
@@ -180,7 +192,7 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 			return err
 		}
 		if exists {
-			return errors.New("meal already has a delivery reservation")
+			return errors.New("meal already has a delivery reservation; if it was handed off to you, finish it with -peer or free it with release-handoff")
 		}
 		if err := c.WA.ConnectContext(ctx); err != nil {
 			return err
@@ -197,7 +209,10 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 			}
 			groupPost = offerText(details)
 		}
-		posting, err = openGroupOffer(ctx, c, log, sell.Groups, groupPost, sell.PostGap)
+		// Record each copy as it posts, so the ✅ after a sale reaches copies
+		// that went out after the first.
+		record := func(p postedOffer) { recordOffers(ctx, st, own, log, *date, *meal, []postedOffer{p}) }
+		posting, err = openGroupOffer(ctx, c, log, sell.Groups, groupPost, sell.PostGap, record)
 		if err != nil {
 			return err
 		}
@@ -208,6 +223,9 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 			paymentPrompt = fmt.Sprintf("pay %s here via WhatsApp Pay for the test QR", price)
 		}
 		armDelivery = st.ArmNewDelivery
+		if handoff.HandsOffOnReply() {
+			fmt.Fprintln(os.Stderr, "Handoff is on_reply: the first private reply hands the chat to you and the bot sends that buyer nothing.")
+		}
 	}
 	tryBuyer := func(ctx context.Context, jid types.JID, d store.Delivery) error {
 		ctx, cancel := context.WithCancel(ctx)
@@ -435,8 +453,22 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	newReservation := func(peer types.JID) store.Delivery {
 		return store.Delivery{Date: *date, Meal: *meal, Peer: peer.String(), Amount: *amount, ImageHash: imageHash, ArmedAt: time.Now(), Mess: mess, Diet: diet}
 	}
+	// The meal is sold once its QR is out, so tick every offer post for it,
+	// including ones from an earlier group offer. The deadline is the
+	// command's, not the meal's: a sale in the last seconds still gets its ✅.
+	tickOffers := func() {
+		tickCtx, stop := context.WithTimeout(commandCtx, time.Minute)
+		defer stop()
+		if _, _, err := reactSold(tickCtx, st, own, waReaction(c), log, *date, *meal); err != nil {
+			log.Warn("could not read the offer posts to mark them sold", "err", err)
+		}
+	}
 	if queue == nil {
-		return tryBuyer(ctx, jid, newReservation(jid))
+		if err := tryBuyer(ctx, jid, newReservation(jid)); err != nil {
+			return err
+		}
+		tickOffers()
+		return nil
 	}
 	wait, stopWaiting := context.WithTimeout(ctx, 10*time.Minute)
 	defer stopWaiting()
@@ -457,6 +489,12 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 			}
 		}
 		d := newReservation(peer)
+		if handoff.HandsOffOnReply() {
+			// You have a buyer, so post no more copies.
+			posted := posting.stop()
+			log.Info("offer handed off", "copies_posted", len(posted))
+			return handOff(ctx, st, log, os.Stdout, d, queue.name(peer), resumeFlags(*portalQR, *user, *qr), queue.closeAndDrain())
+		}
 		err = tryBuyer(ctx, peer, d)
 		if err == nil {
 			// Post no more copies of a sold offer.
@@ -470,6 +508,7 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 					log.Warn("could not notify queued buyer that meal sold", "err", notifyErr)
 				}
 			}
+			tickOffers()
 			return nil
 		}
 		if !errors.Is(err, errBuyerPassed) && !errors.Is(err, errBuyerTimedOut) {
@@ -480,6 +519,20 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 		}
 		log.Info("buyer turn ended; checking queue", "reason", err)
 	}
+}
+
+// resumeFlags are the image flags for resuming a handed-off sale with
+// deliver-qr -peer, so it sends the same kind of image the offer promised.
+func resumeFlags(portalQR bool, user, qr string) string {
+	switch {
+	case portalQR && user != "":
+		return " -portal-qr -user " + user
+	case portalQR:
+		return " -portal-qr"
+	case qr != "":
+		return " -qr " + qr
+	}
+	return ""
 }
 
 func buyerPassed(message *waE2E.Message) bool {

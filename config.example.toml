@@ -52,8 +52,8 @@ monthly_fee = 0
 
 [sell]
 # Group offers posted by `deliver-qr` without -peer. Flags of the same name
-# (-group, -group-count, -post-gap, -show-price, -mention-extras) override
-# these for one run.
+# (-group, -group-count, -post-gap, -show-price, -mention-extras, -handoff)
+# override these for one run.
 #
 # Which groups an offer goes to: exact names or JIDs, posted in this order...
 # groups = ["Mess Buy Sell", "120363000000000002@g.us"]
@@ -61,7 +61,7 @@ monthly_fee = 0
 # With neither, deliver-qr needs -group or -group-count.
 # group_count = 2
 # Pause between copies of one offer, at least 3s. The sale starts after the
-# first copy; a sold offer posts no more copies.
+# first copy; a sold or handed-off offer posts no more copies.
 post_gap = "15s"
 # Put the price in the group post. The payment request DM always states it.
 show_price = true
@@ -69,6 +69,11 @@ show_price = true
 # mess portal (needs -portal-qr). If the read fails, the offer goes out
 # without them.
 mention_extras = false
+# When a group offer hands a buyer's chat to you. "never" runs the whole
+# sale: payment request, then the QR. "on_reply" stops as soon as a buyer
+# replies privately to any copy of the offer, before the bot sends them
+# anything, and prints which chat to take over.
+handoff = "never"
 
 # Seasons split the year for the insights page. In a term everyone is
 # registered with a mess, so the market is far busier than in a break, and the

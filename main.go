@@ -53,9 +53,13 @@ commands:
                                 post once and answer the first private text reply to that post
   deliver-qr -date DATE -meal MEAL (-peer JID | [-group NAME_OR_JID ... | -group-count N]) -amount INR
              [-offer-text TEXT] [-qr IMAGE | -portal-qr [-user NAME]]
-             [-show-price=false] [-mention-extras] [-post-gap 15s]
+             [-show-price=false] [-mention-extras] [-post-gap 15s] [-handoff never|on_reply]
                                 arm one meal's QR delivery after a matching payment message;
                                 without -peer it posts an offer to the [sell] groups
+  release-handoff -date DATE -meal MEAL
+                                free a meal handed to you by -handoff on_reply so it can be offered again
+  mark-sold -date DATE -meal MEAL
+                                react ✅ to the meal's offer posts, for a sale finished by hand
 
 inspection (read the database only, safe while run is up):
   chat [-hours 48]              the merged group stream, each post annotated with its listing
@@ -106,6 +110,10 @@ func main() {
 		err = offerGroup(ctx, cfg, log, args)
 	case "deliver-qr":
 		err = deliverQR(ctx, cfg, log, args)
+	case "release-handoff":
+		err = releaseHandoff(ctx, cfg, os.Stdout, args)
+	case "mark-sold":
+		err = markSold(ctx, cfg, log, args)
 	case "import-history":
 		err = importHistory(ctx, cfg, args)
 	case "chat":

@@ -62,7 +62,7 @@ func offerGroup(ctx context.Context, cfg *config.Config, log *slog.Logger, args 
 func postGroupOffer(ctx context.Context, c *wa.Client, log *slog.Logger, group, offer string, wait time.Duration) (types.JID, error) {
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
-	o, err := openGroupOffer(ctx, c, log, []string{group}, offer, 0)
+	o, err := openGroupOffer(ctx, c, log, []string{group}, offer, 0, nil)
 	if err != nil {
 		return types.EmptyJID, err
 	}
@@ -76,6 +76,27 @@ type offerQueue struct {
 	seen   map[types.JID]bool
 	ready  chan struct{}
 	closed bool
+	// names holds each buyer's WhatsApp push name from their first reply.
+	names map[types.JID]string
+}
+
+// addNamed queues a buyer and remembers the name on their first reply.
+func (q *offerQueue) addNamed(peer types.JID, name string) {
+	q.mu.Lock()
+	if !q.closed && !q.seen[peer] && name != "" {
+		if q.names == nil {
+			q.names = make(map[types.JID]string)
+		}
+		q.names[peer] = name
+	}
+	q.mu.Unlock()
+	q.add(peer)
+}
+
+func (q *offerQueue) name(peer types.JID) string {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.names[peer]
 }
 
 func (q *offerQueue) add(peer types.JID) {
@@ -125,14 +146,6 @@ type offerTarget struct {
 	Name string
 }
 
-// postedOffer is one copy of a group offer.
-type postedOffer struct {
-	Group     types.JID
-	GroupName string
-	ID        types.MessageID
-	At        time.Time
-}
-
 // groupOffer is one offer posted to one or more groups. Every copy feeds the
 // same buyer queue, so the first private reply to any copy reserves the meal
 // and a buyer who replies to two copies is queued once.
@@ -171,7 +184,7 @@ func (o *groupOffer) matches(e *events.Message) bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	for _, p := range o.copies {
-		if privateOfferReply(e, p.Group, p.ID, p.At) {
+		if privateOfferReply(e, p.Chat, p.ID, p.At) {
 			return true
 		}
 	}
@@ -180,8 +193,9 @@ func (o *groupOffer) matches(e *events.Message) bool {
 
 // openGroupOffer posts offer to each group in order, gap apart, and returns
 // once the first copy is posted. Later copies go out in the background until
-// stop or close; a sale doesn't wait for them.
-func openGroupOffer(ctx context.Context, c *wa.Client, log *slog.Logger, groups []string, offer string, gap time.Duration) (*groupOffer, error) {
+// stop or close; a sale doesn't wait for them. onPosted, if set, runs for each
+// copy WhatsApp acknowledges, before stop returns.
+func openGroupOffer(ctx context.Context, c *wa.Client, log *slog.Logger, groups []string, offer string, gap time.Duration, onPosted func(postedOffer)) (*groupOffer, error) {
 	if len(groups) == 0 {
 		return nil, errors.New("no group to post the offer to")
 	}
@@ -217,17 +231,20 @@ func openGroupOffer(ctx context.Context, c *wa.Client, log *slog.Logger, groups 
 				peer = pn.ToNonAD()
 			}
 		}
-		o.queue.add(peer)
+		o.queue.addNamed(peer, e.Info.PushName)
 	})
 	o.removeHandler = func() { c.WA.RemoveEventHandler(handlerID) }
 
 	post := func(ctx context.Context, g offerTarget) (postedOffer, error) {
-		p := postedOffer{Group: g.JID, GroupName: g.Name, ID: c.WA.GenerateMessageID(), At: time.Now().Truncate(time.Second)}
+		p := postedOffer{Chat: g.JID, GroupName: g.Name, ID: c.WA.GenerateMessageID(), At: time.Now().Truncate(time.Second), Text: offer}
 		// Listen before sending so an instant reply still matches.
 		o.mu.Lock()
 		o.copies = append(o.copies, p)
 		o.mu.Unlock()
-		_, err := c.WA.SendMessage(ctx, g.JID, &waE2E.Message{Conversation: proto.String(offer)}, whatsmeow.SendRequestExtra{ID: p.ID})
+		resp, err := c.WA.SendMessage(ctx, g.JID, &waE2E.Message{Conversation: proto.String(offer)}, whatsmeow.SendRequestExtra{ID: p.ID})
+		// Replies match against the local time above; the ledger and group
+		// log get WhatsApp's.
+		p.At = firstTime(resp.Timestamp, p.At)
 		return p, err
 	}
 	first := make(chan struct{})
@@ -240,6 +257,9 @@ func openGroupOffer(ctx context.Context, c *wa.Client, log *slog.Logger, groups 
 			o.posted = append(o.posted, p)
 			o.mu.Unlock()
 			log.Info("group offer sent; waiting for a private reply", "group", p.GroupName, "offer_id", p.ID)
+			if onPosted != nil {
+				onPosted(p)
+			}
 			firstOnce.Do(func() { close(first) })
 		})
 		if postErr != nil {

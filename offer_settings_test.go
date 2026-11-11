@@ -164,7 +164,7 @@ func TestPostOfferCopiesSpacesAndContinues(t *testing.T) {
 		if g.Name == "two" {
 			return postedOffer{}, errors.New("uncertain")
 		}
-		return postedOffer{Group: g.JID, GroupName: g.Name, ID: "id-" + g.Name}, nil
+		return postedOffer{Chat: g.JID, GroupName: g.Name, ID: "id-" + g.Name}, nil
 	}
 	var announced []string
 	gap := 20 * time.Millisecond
@@ -172,7 +172,7 @@ func TestPostOfferCopiesSpacesAndContinues(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "two") {
 		t.Fatalf("failed copy not reported: %v", err)
 	}
-	if len(copies) != 2 || copies[0].ID != "id-one" || copies[1].ID != "id-three" || copies[1].Group != groups[2].JID {
+	if len(copies) != 2 || copies[0].ID != "id-one" || copies[1].ID != "id-three" || copies[1].Chat != groups[2].JID {
 		t.Fatalf("copies = %+v", copies)
 	}
 	if !reflect.DeepEqual(announced, []string{"id-one", "id-three"}) {
@@ -204,8 +204,8 @@ func TestRepliesToAnyCopyShareOneQueue(t *testing.T) {
 	groupA := types.NewJID("111", types.GroupServer)
 	groupB := types.NewJID("222", types.GroupServer)
 	o := &groupOffer{copies: []postedOffer{
-		{Group: groupA, ID: "offer-a", At: postedAt},
-		{Group: groupB, ID: "offer-b", At: postedAt.Add(15 * time.Second)},
+		{Chat: groupA, ID: "offer-a", At: postedAt},
+		{Chat: groupB, ID: "offer-b", At: postedAt.Add(15 * time.Second)},
 	}}
 	reply := func(group types.JID, id string, at time.Time) *events.Message {
 		return &events.Message{

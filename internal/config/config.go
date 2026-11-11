@@ -100,27 +100,6 @@ type Sales struct {
 	MonthlyFee int `toml:"monthly_fee"`
 }
 
-// Sell holds the settings for group offers posted by deliver-qr. CLI flags
-// override each of them for one run.
-type Sell struct {
-	// Groups are the groups an offer goes to, by exact name or JID. Leave
-	// it empty to use GroupCount or pass -group on the command line.
-	Groups []string `toml:"groups"`
-	// GroupCount posts to the first N of the top-level groups instead of
-	// naming them. Set Groups or GroupCount, not both.
-	GroupCount int `toml:"group_count"`
-	// PostGap is the pause between copies of one offer in different groups.
-	PostGap duration `toml:"post_gap"`
-	// ShowPrice puts the price in the group post. The payment request DM
-	// states the price either way.
-	ShowPrice bool `toml:"show_price"`
-	// MentionExtras lists the extras registered for that meal in the post.
-	MentionExtras bool `toml:"mention_extras"`
-}
-
-// MinPostGap is the shortest pause allowed between copies of one offer.
-const MinPostGap = 3 * time.Second
-
 // VegOnly reports whether a mess serves only veg.
 func (c *Config) VegOnly(mess string) bool {
 	for _, m := range c.Messes {
