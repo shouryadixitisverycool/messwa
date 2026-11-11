@@ -1,0 +1,26 @@
+name: govulncheck
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    # Mondays 03:30 UTC, to catch advisories published against unchanged code.
+    - cron: "30 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
