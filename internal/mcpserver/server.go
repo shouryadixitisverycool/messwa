@@ -1,5 +1,7 @@
 // Package mcpserver exposes stored market data and optional live portal
-// registration reads. It provides no tools for changing portal state.
+// registration reads. It provides no tools for changing portal state. The
+// only tools that send anything are the sell task tools, which exist only
+// when [mcp] sell_tasks is on.
 package mcpserver
 
 import (
@@ -36,6 +38,9 @@ type Server struct {
 	// without accounts). Then every caller counts as the owner.
 	acc       *accounts.Accounts
 	portalFor func(ctx context.Context, userID int64) (portalReader, error)
+
+	// sell runs sell tasks inside run; nil elsewhere.
+	sell SellTasks
 }
 
 // portalReader is the part of portal.Client the tools use. Tests fake it.
@@ -122,14 +127,20 @@ Saved contacts appear only as names and timestamps. Message content is available
 
 my_registrations reads your own registrations from the mess portal, using the mess API key saved on your messwa account. Cancellation and usage fields are reported as received; do not treat a registration as permission to sell it.
 
-my_qr returns your current meal-access QR as a PNG image. It is sensitive: do not share it with anyone without authorization. Fetch it fresh after token resets. Neither tool changes registrations or QR settings.`
+my_qr returns your current meal-access QR as a PNG image. It is sensitive: do not share it with anyone without authorization. Fetch it fresh after token resets. Neither tool changes registrations or QR settings.
+
+The tools above send nothing on WhatsApp.`
 
 func New(cfg *config.Config, st *store.Store, contacts Contacts) *Server {
 	return &Server{cfg: cfg, st: st, sched: meals.New(cfg), contacts: contacts, now: time.Now}
 }
 
 func (s *Server) MCP() *mcp.Server {
-	srv := mcp.NewServer(&mcp.Implementation{Name: "messwa", Version: "0.1.0"}, &mcp.ServerOptions{Instructions: instructions})
+	text := instructions
+	if s.sellEnabled() {
+		text += sellInstructions
+	}
+	srv := mcp.NewServer(&mcp.Implementation{Name: "messwa", Version: "0.1.0"}, &mcp.ServerOptions{Instructions: text})
 	ro := &mcp.ToolAnnotations{ReadOnlyHint: true}
 	mcp.AddTool(srv, &mcp.Tool{Name: "meal_schedule", Annotations: ro,
 		Description: "Current time, the meal being served now (if any), the next meal, and today's meal windows."}, s.mealSchedule)
@@ -145,6 +156,9 @@ func (s *Server) MCP() *mcp.Server {
 		Description: "People you exchanged direct messages with recently, with whether each is a saved contact or an unsaved/new number. No message content. Admins only."}, s.listRecentChats)
 	mcp.AddTool(srv, &mcp.Tool{Name: "read_unsaved_chat", Annotations: ro,
 		Description: "Recent messages in a direct chat with an unsaved number. Fails for saved contacts. Admins only."}, s.readUnsavedChat)
+	if s.sellEnabled() {
+		s.addSellTools(srv)
+	}
 	return srv
 }
 

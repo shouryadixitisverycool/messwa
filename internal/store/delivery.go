@@ -40,6 +40,8 @@ var deliveryColumns = []string{
 	"offer_at INTEGER",
 	"paid_at INTEGER",
 	"sent_at INTEGER",
+	// The sell task that armed this delivery, if any.
+	"task_id INTEGER",
 }
 
 type Delivery struct {

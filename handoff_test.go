@@ -71,8 +71,8 @@ func TestResumeFlags(t *testing.T) {
 func TestOfferQueueKeepsFirstName(t *testing.T) {
 	q := offerQueue{seen: make(map[types.JID]bool), ready: make(chan struct{}, 1)}
 	a := types.NewJID("100", types.DefaultUserServer)
-	q.addNamed(a, "Asha")
-	q.addNamed(a, "Someone else")
+	q.addFrom(a, a, "Asha")
+	q.addFrom(a, a, "Someone else")
 	if q.name(a) != "Asha" {
 		t.Fatalf("name %q", q.name(a))
 	}

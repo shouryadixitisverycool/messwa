@@ -41,7 +41,7 @@ commands:
                                 manage dashboard accounts and MCP tokens (messwa user help)
   groups                        list your groups and their JIDs, to fill in config.toml
   import-history [-keep]        load the group history saved by login (configured groups only)
-  run                           ingest messages and serve MCP over HTTP
+  run                           ingest messages and serve MCP over HTTP (and sell tasks, if [mcp] sell_tasks is on)
   inspect-payment -peer JID     inspect live incoming payment fields from one DM (stop run first)
   registrations [-user NAME] [-from DATE] [-to DATE]
                                 read your meal registrations from the mess portal
@@ -337,11 +337,19 @@ func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	in := ingest.New(cfg, st)
 	in.OnChange(hub.Notify)
 	c.Ingest(in, st)
+	// Sell tasks share this connection. Resume them before connecting so
+	// replies and payments that arrived while run was down reach them.
+	sell := newSellManager(ctx, cfg, log, st, waConn{c.WA}, c.WA.SendMessage, c.WA.WaitForConnection,
+		func(ctx context.Context, userID int64) (mealPortal, error) { return acc.Portal(ctx, userID) },
+		newOwnGroupLog(ctx, cfg, st, c))
+	if err := sell.Resume(ctx, cfg.MCP.SellTasks); err != nil {
+		return fmt.Errorf("resume sell tasks: %w", err)
+	}
 	if err := c.WA.Connect(); err != nil {
 		return err
 	}
 	defer c.WA.Disconnect()
-	log.Info("connected to WhatsApp", "groups", len(cfg.Groups))
+	log.Info("connected to WhatsApp", "groups", len(cfg.Groups), "sell_tasks", cfg.MCP.SellTasks)
 
 	go func() {
 		for t := time.NewTicker(time.Hour); ; {
@@ -369,6 +377,9 @@ func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 
 	ms := mcpserver.New(cfg, st, c)
 	ms.SetAccounts(acc)
+	if cfg.MCP.SellTasks {
+		ms.SetSellTasks(sell)
+	}
 	if dashLn != nil {
 		go serve(ctx, log, dashLn, dashboard.Handler(cfg, ms, hub, acc))
 		log.Info("serving dashboard", "url", "http://"+cfg.Dash.Listen+"/")

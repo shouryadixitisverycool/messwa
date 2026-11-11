@@ -33,6 +33,11 @@ listen = "127.0.0.1:8766"
 # On loopback, requests without a token act as the first admin, unless this
 # env var holds a shared token, which then acts as the first admin instead.
 token_env = "MESSWA_MCP_TOKEN"
+# Lets admins start sell tasks over MCP (start_sell_task, sell_task_status,
+# cancel_sell_task). A task posts an offer in a group and messages the people
+# who reply to it, from the linked WhatsApp account. Off by default, and every
+# other MCP tool stays read-only either way.
+sell_tasks = false
 
 [dashboard]
 # The listings dashboard, behind sign-in. It shows sellers' phone numbers,
@@ -51,9 +56,11 @@ listen = "127.0.0.1:8767"
 monthly_fee = 0
 
 [sell]
-# Group offers posted by `deliver-qr` without -peer. Flags of the same name
-# (-group, -group-count, -post-gap, -show-price, -mention-extras, -handoff)
-# override these for one run.
+# Group offers posted by `deliver-qr` without -peer, and by sell tasks.
+# Flags of the same name (-group, -group-count, -post-gap, -show-price,
+# -mention-extras, -handoff) override these for one deliver-qr run. Sell
+# tasks use everything here except handoff, which start_sell_task sets per
+# task; with show_price they post the task's max price.
 #
 # Which groups an offer goes to: exact names or JIDs, posted in this order...
 # groups = ["Mess Buy Sell", "120363000000000002@g.us"]

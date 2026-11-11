@@ -80,6 +80,10 @@ type MCP struct {
 	// first admin. Per-user tokens work either way. With it unset, requests
 	// without a token are allowed when Listen is loopback.
 	TokenEnv string `toml:"token_env"`
+	// SellTasks adds the start_sell_task, sell_task_status and
+	// cancel_sell_task tools, for admins only. Off by default: they let an
+	// agent post in a group and message buyers from the linked account.
+	SellTasks bool `toml:"sell_tasks"`
 }
 
 type Dash struct {
