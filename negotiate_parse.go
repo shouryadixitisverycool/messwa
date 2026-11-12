@@ -239,7 +239,7 @@ func parseBuyer(text string) intent {
 	switch {
 	case paidMark || paidWords.in(m):
 		return intent{kind: intentPaid}
-	case passWords.in(m):
+	case passWords.in(m), notInterested(m.words):
 		return intent{kind: intentPass}
 	case len(m.words) > 0 && refuseFirst.words[m.words[0]] && !lowerWords.in(m) && !openerWords.in(m):
 		return intent{kind: intentPass}

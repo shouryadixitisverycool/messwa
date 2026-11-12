@@ -306,13 +306,10 @@ func normalizeAmount(amount string) (string, error) {
 	return parts[0] + "." + parts[1], nil
 }
 
+// buyerPassed reports whether a DM gives up the buyer's turn: a short
+// decline such as "pass", "no thanks" or "Not intrested", see passMessage.
 func buyerPassed(message *waE2E.Message) bool {
-	switch strings.Trim(strings.ToLower(strings.TrimSpace(dmText(message))), ".!?") {
-	case "pass", "cancel", "no thanks", "not interested":
-		return true
-	default:
-		return false
-	}
+	return passMessage(dmText(message))
 }
 
 func portalMealLabel(mess, diet, meal string) string {
