@@ -60,8 +60,9 @@ commands:
   release-handoff -date DATE -meal MEAL [-unpaid]
                                 free a meal handed to you by -handoff on_reply so it can be offered again;
                                 -unpaid also frees one armed for a buyer who never paid
-  mark-sold -date DATE -meal MEAL
-                                react ✅ to the meal's offer posts, for a sale finished by hand
+  mark-sold -date DATE -meal MEAL -peer PHONE_OR_JID -amount INR [-name NAME]
+            [-paid-by whatsapp|image|other] [-at HH:MM] [-user NAME] [-force] [-react=false]
+                                record a sale finished by hand in the ledger, then react ✅ to the meal's offer posts
 
 inspection (read the database only, safe while run is up):
   chat [-hours 48]              the merged group stream, each post annotated with its listing
@@ -349,6 +350,7 @@ func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	sell := newSellManager(ctx, cfg, log, st, waConn{c.WA}, c.WA.SendMessage, c.WA.WaitForConnection,
 		func(ctx context.Context, userID int64) (mealPortal, error) { return acc.Portal(ctx, userID) },
 		newOwnGroupLog(ctx, cfg, st, c))
+	sell.notify = hub.Notify
 	if err := sell.Resume(ctx, cfg.MCP.SellTasks); err != nil {
 		return fmt.Errorf("resume sell tasks: %w", err)
 	}

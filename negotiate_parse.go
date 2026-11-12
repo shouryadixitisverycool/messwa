@@ -40,6 +40,20 @@ type intent struct {
 	done  bool // intentOK from "done" or "dn", which also means "paid" once agreed
 }
 
+// name is how the dashboard shows what the bot read: the meaning only,
+// never the words.
+func (in intent) name() string {
+	n := map[intentKind]string{
+		intentUnknown: "unknown", intentOpener: "opener", intentQuestion: "question", intentOK: "ok",
+		intentAccept: "accept", intentLower: "lower", intentPayOther: "pay_other", intentOffer: "offer",
+		intentPaid: "paid", intentPass: "pass",
+	}[in.kind]
+	if in.kind == intentOffer && in.firm {
+		n = "offer_final"
+	}
+	return n
+}
+
 // combineIntents reads a burst of messages as one: the highest-ranked
 // intent wins, and among equals the latest.
 func combineIntents(texts []string) intent {

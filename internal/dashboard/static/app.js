@@ -198,6 +198,7 @@ function render() {
   const accent = messColor(S.tab);
   document.documentElement.style.setProperty('--accent', accent);
   renderDay();
+  renderSales();
   renderTabs();
   renderGrid();
   renderControls();
@@ -353,6 +354,8 @@ function slotNode(l) {
   const fresh = FRESH - (now() - l.last_seen_at);
   if (fresh > 0 && l.status === 'available') b.append(glintNode(fresh * 1000));
   if (popIds.has(l.id)) b.classList.add('pop');
+  // Your own sell task's listing.
+  if (D.sales && D.sales.some((v) => v.listings.includes(l.id))) b.classList.add('mine');
 
   if (!vegOnly(l.mess) || S.tab === 'all') {
     const d = el('span', 'diet');
@@ -915,7 +918,7 @@ addEventListener('keydown', (e) => {
 const modal = $('modal');
 const sheet = $('sheet');
 modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
-function closeModal() { modal.hidden = true; sheet.replaceChildren(); }
+function closeModal() { modal.hidden = true; sheet.replaceChildren(); sheet.classList.remove('sale-sheet'); saleClosed(); }
 
 function digits(phone) { return (phone || '').replace(/\D/g, ''); }
 

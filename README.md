@@ -4,7 +4,7 @@ messwa links to WhatsApp as a companion device (via [whatsmeow](https://github.c
 
 The WhatsApp access limits live in the binary. Ingest drops every chat outside the allowed set before anything touches disk, and WhatsApp MCP tools read only that stored data. Optional portal tools separately read your own registrations and current QR, using the mess API key saved on your messwa account.
 
-By default the `run` service and MCP tools are read-only: no messages, read receipts or presence are sent. Your phone keeps showing messages as unread and notifications don't change. Two things can send, and both are off until you ask for them: the explicitly armed `deliver-qr` command, and sell tasks, which an admin starts over MCP once `[mcp] sell_tasks = true` is set (see [Sell tasks](#sell-tasks)). After a sale, both react ✅ to their own offer posts. `mark-sold` sends only that ✅.
+By default the `run` service and MCP tools are read-only: no messages, read receipts or presence are sent. Your phone keeps showing messages as unread and notifications don't change. Two things can send, and both are off until you ask for them: the explicitly armed `deliver-qr` command, and sell tasks, which an admin starts over MCP once `[mcp] sell_tasks = true` is set (see [Sell tasks](#sell-tasks)). After a sale, both react ✅ to their own offer posts. `mark-sold` sends only that ✅, after recording a sale you finished yourself.
 
 ## What gets stored
 
@@ -14,6 +14,7 @@ By default the `run` service and MCP tools are read-only: no messages, read rece
 | Ended listings, kept for good | One row each in `listing_facts`: seller's number and name, mess, meal, date, diet, price, when it was posted and sold. No message text |
 | DMs with saved contacts | Name and last-message times only |
 | DMs with unsaved numbers | Name, times, and message text (deleted after `dms.retention`, default 72h) |
+| Sell tasks' buyers | What the bot read from each message (an offer of ₹15, a question, a picture, "not buying"), the bot's own replies, and payment steps. Never the buyer's words, saved contact or not |
 | Every other group, status, channel, notes-to-self | Nothing |
 
 If you save a number later, its stored DM text is deleted on its next message, and the MCP refuses to return it immediately.
@@ -108,7 +109,23 @@ Until the key has moved, the first admin's portal reads (MCP, the sales page, th
 
 Keys: `1`-`5` messes, arrows for pages, `R` `P` `D` `M` `S` `W` for the bottom row, `/` to search. Right click on the diet or meal button, or Shift with `D` or `M`, cycles backwards.
 
-The board shows sellers' names and phone numbers from the groups and nothing from DMs. The sales page below adds the names and numbers of people you sold to, for admins only.
+The board shows sellers' names and phone numbers from the groups. From DMs it shows admins only their own sell tasks' buyers (see [My sale](#my-sale)). The sales page below adds the names and numbers of people you sold to, for admins only.
+
+### My sale
+
+While a [sell task](#sell-tasks) runs, admins get a MY SALE box above the board, built to read in one look on a phone. It stays 20 minutes after the task ends, so you see how it went. Hovering anything (or opening it) says what it means.
+
+- **Glow.** Green: a buyer's pay window is open. Red: a buyer needs you, or sent a picture instead of paying. No glow: the bot has it.
+- **Clock.** Minutes until the meal ends. A ✓ or ✕ once the task is over.
+- **Price bar.** Your floor on the left, the opening price on the right. The green part is every price the bot takes right now, the arrow is its lowest, and the gold tick is the target it picked from the market's median ask. The lowest slides left over the last three hours; 🔒 means it's held at the target because two buyers are active. Dots are buyers' offers, hollow when the buyer needs you.
+- **Posts.** One pill per group. Gold is your post and the bar after it is the listings posted in that group since, red once more than 15 have buried it. A dashed red pill failed, with WhatsApp's error code (479 and the like).
+- **Buyers.** Pixel heads in reply order, the same heads as on the sales page. The border is their state: blue haggling, gold agreed and waiting, green paying (the ring is their two minutes), red needs you (!), amber check (?, usually a screenshot instead of a WhatsApp Pay payment), grey gone. ♥ marks a saved contact. The chip under a head is their price.
+- **Squares, top right.** Every task for this meal, so a restart doesn't lose the story: grey crossed cancelled, green live or sold.
+- **Market.** Every open listing for the same meal and mess, cheapest first, yours in gold. Your listing also gets a gold outline on the board.
+
+Tap a buyer for the negotiation as a tug of war: each row is one round, their offer in red and the bot's answer in green, with the bot's lowest at the bottom and the gap between them in red. Below it, the payment steps (armed, paid, read, QR, ✅), with the attempts to read an unreadable payment from your phone. CHAT opens their chat in WhatsApp or Beeper. For a buyer who needs you, COPY SELL copies the `deliver-qr -peer` command at their offer; cancel the task and stop `run` before you use it. Tap the clock or the posts for the lowest price over time, each post, and the meal's tries.
+
+The box only reads. Nothing on the dashboard sends anything. It updates over the same event stream as the board: every step a task records wakes it.
 
 ### Settings page
 
@@ -583,25 +600,50 @@ for a meal that was offered in a group first. A reaction that fails is logged
 as a warning and the sale still counts.
 
 If you finish a sale yourself, for example after taking over the buyer's
-chat, tick the posts by hand. Stop `run` first, like the other sending
-commands:
+chat or sending the QR from your phone, record it with `mark-sold`:
 
 ```sh
-./messwa mark-sold -date 2026-11-04 -meal lunch
+./messwa mark-sold -date 2026-11-12 -meal lunch \
+  -peer '+91 98765 43210' -name Daniel -amount 20 -paid-by image -at 13:45
 ```
 
-It errors when no offer post is recorded for that meal. Posts you made from
-your phone aren't recorded; react to those from the phone. Running it again
-sends the ✅ again, which also restores one you removed. It exits with an
-error if any reaction failed, after trying the rest.
+It writes the meal's row in the delivery ledger as `sent`, so the sales page
+counts the sale. Without that row the page falls back to the portal, sees the
+meal scanned and shows ATE.
+
+- `-peer` is the buyer's number with its country code, or their WhatsApp JID.
+  `-name` is optional; a handed-off sale keeps the name it already has.
+- `-amount` is what they paid, like `20` or `20.50`.
+- `-paid-by` is `whatsapp` (the default), `image` for a UPI screenshot,
+  which the sales page shows as SOLD · UNVERIFIED, or `other` for cash or
+  anything else.
+- `-at` is when the QR went out, `HH:MM` on `-date` or an RFC 3339 time. It
+  defaults to now.
+- The mess and diet come from the meal's registration, read with the first
+  admin's mess API key (`-user NAME` picks another). If the portal can't be
+  read, the sale is still recorded without them.
+
+A meal with no row gets one. A handed-off or armed row becomes `sent` with
+these details. A meal that is already `sent` or `sending` is left alone with
+an error; check the row and pass `-force` to overwrite it. A meal an active
+sell task holds is refused; cancel the task first.
+
+Then it reacts ✅ to the meal's recorded offer posts, which needs the
+WhatsApp session, so stop `run` first, like the other sending commands. With
+no recorded posts it records the sale and stops there; posts you made from
+your phone aren't recorded, so react to those from the phone. Pass
+`-react=false` to only record the sale: that touches only the database and is
+safe while `run` is up. Running it again with `-force` sends the ✅ again,
+which also restores one you removed. It exits with an error if any reaction
+failed, after trying the rest.
 
 WhatsApp doesn't deliver a message back to the device that sent it, so `run`
 never sees an offer or ✅ that messwa sent. `deliver-qr` and `mark-sold`
 write both into the group log themselves, as posts from the linked account,
 for groups listed in `config.toml`. The board then shows the offer as your
 listing, and the ✅ marks it sold like any seller's tick. A ✅ you add or
-remove from your phone arrives as a normal event. The sales page doesn't
-change: `mark-sold` doesn't record a buyer or price.
+remove from your phone arrives as a normal event. The sales page shows the
+sale from the ledger row `mark-sold` records.
 
 ### One-meal QR delivery
 
