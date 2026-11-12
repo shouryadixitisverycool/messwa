@@ -251,6 +251,11 @@ func (m *sellManager) launch(t store.SellTask, s *sale, ready chan struct{}) {
 		err := m.runTask(ctx, t, s, gate, signal)
 		gate.active.Store(false)
 		state, detail := m.outcome(ctx, err)
+		if state == store.TaskSold {
+			if kind, err := m.st.PaymentKind(context.WithoutCancel(ctx), t.Date, t.Meal); err == nil && kind == store.PaidByImage {
+				detail = "QR sent for an image the buyer sent after the payment prompt; the payment is NOT verified, check your UPI app"
+			}
+		}
 		if state == "" {
 			m.log.Info("sell task paused until run restarts", "task", t.ID)
 			return
@@ -354,6 +359,7 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, ga
 	if err != nil {
 		return err
 	}
+	s.acceptImages = settings.AcceptPaymentImages
 	queue := newOfferQueue()
 	queue.join = func(peer, chat types.JID) bool {
 		if gate.turnsAway(ctx, peer, chat) {

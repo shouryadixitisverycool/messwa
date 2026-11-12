@@ -338,6 +338,7 @@ included, no extras.
 | `handoff` | `-handoff` | `never` | When to hand the buyer's chat to you, see below |
 | `accept_plain_dms` | `-accept-plain-dms` | `false` | Let DMs that ask about the offer without quoting it join the queue, see below |
 | `buyers` | `-buyers` | `anyone` | Who may buy. `unsaved_only` skips saved contacts, see below |
+| `accept_payment_images` | `-accept-payment-images` | `false` | Count an image from the paying buyer as their payment, unverified, see below |
 
 With `groups` or `group_count` set, `deliver-qr` without `-peer` posts to
 those groups, so `-group` is no longer needed:
@@ -404,6 +405,35 @@ stored](#what-gets-stored)): a name in your address book, looked up under
 both the buyer's number and their LID, so a buyer who appears only by LID
 still matches a contact saved under their number. `-buyers` doesn't apply to
 `-peer`, where you picked the buyer yourself.
+
+**Payment images.** Some buyers pay by UPI outside WhatsApp Pay and send a
+screenshot. The bot can't read those, so by default it ignores the image and
+the buyer's two minutes run out. With `accept_payment_images = true` (or
+`-accept-payment-images`), an image counts as the payment if:
+
+- it's an image message, in a DM from the buyer whose payment turn it is;
+- it arrives after the bot sent them the payment prompt, so after they
+  agreed a price;
+- it's inside their pay window: their two minutes, or until the meal ends
+  for `-peer`.
+
+Then the sale goes on as after a WhatsApp Pay payment: the QR goes out, the
+others hear `sorry sold` and the offer posts get a ✅. The log warns that
+the payment was assumed from an image, the delivery ledger records it as
+paid by image, the sales page shows "By image, not verified" and SOLD ·
+UNVERIFIED, and a sell task ends with a detail that says so.
+
+**A screenshot proves nothing.** Anyone can send an old screenshot, someone
+else's, an edited one, or a picture of their lunch, and the bot sends the QR
+all the same. A sent QR can't be taken back. Turn this on only if you check
+your UPI app after every such sale and can live with losing a meal now and
+then. Images from other buyers, images sent before the prompt and anything
+after the window never count, and every image the buyer sends during their
+turn that doesn't count is logged with the reason.
+
+With `-peer`, the setting and the flag apply too. There's no prompt unless
+you pass `-offer-text`, so any image from the buyer after arming counts:
+`-peer` means you already agreed the price in the chat.
 
 ### Taking over the chat yourself
 
@@ -540,8 +570,9 @@ triggering message ID. Anyone who can make WhatsApp deliver a payment message
 without a readable amount then gets the QR without paying, so leave it off
 unless you check payments yourself afterwards.
 
-Normal text, screenshots, other buyers, expired messages, mismatched payment
-details and known incomplete transactions do not qualify. The WhatsApp event
+Normal text, screenshots (unless `accept_payment_images` is on, see [Offer
+settings](#offer-settings)), other buyers, expired messages, mismatched
+payment details and known incomplete transactions do not qualify. The WhatsApp event
 does not independently verify that funds arrived.
 
 The data database stores the buyer, amount, image hash or portal-account binding, arming time, payment
@@ -616,7 +647,7 @@ What a task does:
 3. Takes everyone who replies privately to any copy, in reply order. A plain DM that doesn't quote a post counts only with `[sell] accept_plain_dms = true`, under the rules in [Offer settings](#offer-settings). With `[sell] buyers = "unsaved_only"`, saved contacts are skipped and get nothing (see [Saved contacts](#offer-settings)).
 4. With `max_price` above `min_price`, negotiates with each of them at once (see [Negotiation](#negotiation)). Buyers who agree a price queue to pay in the order they agreed. With the two prices equal, every buyer queues to pay that price.
 5. Asks the first buyer in the pay queue to pay their price within two minutes. They can reply `not interested`. Then the next buyer gets a turn, as in `deliver-qr -group`.
-6. Sends the QR after a matching WhatsApp Pay payment, stops posting copies, tells everyone else who replied `sorry sold`, reacts ✅ to the meal's offer posts, and ends as `sold`.
+6. Sends the QR after a matching WhatsApp Pay payment (or, with `[sell] accept_payment_images = true`, an unverified image from that buyer after the prompt; see [Payment images](#offer-settings)), stops posting copies, tells everyone else who replied `sorry sold`, reacts ✅ to the meal's offer posts, and ends as `sold`.
 
 `[sell] handoff` doesn't apply to tasks. Instead `start_sell_task` takes `handoff`, `never` by default:
 

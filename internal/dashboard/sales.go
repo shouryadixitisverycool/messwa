@@ -80,15 +80,19 @@ type sale struct {
 	// handoff (you took over the chat; Amount is what the offer asked).
 	State string `json:"state"`
 	// Buyer groups a buyer's sales: their phone number when known, else the JID.
-	Buyer   string   `json:"buyer"`
-	Name    string   `json:"name,omitempty"` // untrusted push name
-	Phone   string   `json:"phone,omitempty"`
-	End     int64    `json:"end"`
-	ArmedAt int64    `json:"armed_at"`
-	OfferAt int64    `json:"offer_at,omitempty"`
-	PaidAt  int64    `json:"paid_at,omitempty"`
-	SentAt  int64    `json:"sent_at,omitempty"`
-	Ask     *float64 `json:"ask,omitempty"` // median asking price for that serving
+	Buyer   string `json:"buyer"`
+	Name    string `json:"name,omitempty"` // untrusted push name
+	Phone   string `json:"phone,omitempty"`
+	End     int64  `json:"end"`
+	ArmedAt int64  `json:"armed_at"`
+	OfferAt int64  `json:"offer_at,omitempty"`
+	PaidAt  int64  `json:"paid_at,omitempty"`
+	SentAt  int64  `json:"sent_at,omitempty"`
+	// PaidBy is "image" when an image the buyer sent counted as the
+	// payment, unverified ([sell] accept_payment_images). Empty means
+	// WhatsApp Pay.
+	PaidBy string   `json:"paid_by,omitempty"`
+	Ask    *float64 `json:"ask,omitempty"` // median asking price for that serving
 }
 
 type mealMarket struct {
@@ -274,7 +278,7 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 		}
 		amount, _ := strconv.ParseFloat(d.Amount, 64)
 		s := sale{Date: d.Date, Meal: d.Meal, Mess: d.Mess, Diet: d.Diet, Amount: amount, Name: d.BuyerName,
-			End: end.Unix(), ArmedAt: unix(d.ArmedAt), OfferAt: unix(d.OfferAt), PaidAt: unix(d.PaidAt), SentAt: unix(d.SentAt)}
+			End: end.Unix(), ArmedAt: unix(d.ArmedAt), OfferAt: unix(d.OfferAt), PaidAt: unix(d.PaidAt), SentAt: unix(d.SentAt), PaidBy: d.PaymentKind}
 		switch {
 		case d.State == "sent":
 			s.State = "sold"

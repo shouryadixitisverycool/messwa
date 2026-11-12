@@ -32,6 +32,11 @@ type Sell struct {
 	AcceptPlainDMs bool `toml:"accept_plain_dms"`
 	// Buyers is who may buy from an offer. Empty means BuyersAnyone.
 	Buyers Buyers `toml:"buyers"`
+	// AcceptPaymentImages counts an image from the buyer whose payment
+	// turn it is as their payment, once they have the payment prompt. Off
+	// by default: a screenshot proves nothing, and a QR can't be taken
+	// back once sent.
+	AcceptPaymentImages bool `toml:"accept_payment_images"`
 }
 
 // MinPostGap is the shortest pause allowed between copies of one offer.
