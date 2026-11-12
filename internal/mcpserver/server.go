@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -41,6 +42,16 @@ type Server struct {
 
 	// sell runs sell tasks inside run; nil elsewhere.
 	sell SellTasks
+
+	// settingsMu serialises saving and reloading settings; settingsVer is
+	// the store's settings version last applied.
+	settingsMu  sync.Mutex
+	settingsVer int64
+	// mcp is the server MCP built last, whose sell tools follow the
+	// sell_tasks setting; sellTools says whether it has them.
+	toolsMu   sync.Mutex
+	mcp       *mcp.Server
+	sellTools bool
 }
 
 // portalReader is the part of portal.Client the tools use. Tests fake it.
@@ -156,9 +167,11 @@ func (s *Server) MCP() *mcp.Server {
 		Description: "People you exchanged direct messages with recently, with whether each is a saved contact or an unsaved/new number. No message content. Admins only."}, s.listRecentChats)
 	mcp.AddTool(srv, &mcp.Tool{Name: "read_unsaved_chat", Annotations: ro,
 		Description: "Recent messages in a direct chat with an unsaved number. Fails for saved contacts. Admins only."}, s.readUnsavedChat)
-	if s.sellEnabled() {
+	sell := s.sellEnabled()
+	if sell {
 		s.addSellTools(srv)
 	}
+	s.trackMCP(srv, sell)
 	return srv
 }
 
@@ -450,7 +463,8 @@ func (s *Server) readUnsavedChat(ctx context.Context, req *mcp.CallToolRequest, 
 // ---- helpers ----
 
 func (s *Server) rule() store.SoldRule {
-	return store.SoldRule{Emojis: s.cfg.Sold.Emojis, ClosedEmojis: s.cfg.Sold.ClosedEmojis, AdminsCount: s.cfg.Sold.AdminsCount}
+	sold := s.cfg.Live().Sold
+	return store.SoldRule{Emojis: sold.Emojis, ClosedEmojis: sold.ClosedEmojis, AdminsCount: sold.AdminsCount}
 }
 
 func (s *Server) listing(ctx context.Context, l *store.Listing, names map[string]string, now time.Time) ListingOut {

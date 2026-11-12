@@ -1,4 +1,7 @@
 # Copy to config.toml. Everything except `groups` has a working default.
+# Admins can change most of these on the dashboard's settings page, which
+# stores its values in the database on top of this file. See "Settings page"
+# in the README.
 
 state_dir = "state"
 timezone = "Asia/Kolkata"

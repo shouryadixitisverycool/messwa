@@ -80,15 +80,16 @@ func insightsHandler(cfg *config.Config, srv *mcpserver.Server) http.HandlerFunc
 			fail(err)
 			return
 		}
-		cur, err := cfg.SeasonOf(today)
+		seasons := cfg.Live()
+		cur, err := seasons.SeasonOf(today)
 		if err != nil {
 			fail(err)
 			return
 		}
-		next, _ := cfg.SeasonOf(addDays(cur.To, 1))
+		next, _ := seasons.SeasonOf(addDays(cur.To, 1))
 		spans := []config.SeasonSpan{cur}
 		if first != "" && first <= today {
-			if spans, err = cfg.SeasonSpans(first, today); err != nil {
+			if spans, err = seasons.SeasonSpans(first, today); err != nil {
 				fail(err)
 				return
 			}

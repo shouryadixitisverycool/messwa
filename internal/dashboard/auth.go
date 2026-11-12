@@ -22,6 +22,7 @@ var pageRoles = map[string]accounts.Role{
 	"/index.html":    accounts.Member,
 	"/sales.html":    accounts.Member,
 	"/account.html":  accounts.Member,
+	"/settings.html": accounts.Member,
 	"/insights.html": accounts.Admin,
 }
 

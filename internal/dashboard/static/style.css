@@ -464,13 +464,6 @@ a.copy.linked:hover .copy-go { color: var(--gold); }
 .btn.primary:hover { filter: brightness(1.06); }
 .btn.primary[aria-disabled="true"] { filter: grayscale(1); opacity: .5; pointer-events: none; }
 .btn svg { width: 16px; height: 16px; }
-.setting { margin-top: 18px; }
-.setting h3 { margin: 0 0 6px; font: 700 10px Pixel; letter-spacing: .6px; color: var(--muted); }
-.choices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.choice { display: inline-flex; align-items: center; gap: 8px; font: inherit; font-size: 14px; color: var(--muted); background: var(--slot); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; cursor: pointer; }
-.choice svg { width: 18px; height: 18px; }
-.choice:hover { border-color: #3d4860; color: inherit; }
-.choice[aria-checked="true"] { color: var(--gold); border-color: var(--gold); background: color-mix(in srgb, var(--gold) 10%, var(--slot)); }
 .note { margin-top: 10px; color: var(--dim); font-size: 12px; }
 
 .toast {

@@ -95,7 +95,7 @@ func Open(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	os.Chmod(path, 0o600)
-	if _, err := db.Exec(schema + logSchema + deliverySchema + priceSchema + accountSchema + factSchema + sellTaskSchema); err != nil {
+	if _, err := db.Exec(schema + logSchema + deliverySchema + priceSchema + accountSchema + factSchema + sellTaskSchema + settingsSchema); err != nil {
 		return nil, fmt.Errorf("schema: %w", err)
 	}
 	// Columns added after the first release. Listings are derived data, so

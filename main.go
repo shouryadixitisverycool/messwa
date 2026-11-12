@@ -41,7 +41,7 @@ commands:
                                 manage dashboard accounts and MCP tokens (messwa user help)
   groups                        list your groups and their JIDs, to fill in config.toml
   import-history [-keep]        load the group history saved by login (configured groups only)
-  run                           ingest messages and serve MCP over HTTP (and sell tasks, if [mcp] sell_tasks is on)
+  run                           ingest messages and serve MCP over HTTP (and sell tasks, if they are turned on)
   inspect-payment -peer JID     inspect live incoming payment fields from one DM (stop run first)
   registrations [-user NAME] [-from DATE] [-to DATE]
                                 read your meal registrations from the mess portal
@@ -90,6 +90,9 @@ func main() {
 		fatal(err)
 	}
 	if err := config.EnsureDir(cfg.StateDir); err != nil {
+		fatal(err)
+	}
+	if err := applySavedSettings(ctx, cfg, log); err != nil {
 		fatal(err)
 	}
 	args := flag.Args()[1:]
@@ -367,7 +370,7 @@ func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 			if err := st.SnapshotFacts(ctx, soldRule(cfg), now); err != nil {
 				log.Error("snapshot facts", "err", err)
 			}
-			if err := st.Prune(ctx, now.Add(-cfg.DMs.Retention.Duration), now.Add(-14*24*time.Hour)); err != nil {
+			if err := st.Prune(ctx, now.Add(-cfg.Live().DMs.Retention.Duration), now.Add(-14*24*time.Hour)); err != nil {
 				log.Error("prune", "err", err)
 			}
 			select {
@@ -381,9 +384,9 @@ func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 
 	ms := mcpserver.New(cfg, st, c)
 	ms.SetAccounts(acc)
-	if cfg.MCP.SellTasks {
-		ms.SetSellTasks(sell)
-	}
+	// The sell tools come and go with the sell_tasks setting.
+	ms.SetSellTasks(sell)
+	go reloadSettings(ctx, log, ms)
 	if dashLn != nil {
 		go serve(ctx, log, dashLn, dashboard.Handler(cfg, ms, hub, acc))
 		log.Info("serving dashboard", "url", "http://"+cfg.Dash.Listen+"/")
@@ -525,8 +528,46 @@ func privateAddr(addr string) error {
 	return fmt.Errorf("%s is not a private address; use a loopback, LAN or VPN (Tailscale) IP, not all interfaces or a public one", host)
 }
 
+// applySavedSettings puts the settings admins saved on the dashboard over
+// config.toml, so every command sees them. A saved key that no longer fits
+// the file is skipped with a warning.
+func applySavedSettings(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
+	st, err := store.Open(cfg.DataDB())
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	saved, _, err := st.Settings(ctx)
+	if err != nil {
+		return fmt.Errorf("read saved settings: %w", err)
+	}
+	for k, err := range cfg.ApplySaved(saved) {
+		log.Warn("ignoring a setting saved on the dashboard; it no longer fits config.toml", "key", k, "err", err)
+	}
+	return nil
+}
+
+// reloadSettings picks up settings saved by another process, such as
+// messwa dashboard, until ctx ends. Saves made through run's own dashboard
+// apply at once.
+func reloadSettings(ctx context.Context, log *slog.Logger, ms *mcpserver.Server) {
+	t := time.NewTicker(30 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if err := ms.ReloadSettings(ctx); err != nil {
+			log.Error("reload settings", "err", err)
+		}
+	}
+}
+
 func soldRule(cfg *config.Config) store.SoldRule {
-	return store.SoldRule{Emojis: cfg.Sold.Emojis, ClosedEmojis: cfg.Sold.ClosedEmojis, AdminsCount: cfg.Sold.AdminsCount}
+	s := cfg.Live().Sold
+	return store.SoldRule{Emojis: s.Emojis, ClosedEmojis: s.ClosedEmojis, AdminsCount: s.AdminsCount}
 }
 
 func loopback(addr string) bool {

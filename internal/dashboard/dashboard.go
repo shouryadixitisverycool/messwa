@@ -4,7 +4,8 @@
 //
 // It shows sellers' names and phone numbers from the groups and nothing
 // from DMs. People sign in with a messwa account; the only write endpoints
-// are for their own account (password, mess API key, MCP tokens).
+// are for their own account (password, mess API key, MCP tokens) and, for
+// admins, the settings page.
 package dashboard
 
 import (
@@ -97,6 +98,7 @@ func Handler(cfg *config.Config, srv *mcpserver.Server, hub *Hub, acc *accounts.
 	member := func(h http.HandlerFunc) http.Handler { return requireRole(accounts.Member, h) }
 	regs := newRegCache(acc)
 	authRoutes(mux, acc, regs, "http://"+cfg.MCP.Listen+"/mcp")
+	settingsRoutes(mux, cfg, srv)
 
 	mux.Handle("GET /api/events", member(hub.events))
 

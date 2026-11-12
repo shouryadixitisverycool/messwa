@@ -1042,52 +1042,12 @@ function paintSettingsIcon() {
   $('settingsIcon').replaceChildren(svgEl(messagingApp() === 'beeper' ? beeperIcon : waIcon));
 }
 
-function openSettings() {
-  hideTip();
-  sheet.replaceChildren();
-  const head = el('div', 'sheet-head');
-  const h = el('div');
-  h.append(el('h2', '', 'SETTINGS'), el('div', 'sub', 'Saved in this browser only.'));
-  head.append(h);
-  sheet.append(head);
-
-  const sec = el('div', 'setting');
-  sec.append(el('h3', '', 'MESSAGING APP'));
-  sec.append(el('div', 'note', 'Which app the message button on a listing opens. Either way it only fills in a draft.'));
-  const row = el('div', 'choices');
-  row.setAttribute('role', 'radiogroup');
-  row.setAttribute('aria-label', 'Messaging app');
-  const touch = touchOnly();
-  const note = el('div', 'note');
-  const opts = [['whatsapp', 'WhatsApp', waIcon], ['beeper', 'Beeper Desktop', beeperIcon]].map(([v, label, ic]) => {
-    const b = el('button', 'choice');
-    b.setAttribute('role', 'radio');
-    b.append(svgEl(ic), el('span', '', label));
-    b.addEventListener('click', () => { S.via = v; persist(); paint(); paintSettingsIcon(); });
-    row.append(b);
-    return [v, b];
-  });
-  const paint = () => {
-    for (const [v, b] of opts) b.setAttribute('aria-checked', String(v === S.via));
-    note.textContent = S.via !== 'beeper'
-      ? 'Opens wa.me in a new tab, which hands off to WhatsApp.'
-      : touch
-        ? 'Beeper links only work in Beeper Desktop, so this device still opens WhatsApp.'
-        : 'Opens the chat in Beeper Desktop. Phones and tablets still open WhatsApp, because Beeper has no links on mobile.';
-  };
-  paint();
-  sec.append(row, note);
-  sheet.append(sec);
-
-  const actions = el('div', 'actions');
-  const done = el('button', 'btn primary', 'Done');
-  done.addEventListener('click', closeModal);
-  actions.append(done);
-  sheet.append(actions);
-  modal.hidden = false;
-  done.focus();
-}
-$('settingsBtn').addEventListener('click', openSettings);
+// The settings page changes the messaging app in another tab; follow it.
+addEventListener('storage', (e) => {
+  if (e.key !== 'mah') return;
+  try { S.via = (JSON.parse(e.newValue || '{}').via) || 'whatsapp'; } catch { return; }
+  paintSettingsIcon();
+});
 
 
 function greeting(l) {

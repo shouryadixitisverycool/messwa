@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0d12">
+<title>Settings · Mess Auction House</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preload" href="silkscreen-700.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="account.css">
+<link rel="stylesheet" href="settings.css">
+<script src="common.js" defer></script>
+<script src="settings.js" defer></script>
+</head>
+<body>
+<div class="app account settings">
+  <header class="top">
+    <div class="brand">
+      <span class="logo" id="logo"></span>
+      <div>
+        <h1>Settings</h1>
+        <p class="sub" id="role">&nbsp;</p>
+      </div>
+      <a class="nav-link" href="./" title="Back to the listings"><span id="navIcon"></span>Auction house</a>
+    </div>
+  </header>
+
+  <nav class="set-tabs" id="tabs" aria-label="Settings sections" hidden>
+    <button class="set-tab on" type="button" data-pane="you"><span class="ic" aria-hidden="true">👤</span>You</button>
+    <button class="set-tab" type="button" data-pane="offer" data-admin hidden><span class="crown" aria-hidden="true">👑</span><span class="ic" aria-hidden="true">📣</span>Offer</button>
+    <button class="set-tab" type="button" data-pane="repost" data-admin hidden><span class="crown" aria-hidden="true">👑</span><span class="ic" aria-hidden="true">🔁</span>Repost</button>
+    <button class="set-tab" type="button" data-pane="buyers" data-admin hidden><span class="crown" aria-hidden="true">👑</span><span class="ic" aria-hidden="true">🤝</span>Buyers</button>
+    <button class="set-tab" type="button" data-pane="market" data-admin hidden><span class="crown" aria-hidden="true">👑</span><span class="ic" aria-hidden="true">✅</span>Market</button>
+    <button class="set-tab" type="button" data-pane="calendar" data-admin hidden><span class="crown" aria-hidden="true">👑</span><span class="ic" aria-hidden="true">🗓️</span>Calendar</button>
+  </nav>
+
+  <section class="pane on" id="you">
+    <div class="box">
+      <div class="h">Open chats in</div>
+      <div class="pick" id="via" role="radiogroup" aria-label="Messaging app"></div>
+      <p class="s-hint" id="viaNote" hidden>Beeper only opens on desktop, so this device uses WhatsApp.</p>
+    </div>
+    <div class="tiles">
+      <a class="box tile" href="account.html"><span class="ic" aria-hidden="true">🔑</span><div><b id="keyState">…</b><small>Mess API key</small></div></a>
+      <a class="box tile" href="account.html"><span class="ic" aria-hidden="true">🤖</span><div><b id="tokState">…</b><small>MCP tokens</small></div></a>
+      <a class="box tile" href="account.html"><span class="ic" aria-hidden="true">🔒</span><div><b>Change</b><small>Password</small></div></a>
+    </div>
+  </section>
+
+  <section class="pane" id="offer">
+    <div class="master">
+      <span class="ic" aria-hidden="true">🤖</span>
+      <div class="lbl">Sell tasks over MCP<small>Agents can post offers and sell for you</small></div>
+      <button class="tg" type="button" data-key="mcp.sell_tasks" aria-label="Sell tasks over MCP"></button>
+    </div>
+    <div class="box">
+      <div class="h">Preview<span class="sp"></span><span class="tag gold" id="groupCount"></span></div>
+      <div class="chat">
+        <div class="bub ghost"><i>Asha</i>sell palash lunch 40<span class="t">11:52</span></div>
+        <div class="bub me"><i>You</i><span id="preview"></span><span class="t">11:58 ✓✓</span></div>
+      </div>
+    </div>
+    <div class="box">
+      <div class="h">Post in<span class="sp"></span>
+        <div class="pick mini" id="groupMode" role="radiogroup" aria-label="How groups are picked"></div>
+      </div>
+      <div class="chips" id="groups"></div>
+      <div class="row">
+        <div class="lbl">Gap between groups</div>
+        <div class="sl"><input type="range" min="3" max="60" step="1" id="postGap" aria-label="Gap between groups"><span class="val" id="postGapV"></span></div>
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="box row"><div class="lbl">💰 Show price</div><button class="tg" type="button" data-key="sell.show_price" aria-label="Show price"></button></div>
+      <div class="box row"><div class="lbl">🍳 List extras</div><button class="tg" type="button" data-key="sell.mention_extras" aria-label="List extras"></button></div>
+    </div>
+  </section>
+
+  <section class="pane" id="repost">
+    <div class="master">
+      <span class="ic" aria-hidden="true">🔁</span>
+      <div class="lbl">Repost when buried<small>Never within 5 min, never in a meal's last 15</small></div>
+      <button class="tg" type="button" data-key="sell.repost" aria-label="Repost when buried"></button>
+    </div>
+    <div id="repostBody">
+      <div class="box">
+        <div class="h">Repost on whichever comes first</div>
+        <div class="trig" id="triggers"></div>
+      </div>
+      <div class="box">
+        <div class="h">Max reposts per group<span class="sp"></span><span class="val" id="maxV"></span></div>
+        <div class="pips" id="pips" role="group" aria-label="Max reposts per group"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="pane" id="buyers">
+    <div class="box">
+      <div class="h">Who can buy</div>
+      <div class="pick" data-key="sell.buyers" role="radiogroup" aria-label="Who can buy"></div>
+    </div>
+    <div class="box">
+      <div class="h">Default handoff</div>
+      <div class="pick" data-key="sell.handoff" role="radiogroup" aria-label="Default handoff"></div>
+    </div>
+    <div class="box list">
+      <div class="row"><div class="lbl">💬 Buyers who DM without replying<small>"price?", "kadamba lunch available?"</small></div><button class="tg" type="button" data-key="sell.accept_plain_dms" aria-label="Buyers who DM without replying"></button></div>
+      <div class="row"><div class="lbl">🖼️ Screenshot counts as paid <span class="tag warn">Unverified</span><small>QR goes out on any image. Check UPI after.</small></div><button class="tg danger" type="button" data-key="sell.accept_payment_images" aria-label="Screenshot counts as paid"></button></div>
+    </div>
+  </section>
+
+  <section class="pane" id="market">
+    <div class="box">
+      <div class="h">Sold when seller reacts</div>
+      <div class="chips" data-list="sold.emojis" data-emoji></div>
+      <div class="h">Withdrawn</div>
+      <div class="chips" data-list="sold.closed_emojis" data-emoji></div>
+      <div class="h">Sold words</div>
+      <div class="chips" data-list="sold.words"></div>
+    </div>
+    <div class="box list">
+      <div class="row"><div class="lbl">🛡️ Count group admins' ticks</div><button class="tg" type="button" data-key="sold.admins_count" aria-label="Count group admins' ticks"></button></div>
+      <div class="row"><div class="lbl">🧩 Merge repeat posts within</div><div class="step" data-key="dedupe.window" data-unit="h"></div></div>
+      <div class="row"><div class="lbl">🧹 Forget unsaved DMs after</div><div class="step" data-key="dms.retention" data-unit="h"></div></div>
+    </div>
+  </section>
+
+  <section class="pane" id="calendar">
+    <div class="box">
+      <div class="h">Meals<span class="sp"></span><span class="tag" id="mealsRestart" hidden>Applies on restart</span></div>
+      <div class="daybar" id="day"></div>
+      <div class="times" id="mealTimes"></div>
+    </div>
+    <div class="box">
+      <div class="h">Seasons<span class="sp"></span><span class="tag ok">Term</span><span class="tag">Break</span></div>
+      <div class="year" id="year"></div>
+      <div class="months" aria-hidden="true"><span>J</span><span>F</span><span>M</span><span>A</span><span>M</span><span>J</span><span>J</span><span>A</span><span>S</span><span>O</span><span>N</span><span>D</span></div>
+      <div class="seasons" id="seasons"></div>
+    </div>
+    <div class="box">
+      <div class="h">Messes<span class="sp"></span><span class="tag" id="messRestart" hidden>Applies on restart</span><span class="leaf">🌿 veg only</span></div>
+      <div class="chips" id="messes"></div>
+    </div>
+    <div class="master">
+      <span class="ic" aria-hidden="true">🧾</span>
+      <div class="lbl">Monthly target<small>Sales bar goal when the portal bill can't be read</small></div>
+      <span class="dim">₹</span><input class="num-in" type="number" min="0" step="1" data-key="sales.monthly_fee" aria-label="Monthly target in rupees">
+    </div>
+  </section>
+
+  <div class="save clean" id="save" hidden>
+    <span id="saveTxt">All saved</span>
+    <span class="sp"></span>
+    <button class="btn small" type="button" id="undo" disabled>Undo</button>
+    <button class="btn primary small" type="button" id="saveBtn" disabled>Save</button>
+  </div>
+  <p class="err" id="err" role="alert" hidden></p>
+</div>
+<div class="tip" id="tip" hidden></div>
+</body>
+</html>

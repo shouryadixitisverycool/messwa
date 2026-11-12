@@ -535,7 +535,7 @@ func (o *groupOffer) addPosted(p postedOffer) {
 func (o *groupOffer) keepInView(ctx context.Context, r *reposter) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.stopped || !r.rules.On {
+	if o.stopped || !r.enabled() {
 		return
 	}
 	ctx, stop := context.WithCancel(ctx)

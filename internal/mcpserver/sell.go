@@ -21,14 +21,14 @@ type SellTasks interface {
 	Cancel(ctx context.Context, id int64) error
 }
 
-// SetSellTasks adds the sell task tools when [mcp] sell_tasks is on.
+// SetSellTasks adds the sell task tools while the sell_tasks setting is on.
 func (s *Server) SetSellTasks(t SellTasks) { s.sell = t }
 
-func (s *Server) sellEnabled() bool { return s.sell != nil && s.cfg.MCP.SellTasks }
+func (s *Server) sellEnabled() bool { return s.sell != nil && s.cfg.Live().MCP.SellTasks }
 
 const sellInstructions = `
 
-Sell tasks (admins only) sell one of your registered meals through WhatsApp. start_sell_task checks the registration and posts an offer in the mess groups set in config.toml. With [sell] accept_plain_dms in config.toml, people who DM about the offer without quoting it count as replies too. When config.toml sets [sell] buyers = "unsaved_only", replies from saved contacts are skipped and they get nothing. With max_price above min_price, the task negotiates with everyone who replies privately to a post, all at once: it opens at max_price, says it's slightly negotiable, and comes down toward the meal's usual price, and toward min_price as the meal's end nears. It never quotes, agrees or accepts less than min_price. Buyers who agree pay one at a time; the first matching WhatsApp Pay payment gets the meal's QR, and the offer posts get a ✅. With [sell] accept_payment_images, an image the paying buyer sends after the payment prompt also counts as payment; nothing verifies it, and sell_task_status says so. With max_price equal to min_price it just asks that price. Buyers the bot can't handle (unreadable messages, still too low after its lowest price, wanting to pay another way) are listed in needs_you, along with buyers whose payment it could not honour and the amount to refund. With handoff "on_reply" the task stops at the first private reply and sends that buyer nothing; with "on_agreement" it negotiates and hands over the first buyer who agrees, at the agreed price. sell_task_status shows who to message. While the task is active it reposts the offer in a group once the last copy has dropped out of view (after [sell] repost_after, 10 minutes by default, or sooner once enough messages or other sellers' listings for the same meal and mess came in after it), up to max_reposts per group and never in the meal's last 15 minutes. Replies to any copy count. sell_task_status lists every copy and when each group gets its next one, and why. A task ends when the meal sells, when it hands off, when it is cancelled, or when the meal ends. Check on it with sell_task_status and stop it with cancel_sell_task. Start a task only when the user asked you to sell that meal, at the prices they gave.`
+Sell tasks (admins only) sell one of your registered meals through WhatsApp. start_sell_task checks the registration and posts an offer in the mess groups set in messwa's settings. With [sell] accept_plain_dms in config.toml, people who DM about the offer without quoting it count as replies too. When config.toml sets [sell] buyers = "unsaved_only", replies from saved contacts are skipped and they get nothing. With max_price above min_price, the task negotiates with everyone who replies privately to a post, all at once: it opens at max_price, says it's slightly negotiable, and comes down toward the meal's usual price, and toward min_price as the meal's end nears. It never quotes, agrees or accepts less than min_price. Buyers who agree pay one at a time; the first matching WhatsApp Pay payment gets the meal's QR, and the offer posts get a ✅. With [sell] accept_payment_images, an image the paying buyer sends after the payment prompt also counts as payment; nothing verifies it, and sell_task_status says so. With max_price equal to min_price it just asks that price. Buyers the bot can't handle (unreadable messages, still too low after its lowest price, wanting to pay another way) are listed in needs_you, along with buyers whose payment it could not honour and the amount to refund. With handoff "on_reply" the task stops at the first private reply and sends that buyer nothing; with "on_agreement" it negotiates and hands over the first buyer who agrees, at the agreed price. sell_task_status shows who to message. While the task is active it reposts the offer in a group once the last copy has dropped out of view (after [sell] repost_after, 10 minutes by default, or sooner once enough messages or other sellers' listings for the same meal and mess came in after it), up to max_reposts per group and never in the meal's last 15 minutes. Replies to any copy count. sell_task_status lists every copy and when each group gets its next one, and why. A task ends when the meal sells, when it hands off, when it is cancelled, or when the meal ends. Check on it with sell_task_status and stop it with cancel_sell_task. Start a task only when the user asked you to sell that meal, at the prices they gave.`
 
 func (s *Server) addSellTools(srv *mcp.Server) {
 	write := &mcp.ToolAnnotations{OpenWorldHint: ptr(true)}
@@ -151,7 +151,7 @@ type SellTasksOut struct {
 
 func (s *Server) sellAdmin(ctx context.Context, req *mcp.CallToolRequest) (int64, error) {
 	if !s.sellEnabled() {
-		return 0, errors.New("sell tasks are turned off; set [mcp] sell_tasks = true in config.toml")
+		return 0, errors.New("sell tasks are turned off; an admin can turn them on in the dashboard's settings")
 	}
 	u, err := s.caller(ctx, req)
 	if err != nil {
@@ -272,7 +272,7 @@ func (s *Server) sellTaskOut(ctx context.Context, t store.SellTask) (SellTaskOut
 			State: o.State, PostedAt: s.fmt(o.PostedAt)})
 	}
 	if t.State == store.TaskActive {
-		rules := repost.FromConfig(s.cfg.Sell)
+		rules := repost.FromConfig(s.cfg.Live().Sell)
 		for _, g := range order {
 			out.Reposts = append(out.Reposts, s.nextRepost(ctx, rules, groupName(names, g), byGroup[g], t.EndsAt))
 		}
