@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -46,6 +47,10 @@ type fakeConn struct {
 	lids     map[types.JID]types.JID
 	// saved are address book entries, by number or LID.
 	saved map[types.JID]bool
+	// info answers GetGroupInfo; groups answers it when info is nil.
+	info      map[types.JID]*types.GroupInfo
+	infoErr   error
+	infoAsked []types.JID
 }
 
 func newFakeConn(group types.JID) *fakeConn {
@@ -91,6 +96,24 @@ func (f *fakeConn) BuildReaction(chat, _ types.JID, id types.MessageID, reaction
 }
 
 func (f *fakeConn) GetJoinedGroups(context.Context) ([]*types.GroupInfo, error) { return f.groups, nil }
+
+func (f *fakeConn) GetGroupInfo(_ context.Context, jid types.JID) (*types.GroupInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.infoAsked = append(f.infoAsked, jid)
+	if f.infoErr != nil {
+		return nil, f.infoErr
+	}
+	if g := f.info[jid]; g != nil {
+		return g, nil
+	}
+	for _, g := range f.groups {
+		if g.JID == jid {
+			return g, nil
+		}
+	}
+	return nil, errors.New("not in group")
+}
 
 func (f *fakeConn) PNForLID(_ context.Context, lid types.JID) types.JID {
 	f.mu.Lock()

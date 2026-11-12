@@ -262,6 +262,16 @@ The old systemd unit (`~/.config/systemd/user/messwa.service`) is disabled. Don'
 
 `/healthz` returns 503 when the WhatsApp connection is down.
 
+### whatsmeow's log
+
+whatsmeow, the WhatsApp library, logs to the same output as messwa, tagged
+`component=whatsmeow` and its module. By default only warnings and errors
+show. Set `MESSWA_WA_LOG` to `info` or `debug` for more (in `.env` for Docker,
+then `docker compose up -d`). `debug` also logs every stanza sent and
+received, which is a lot. Stanzas are cut down to their tags and attributes
+first: chat JIDs, message IDs, push names and group settings appear, message
+bodies never do, encrypted or not.
+
 ## Known limits
 
 - History is mostly live-only. The first link gets a partial history sync (messages from the last 48h are ingested). After that, anything that arrives while messwa is down is lost.
@@ -361,6 +371,18 @@ starts as soon as the first copy is posted and the rest follow `post_gap`
 apart. Once the meal sells or is handed off, no more copies go out. If one copy fails to post,
 the others still go out and replies to the failed one still count, in case
 WhatsApp posted it anyway. The command stops only when no copy posts.
+
+Right before each copy, messwa asks WhatsApp for that group's details
+again. whatsmeow builds a group message from the details it cached last,
+and the group list it reads first can describe a group only partly. On
+12 Nov 2026 the list returned "Mess Buy Sell @ IIITH - 2", a community
+subgroup, with no name, and every post to it failed with `server returned
+error 479` (invalid stanza). A partial cache entry is the suspected cause,
+not a confirmed one. Each failed copy is logged as it fails, with the
+group's name (or its JID when WhatsApp gives none) and the addressing mode
+and member count from both the list and the fresh query. If posts to a
+group keep failing, rerun with `MESSWA_WA_LOG=debug` (see
+[whatsmeow's log](#whatsmeows-log)).
 
 **Plain DMs.** By default only a private reply that quotes a copy of the
 offer counts. Plenty of buyers just DM "price?" or "is the kadamba lunch
