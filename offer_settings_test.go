@@ -87,7 +87,7 @@ func parseSellFlags(t *testing.T, args ...string) sellFlags {
 
 func TestSellFlagsOnlyOverrideWhatWasPassed(t *testing.T) {
 	f := parseSellFlags(t)
-	if f.pickGroups() || f.postGap != nil || f.showPrice != nil || f.mentionExtras != nil {
+	if f.pickGroups() || f.postGap != nil || f.showPrice != nil || f.mentionExtras != nil || f.buyers != nil {
 		t.Fatalf("unset flags overrode config: %+v", f)
 	}
 	f = parseSellFlags(t, "-group", "Mess A", "-group", "2@g.us", "-show-price=false", "-mention-extras", "-post-gap", "5s")
@@ -105,7 +105,7 @@ func TestResolveSellSettings(t *testing.T) {
 	// Defaults keep today's behaviour: no groups without -group, price shown,
 	// no extras.
 	s, err := resolveSellSettings(testSellConfig(t, nil), sellFlags{})
-	if err != nil || len(s.Groups) != 0 || !s.ShowPrice || s.MentionExtras || s.PostGap != 15*time.Second {
+	if err != nil || len(s.Groups) != 0 || !s.ShowPrice || s.MentionExtras || s.PostGap != 15*time.Second || s.Buyers.UnsavedOnly() {
 		t.Fatalf("defaults = %+v, %v", s, err)
 	}
 	s, err = resolveSellSettings(testSellConfig(t, nil), parseSellFlags(t, "-group", "Mess A"))
@@ -118,13 +118,14 @@ func TestResolveSellSettings(t *testing.T) {
 		c.Sell.ShowPrice = false
 		c.Sell.MentionExtras = true
 		c.Sell.PostGap.Duration = 30 * time.Second
+		c.Sell.Buyers = config.BuyersUnsavedOnly
 	}
 	s, err = resolveSellSettings(testSellConfig(t, named), sellFlags{})
-	if err != nil || !reflect.DeepEqual(s.Groups, []string{"Mess A", "Mess B"}) || s.ShowPrice || !s.MentionExtras || s.PostGap != 30*time.Second {
+	if err != nil || !reflect.DeepEqual(s.Groups, []string{"Mess A", "Mess B"}) || s.ShowPrice || !s.MentionExtras || s.PostGap != 30*time.Second || !s.Buyers.UnsavedOnly() {
 		t.Fatalf("config = %+v, %v", s, err)
 	}
-	s, err = resolveSellSettings(testSellConfig(t, named), parseSellFlags(t, "-group", "Test", "-show-price", "-mention-extras=false", "-post-gap", "4s"))
-	if err != nil || !reflect.DeepEqual(s.Groups, []string{"Test"}) || !s.ShowPrice || s.MentionExtras || s.PostGap != 4*time.Second {
+	s, err = resolveSellSettings(testSellConfig(t, named), parseSellFlags(t, "-group", "Test", "-show-price", "-mention-extras=false", "-post-gap", "4s", "-buyers", "anyone"))
+	if err != nil || !reflect.DeepEqual(s.Groups, []string{"Test"}) || !s.ShowPrice || s.MentionExtras || s.PostGap != 4*time.Second || s.Buyers.UnsavedOnly() {
 		t.Fatalf("flags over config = %+v, %v", s, err)
 	}
 	s, err = resolveSellSettings(testSellConfig(t, named), parseSellFlags(t, "-group-count", "3"))
@@ -143,6 +144,7 @@ func TestResolveSellSettings(t *testing.T) {
 		"count too high":   {"-group-count", "4"},
 		"count zero":       {"-group-count", "0"},
 		"gap too short":    {"-group", "Mess A", "-post-gap", "1s"},
+		"unknown buyers":   {"-group", "Mess A", "-buyers", "friends"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := resolveSellSettings(testSellConfig(t, nil), parseSellFlags(t, args...)); err == nil {

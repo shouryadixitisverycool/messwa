@@ -44,3 +44,27 @@ func TestHandoffOverride(t *testing.T) {
 		}
 	}
 }
+
+func TestBuyersSetting(t *testing.T) {
+	c := Default()
+	if c.Sell.Buyers.UnsavedOnly() {
+		t.Fatal("default config turns saved contacts away")
+	}
+	p := filepath.Join(t.TempDir(), "c.toml")
+	os.WriteFile(p, []byte("[sell]\nbuyers = \"unsaved_only\"\n"), 0o600)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Sell.Buyers.UnsavedOnly() {
+		t.Fatalf("buyers = %q", c.Sell.Buyers)
+	}
+	os.WriteFile(p, []byte("[sell]\nbuyers = \"anyone\"\n"), 0o600)
+	if c, err = Load(p); err != nil || c.Sell.Buyers.UnsavedOnly() {
+		t.Fatalf("anyone = %q, %v", c.Sell.Buyers, err)
+	}
+	os.WriteFile(p, []byte("[sell]\nbuyers = \"unsaved\"\n"), 0o600)
+	if _, err := Load(p); err == nil {
+		t.Fatal("unknown buyers value loaded")
+	}
+}

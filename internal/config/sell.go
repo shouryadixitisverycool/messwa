@@ -25,6 +25,8 @@ type Sell struct {
 	// Handoff is the point where the bot stops and you take over the
 	// buyer's chat. Empty means HandoffNever.
 	Handoff Handoff `toml:"handoff"`
+	// Buyers is who may buy from an offer. Empty means BuyersAnyone.
+	Buyers Buyers `toml:"buyers"`
 }
 
 // MinPostGap is the shortest pause allowed between copies of one offer.
@@ -71,3 +73,34 @@ func (h Handoff) Resolve(override string) (Handoff, error) {
 	}
 	return ParseHandoff(override)
 }
+
+// Buyers says who a group offer sells to.
+type Buyers string
+
+const (
+	// BuyersAnyone sells to anyone who replies privately to the offer.
+	BuyersAnyone Buyers = "anyone"
+	// BuyersUnsavedOnly skips replies from saved contacts: the bot sends
+	// them nothing and sells only to numbers not in your address book.
+	BuyersUnsavedOnly Buyers = "unsaved_only"
+)
+
+// ParseBuyers reads a buyers setting. Empty means BuyersAnyone.
+func ParseBuyers(s string) (Buyers, error) {
+	switch b := Buyers(s); b {
+	case "", BuyersAnyone:
+		return BuyersAnyone, nil
+	case BuyersUnsavedOnly:
+		return b, nil
+	}
+	return "", fmt.Errorf("buyers %q: use %q or %q", s, BuyersAnyone, BuyersUnsavedOnly)
+}
+
+func (b *Buyers) UnmarshalText(text []byte) error {
+	v, err := ParseBuyers(string(text))
+	*b = v
+	return err
+}
+
+// UnsavedOnly reports whether saved contacts are turned away.
+func (b Buyers) UnsavedOnly() bool { return b == BuyersUnsavedOnly }
