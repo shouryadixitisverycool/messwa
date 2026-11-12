@@ -346,6 +346,7 @@ func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	sell := newSellManager(ctx, cfg, log, st, waConn{c.WA}, c.WA.SendMessage, c.WA.WaitForConnection,
 		func(ctx context.Context, userID int64) (mealPortal, error) { return acc.Portal(ctx, userID) },
 		newOwnGroupLog(ctx, cfg, st, c))
+	sell.notify = hub.Notify
 	if err := sell.Resume(ctx, cfg.MCP.SellTasks); err != nil {
 		return fmt.Errorf("resume sell tasks: %w", err)
 	}

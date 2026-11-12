@@ -2,8 +2,9 @@
 // laid out like an auction house: messes down the left, listings in a grid,
 // sort and filter buttons along the bottom.
 //
-// It shows sellers' names and phone numbers from the groups and nothing
-// from DMs. People sign in with a messwa account; the only write endpoints
+// It shows sellers' names and phone numbers from the groups. From DMs it
+// shows admins only their own sell tasks' buyers: names, numbers, and what
+// the bot read from their messages, never the messages themselves. People sign in with a messwa account; the only write endpoints
 // are for their own account (password, mess API key, MCP tokens).
 package dashboard
 
@@ -51,6 +52,9 @@ type state struct {
 	// Mine is today's meals you armed or sold with deliver-qr, for the coins
 	// on the day track.
 	Mine []mine `json:"mine"`
+	// Sales are your running sell tasks, and ones that just ended, for the
+	// "my sale" chest. Admins only, like the rest of the linked account.
+	Sales []mcpserver.SaleView `json:"sales,omitempty"`
 }
 
 type mine struct {
@@ -119,6 +123,10 @@ func Handler(cfg *config.Config, srv *mcpserver.Server, hub *Hub, acc *accounts.
 		st.Mine = []mine{}
 		if accounts.UserFrom(r.Context()).IsAdmin() {
 			if st.Mine, err = mineToday(r.Context(), cfg, srv); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if st.Sales, err = srv.SaleViews(r.Context()); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}

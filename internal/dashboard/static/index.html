@@ -9,7 +9,9 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preload" href="silkscreen-700.ttf" as="font" type="font/ttf" crossorigin>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="sale.css">
 <script src="common.js" defer></script>
+<script src="sale.js" defer></script>
 <script src="app.js" defer></script>
 </head>
 <body>
@@ -35,6 +37,8 @@
       <input id="q" type="search" placeholder="Search seller, number, text" autocomplete="off" spellcheck="false">
     </label>
   </header>
+
+  <div class="sales-box" id="sales" hidden></div>
 
   <main class="chest" id="chest">
     <div class="chest-head">

@@ -118,6 +118,21 @@ type sale struct {
 	// others, when set, are more buyers to tell "sorry sold" besides the
 	// queue: a negotiating task's buyers who are still talking.
 	others func() []types.JID
+	// event, when set, records a step of the sale for the dashboard (see
+	// store.SellEvent). It never holds what a buyer wrote.
+	event func(buyer types.JID, kind string, n int64, text string)
+}
+
+func (s *sale) note(buyer types.JID, kind string, n int64, text string) {
+	if s.event != nil {
+		s.event(buyer, kind, n, text)
+	}
+}
+
+// paise reads an INR amount for an event; 0 when it doesn't parse.
+func paise(amount string) int64 {
+	p, _ := store.ParsePaise(amount)
+	return p
 }
 
 // findSlot returns the configured meal's window on date.
@@ -265,6 +280,7 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 		for _, stop := range requestedPayments {
 			stop()
 		}
+		s.note(buyer, store.EventPayment, paise(firstNonEmpty(paidAmount, d.Amount)), "")
 		if amountMissing {
 			s.log.Warn("payment amount unavailable after recovery; assuming agreed price",
 				"date", d.Date, "meal", d.Meal, "amount_assumed", d.Amount, "payment_id", e.Info.ID)
@@ -297,6 +313,7 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 			err := deliverOnce(sendCtx, s.st, d, paid, id, func() error { return s.sendQR(sendCtx, e.Info.Chat, id, d, queued) })
 			if err == nil {
 				s.log.Info("meal image sent", "date", d.Date, "meal", d.Meal, "message_id", id)
+				s.note(buyer, store.EventQRSent, paise(d.Amount), "")
 			}
 			done <- err
 		}()
@@ -362,6 +379,17 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 		if !errors.Is(reason, errTruncatedPayment) && stopRecovery != nil {
 			stopRecovery()
 		}
+		switch {
+		case reason == nil:
+		case e.Message.GetImageMessage() != nil && !e.Info.Timestamp.Before(armedAt):
+			// A screenshot is not a payment, but it often means they paid
+			// some other way.
+			s.note(buyer, store.EventImage, 0, "")
+		case errors.Is(reason, errTruncatedPayment) && stopRecovery == nil:
+			s.note(buyer, store.EventPayUnreadable, 0, "")
+		case e.Message.GetSendPaymentMessage() != nil && !errors.Is(reason, errTruncatedPayment):
+			s.note(buyer, store.EventPayMismatch, 0, reason.Error())
+		}
 		if reason != nil {
 			if errors.Is(reason, errTruncatedPayment) && stopRecovery == nil {
 				recoveryCtx, cancelRecovery := context.WithCancel(ctx)
@@ -386,6 +414,7 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 						} else {
 							s.log.Info("requested full payment from primary device", "attempt", attempt)
 						}
+						s.note(buyer, store.EventRecovery, int64(attempt), "")
 					})
 					mu.Lock()
 					defer mu.Unlock()
@@ -449,6 +478,7 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 			prompted = true
 			mu.Unlock()
 			s.log.Info("offer sent to selected buyer")
+			s.note(buyer, store.EventPrompt, paise(d.Amount), prompt)
 			if err := s.st.MarkOfferSent(ctx, d, time.Now()); err != nil {
 				s.log.Warn("could not record the offer time", "err", err)
 			}
@@ -618,10 +648,11 @@ func (s *sale) sellToQueue(ctx, notifyCtx context.Context, q *offerQueue, j sale
 		if err := s.st.ReleaseUnpaidDelivery(ctx, d); err != nil {
 			return err
 		}
-		state := store.BuyerTimedOut
+		state, kind := store.BuyerTimedOut, store.EventTimedOut
 		if errors.Is(err, errBuyerPassed) {
-			state = store.BuyerPassed
+			state, kind = store.BuyerPassed, store.EventPassed
 		}
+		s.note(buyer, kind, 0, "")
 		if err := j.turnEnded(ctx, buyer, state); err != nil {
 			return err
 		}
@@ -645,6 +676,8 @@ func (s *sale) tellSold(notifyCtx context.Context, j saleJournal, buyers []types
 		stop()
 		if notifyErr != nil {
 			s.log.Warn("could not notify queued buyer that meal sold", "err", notifyErr)
+		} else {
+			s.note(waiting, store.EventToldSold, 0, "")
 		}
 	}
 }

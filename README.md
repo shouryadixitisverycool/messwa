@@ -14,6 +14,7 @@ By default the `run` service and MCP tools are read-only: no messages, read rece
 | Ended listings, kept for good | One row each in `listing_facts`: seller's number and name, mess, meal, date, diet, price, when it was posted and sold. No message text |
 | DMs with saved contacts | Name and last-message times only |
 | DMs with unsaved numbers | Name, times, and message text (deleted after `dms.retention`, default 72h) |
+| Sell tasks' buyers | What the bot read from each message (an offer of ₹15, a question, a picture, "not buying"), the bot's own replies, and payment steps. Never the buyer's words, saved contact or not |
 | Every other group, status, channel, notes-to-self | Nothing |
 
 If you save a number later, its stored DM text is deleted on its next message, and the MCP refuses to return it immediately.
@@ -108,7 +109,23 @@ Until the key has moved, the first admin's portal reads (MCP, the sales page, th
 
 Keys: `1`-`5` messes, arrows for pages, `R` `P` `D` `M` `S` `W` for the bottom row, `/` to search. Right click on the diet or meal button, or Shift with `D` or `M`, cycles backwards.
 
-The board shows sellers' names and phone numbers from the groups and nothing from DMs. The sales page below adds the names and numbers of people you sold to, for admins only.
+The board shows sellers' names and phone numbers from the groups. From DMs it shows admins only their own sell tasks' buyers (see [My sale](#my-sale)). The sales page below adds the names and numbers of people you sold to, for admins only.
+
+### My sale
+
+While a [sell task](#sell-tasks) runs, admins get a MY SALE box above the board, built to read in one look on a phone. It stays 20 minutes after the task ends, so you see how it went. Hovering anything (or opening it) says what it means.
+
+- **Glow.** Green: a buyer's pay window is open. Red: a buyer needs you, or sent a picture instead of paying. No glow: the bot has it.
+- **Clock.** Minutes until the meal ends. A ✓ or ✕ once the task is over.
+- **Price bar.** Your floor on the left, the opening price on the right. The green part is every price the bot takes right now, the arrow is its lowest, and the gold tick is the target it picked from the market's median ask. The lowest slides left over the last three hours; 🔒 means it's held at the target because two buyers are active. Dots are buyers' offers, hollow when the buyer needs you.
+- **Posts.** One pill per group. Gold is your post and the bar after it is the listings posted in that group since, red once more than 15 have buried it. A dashed red pill failed, with WhatsApp's error code (479 and the like).
+- **Buyers.** Pixel heads in reply order, the same heads as on the sales page. The border is their state: blue haggling, gold agreed and waiting, green paying (the ring is their two minutes), red needs you (!), amber check (?, usually a screenshot instead of a WhatsApp Pay payment), grey gone. ♥ marks a saved contact. The chip under a head is their price.
+- **Squares, top right.** Every task for this meal, so a restart doesn't lose the story: grey crossed cancelled, green live or sold.
+- **Market.** Every open listing for the same meal and mess, cheapest first, yours in gold. Your listing also gets a gold outline on the board.
+
+Tap a buyer for the negotiation as a tug of war: each row is one round, their offer in red and the bot's answer in green, with the bot's lowest at the bottom and the gap between them in red. Below it, the payment steps (armed, paid, read, QR, ✅), with the attempts to read an unreadable payment from your phone. CHAT opens their chat in WhatsApp or Beeper. For a buyer who needs you, COPY SELL copies the `deliver-qr -peer` command at their offer; cancel the task and stop `run` before you use it. Tap the clock or the posts for the lowest price over time, each post, and the meal's tries.
+
+The box only reads. Nothing on the dashboard sends anything. It updates over the same event stream as the board: every step a task records wakes it.
 
 ### My sales
 

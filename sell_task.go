@@ -91,6 +91,9 @@ type sellManager struct {
 	// run never gets events for messages it sent itself.
 	own ownGroupLog
 
+	// notify tells the dashboard a sale changed. Nil when nothing watches.
+	notify func()
+
 	base    context.Context // run's context; tasks stop with it and resume next start
 	mu      sync.Mutex
 	running map[int64]*runningTask
@@ -152,6 +155,28 @@ func (m *sellManager) Start(ctx context.Context, userID int64, date, meal string
 	m.launch(t, s, nil)
 	m.log.Info("sell task started", "task", t.ID, "date", date, "meal", meal, "min", minRupees, "max", maxRupees, "handoff", h)
 	return t.ID, nil
+}
+
+// event records one step of a task's sale for the dashboard, then tells it.
+// A failed write only loses the step from the dashboard, never the sale.
+func (m *sellManager) event(ctx context.Context, e store.SellEvent) {
+	if e.At.IsZero() {
+		e.At = time.Now()
+	}
+	if err := m.st.AddSellTaskEvent(context.WithoutCancel(ctx), e); err != nil {
+		m.log.Warn("could not record a sale event", "task", e.TaskID, "kind", e.Kind, "err", err)
+	}
+	if m.notify != nil {
+		m.notify()
+	}
+}
+
+// saleEvents lets a task's sale record its steps: prompts, payments, the
+// QR, and the buyers whose turn ended.
+func (m *sellManager) saleEvents(id int64) func(buyer types.JID, kind string, n int64, text string) {
+	return func(buyer types.JID, kind string, n int64, text string) {
+		m.event(m.base, store.SellEvent{TaskID: id, Peer: buyer.String(), Kind: kind, N: n, Text: text})
+	}
 }
 
 // Cancel stops a task. A QR already being delivered for a payment still
@@ -312,6 +337,7 @@ func (m *sellManager) end(t store.SellTask, state, detail string) string {
 		return ""
 	}
 	m.log.Info("sell task ended", "task", t.ID, "state", state, "detail", detail)
+	m.event(ctx, store.SellEvent{TaskID: t.ID, Kind: store.EventEnded, Text: state})
 	return state
 }
 
@@ -325,8 +351,12 @@ func (m *sellManager) tickOffers(t store.SellTask, gate *taskGate) {
 	}
 	ctx, stop := context.WithTimeout(context.WithoutCancel(m.base), time.Minute)
 	defer stop()
-	if _, _, err := reactSold(ctx, m.st, m.own, gate.react, m.log, t.Date, t.Meal); err != nil {
+	done, _, err := reactSold(ctx, m.st, m.own, gate.react, m.log, t.Date, t.Meal)
+	if err != nil {
 		m.log.Warn("could not read the offer posts to mark them sold", "task", t.ID, "err", err)
+	}
+	if done > 0 {
+		m.event(ctx, store.SellEvent{TaskID: t.ID, Kind: store.EventTicked, N: int64(done)})
 	}
 }
 
@@ -355,6 +385,7 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, ga
 		}
 	}
 	s.send, s.sendPaid = gate.send, gate.sendPaid
+	s.event = m.saleEvents(t.ID)
 	j := &taskJournal{st: m.st, t: t}
 	settings, err := taskSellSettings(m.cfg)
 	if err != nil {
@@ -370,6 +401,9 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, ga
 		added, err := m.st.AddSellTaskBuyer(ctx, t.ID, peer.String(), chat.String(), time.Now())
 		if err != nil {
 			m.log.Error("record sell task buyer", "task", t.ID, "err", err)
+		}
+		if added {
+			m.event(ctx, store.SellEvent{TaskID: t.ID, Peer: peer.String(), Kind: store.EventJoined})
 		}
 		return added
 	}
@@ -541,14 +575,16 @@ func (m *sellManager) taskCopy(t store.SellTask, gate *taskGate, text func() str
 		if err != nil {
 			// It may still have reached WhatsApp, so replies keep counting,
 			// but it is never sent again.
-			if serr := m.st.SetOfferState(stateCtx, t.ID, p.ID, store.OfferFailed); serr != nil {
+			if serr := m.st.SetOfferFailed(stateCtx, t.ID, p.ID, err.Error()); serr != nil {
 				m.log.Warn("could not record the failed offer post", "task", t.ID, "err", serr)
 			}
+			m.event(stateCtx, store.SellEvent{TaskID: t.ID, Peer: g.JID.String(), Kind: store.EventPostFailed, Text: err.Error()})
 			return p, fmt.Errorf("group offer send failed or is uncertain: %w", err)
 		}
 		if err := m.st.SetOfferState(stateCtx, t.ID, p.ID, store.OfferPosted); err != nil {
 			m.log.Warn("could not record the offer post", "task", t.ID, "err", err)
 		}
+		m.event(stateCtx, store.SellEvent{TaskID: t.ID, Peer: g.JID.String(), Kind: store.EventPosted})
 		p.At = firstTime(resp.Timestamp, p.At)
 		m.log.Info("sell task offer posted", "task", t.ID, "group", g.Name, "offer_id", p.ID, "copy", seq)
 		return p, nil
