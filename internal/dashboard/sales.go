@@ -89,8 +89,9 @@ type sale struct {
 	PaidAt  int64  `json:"paid_at,omitempty"`
 	SentAt  int64  `json:"sent_at,omitempty"`
 	// PaidBy is "image" when an image the buyer sent counted as the
-	// payment, unverified ([sell] accept_payment_images). Empty means
-	// WhatsApp Pay.
+	// payment, unverified ([sell] accept_payment_images or mark-sold
+	// -paid-by image), or "other" for a sale mark-sold recorded as paid
+	// another way. Empty means WhatsApp Pay.
 	PaidBy string   `json:"paid_by,omitempty"`
 	Ask    *float64 `json:"ask,omitempty"` // median asking price for that serving
 }

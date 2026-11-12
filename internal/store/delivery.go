@@ -49,8 +49,12 @@ var deliveryColumns = []string{
 }
 
 // PaidByImage marks a delivery sent for an image the buyer sent, assumed
-// to show a payment. Nothing verified it.
-const PaidByImage = "image"
+// to show a payment. Nothing verified it. PaidOther marks a sale you
+// recorded by hand that was paid some other way, such as cash.
+const (
+	PaidByImage = "image"
+	PaidOther   = "other"
+)
 
 type Delivery struct {
 	Date, Meal, Peer, Amount, ImageHash string
@@ -291,6 +295,76 @@ func (s *Store) Deliveries(ctx context.Context) ([]DeliveryRecord, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// ManualSale is a sale finished outside messwa's own delivery, recorded by
+// mark-sold.
+type ManualSale struct {
+	Date, Meal, Peer, Amount string
+	// Mess and Diet come from the registration. Empty keeps what the row
+	// already has.
+	Mess, Diet string
+	// BuyerName is the buyer's name as you know it. Empty keeps the name
+	// already recorded.
+	BuyerName string
+	// Kind is empty for WhatsApp Pay, PaidByImage or PaidOther.
+	Kind string
+	// At is when the QR went to the buyer; it is also recorded as the
+	// payment time.
+	At time.Time
+}
+
+// ErrAlreadySold means the meal's delivery is already sent or being sent;
+// RecordManualSale changes it only when forced.
+var ErrAlreadySold = errors.New("meal already has a sale recorded")
+
+// RecordManualSale records m as sent. A meal with no row gets one; an armed
+// or handed-off row becomes sent with m's details. A sent or sending row is
+// changed only with force. A row an active sell task holds is never
+// touched: cancel the task first. It returns the row's previous state, or
+// "" when there was none.
+func (s *Store) RecordManualSale(ctx context.Context, m ManualSale, force bool) (string, error) {
+	if _, err := ParsePaise(m.Amount); err != nil {
+		return "", err
+	}
+	if m.Peer == "" || m.At.IsZero() {
+		return "", errors.New("a sale needs a buyer and a time")
+	}
+	switch m.Kind {
+	case "", PaidByImage, PaidOther:
+	default:
+		return "", fmt.Errorf("unknown payment kind %q", m.Kind)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	var state string
+	var taskActive bool
+	err = tx.QueryRowContext(ctx, `SELECT d.state, coalesce((SELECT t.state='active' FROM sell_tasks t WHERE t.id=d.task_id), 0)
+ FROM qr_deliveries d WHERE d.date=? AND d.meal=?`, m.Date, m.Meal).Scan(&state, &taskActive)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		state = ""
+		_, err = tx.ExecContext(ctx, `INSERT INTO qr_deliveries(date,meal,peer,amount,image_hash,armed_at,state,mess,diet,buyer_name,paid_at,sent_at,payment_kind)
+ VALUES(?,?,?,?,'manual',?,'sent',?,?,?,?,?,?)`, m.Date, m.Meal, m.Peer, m.Amount, m.At.Unix(), m.Mess, m.Diet, m.BuyerName, m.At.Unix(), m.At.Unix(), m.Kind)
+	case err != nil:
+	case taskActive:
+		return state, errors.New("an active sell task is selling this meal; cancel it first")
+	case (state == "sent" || state == "sending") && !force:
+		return state, fmt.Errorf("%w (state %s); check the details and pass -force to overwrite them", ErrAlreadySold, state)
+	default:
+		_, err = tx.ExecContext(ctx, `UPDATE qr_deliveries SET state='sent',peer=?,amount=?,payment_kind=?,paid_at=?,sent_at=?,
+ mess=CASE WHEN ?='' THEN mess ELSE ? END, diet=CASE WHEN ?='' THEN diet ELSE ? END,
+ buyer_name=CASE WHEN ?<>'' THEN ? WHEN peer=? THEN buyer_name ELSE '' END
+ WHERE date=? AND meal=?`, m.Peer, m.Amount, m.Kind, m.At.Unix(), m.At.Unix(),
+			m.Mess, m.Mess, m.Diet, m.Diet, m.BuyerName, m.BuyerName, m.Peer, m.Date, m.Meal)
+	}
+	if err != nil {
+		return state, err
+	}
+	return state, tx.Commit()
 }
 
 // PaymentKind is what counted as the payment for the meal's delivery:
