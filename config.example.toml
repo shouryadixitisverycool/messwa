@@ -58,8 +58,8 @@ monthly_fee = 0
 [sell]
 # Group offers posted by `deliver-qr` without -peer, and by sell tasks.
 # Flags of the same name (-group, -group-count, -post-gap, -show-price,
-# -mention-extras, -handoff, -accept-plain-dms, -buyers) override these for
-# one deliver-qr run. Sell tasks use everything here except handoff, which
+# -mention-extras, -handoff, -accept-plain-dms, -buyers,
+# -accept-payment-images) override these for one deliver-qr run. Sell tasks use everything here except handoff, which
 # start_sell_task sets per task; with show_price they post the task's max
 # price.
 #
@@ -95,6 +95,14 @@ accept_plain_dms = false
 # LID: the bot logs that they replied and sends them nothing. It applies to
 # deliver-qr group offers and sell tasks; a -peer delivery is your own pick.
 buyers = "anyone"
+# Count an image from the buyer whose payment turn it is as their payment,
+# for buyers who pay by UPI outside WhatsApp Pay and send a screenshot. It
+# must arrive after the payment prompt and inside their pay window. Nothing
+# checks what the image shows: a screenshot proves nothing, anyone can fake
+# one, and the QR can't be taken back. Check your UPI app after each such
+# sale; the log, sell_task_status and the sales page mark it unverified.
+# Off by default. Applies to group offers, sell tasks and deliver-qr -peer.
+accept_payment_images = false
 
 # Seasons split the year for the insights page. In a term everyone is
 # registered with a mess, so the market is far busier than in a break, and the

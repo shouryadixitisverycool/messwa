@@ -121,6 +121,19 @@ func TestResolveSellSettings(t *testing.T) {
 	if err != nil || s.AcceptPlainDMs {
 		t.Fatalf("-accept-plain-dms=false over the setting = %+v, %v", s, err)
 	}
+	if s.AcceptPaymentImages {
+		t.Fatal("payment images accepted by default")
+	}
+	images := func(c *config.Config) { c.Sell.AcceptPaymentImages = true }
+	if s, err = resolveSellSettings(testSellConfig(t, images), sellFlags{}); err != nil || !s.AcceptPaymentImages {
+		t.Fatalf("accept_payment_images = %+v, %v", s, err)
+	}
+	if s, err = resolveSellSettings(testSellConfig(t, images), parseSellFlags(t, "-accept-payment-images=false")); err != nil || s.AcceptPaymentImages {
+		t.Fatalf("-accept-payment-images=false over the setting = %+v, %v", s, err)
+	}
+	if s, err = resolveSellSettings(testSellConfig(t, nil), parseSellFlags(t, "-accept-payment-images")); err != nil || !s.AcceptPaymentImages {
+		t.Fatalf("-accept-payment-images = %+v, %v", s, err)
+	}
 	s, err = resolveSellSettings(testSellConfig(t, nil), parseSellFlags(t, "-group", "Mess A"))
 	if err != nil || !reflect.DeepEqual(s.Groups, []string{"Mess A"}) {
 		t.Fatalf("one -group = %+v, %v", s, err)
