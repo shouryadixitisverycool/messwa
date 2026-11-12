@@ -26,6 +26,18 @@ func TestHandoffSetting(t *testing.T) {
 	}
 }
 
+func TestAcceptPlainDMsSetting(t *testing.T) {
+	if Default().Sell.AcceptPlainDMs {
+		t.Fatal("plain DMs are accepted by default")
+	}
+	p := filepath.Join(t.TempDir(), "c.toml")
+	os.WriteFile(p, []byte("[sell]\naccept_plain_dms = true\n"), 0o600)
+	c, err := Load(p)
+	if err != nil || !c.Sell.AcceptPlainDMs {
+		t.Fatalf("accept_plain_dms = true loaded as %v, %v", c.Sell.AcceptPlainDMs, err)
+	}
+}
+
 func TestHandoffOverride(t *testing.T) {
 	for _, tc := range []struct {
 		configured     Handoff
@@ -57,5 +69,29 @@ func TestTaskHandoff(t *testing.T) {
 	// Only sell tasks negotiate, so [sell] and deliver-qr don't take it.
 	if _, err := ParseHandoff("on_agreement"); err == nil {
 		t.Fatal("deliver-qr handoff accepted on_agreement")
+	}
+}
+
+func TestBuyersSetting(t *testing.T) {
+	c := Default()
+	if c.Sell.Buyers.UnsavedOnly() {
+		t.Fatal("default config turns saved contacts away")
+	}
+	p := filepath.Join(t.TempDir(), "c.toml")
+	os.WriteFile(p, []byte("[sell]\nbuyers = \"unsaved_only\"\n"), 0o600)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Sell.Buyers.UnsavedOnly() {
+		t.Fatalf("buyers = %q", c.Sell.Buyers)
+	}
+	os.WriteFile(p, []byte("[sell]\nbuyers = \"anyone\"\n"), 0o600)
+	if c, err = Load(p); err != nil || c.Sell.Buyers.UnsavedOnly() {
+		t.Fatalf("anyone = %q, %v", c.Sell.Buyers, err)
+	}
+	os.WriteFile(p, []byte("[sell]\nbuyers = \"unsaved\"\n"), 0o600)
+	if _, err := Load(p); err == nil {
+		t.Fatal("unknown buyers value loaded")
 	}
 }

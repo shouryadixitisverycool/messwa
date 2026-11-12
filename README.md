@@ -298,7 +298,8 @@ extras.
   -offer-text 'Test lunch offer for INR 1.00. Use Reply privately and wait for a DM before paying.'
 ```
 
-The first buyer must reply privately to the quoted post within ten minutes.
+The first buyer must reply privately to the quoted post within ten minutes
+(or DM about it, with [plain DMs](#offer-settings) on).
 Later buyers who quote the same offer join the queue in arrival order. Only
 the current buyer gets payment instructions. That buyer has up to two minutes
 to pay or can reply `not interested` to give up their turn. The bot finishes checking
@@ -335,6 +336,8 @@ included, no extras.
 | `show_price` | `-show-price` | `true` | Put the price in the group post |
 | `mention_extras` | `-mention-extras` | `false` | List the extras registered for that meal |
 | `handoff` | `-handoff` | `never` | When to hand the buyer's chat to you, see below |
+| `accept_plain_dms` | `-accept-plain-dms` | `false` | Let DMs that ask about the offer without quoting it join the queue, see below |
+| `buyers` | `-buyers` | `anyone` | Who may buy. `unsaved_only` skips saved contacts, see below |
 
 With `groups` or `group_count` set, `deliver-qr` without `-peer` posts to
 those groups, so `-group` is no longer needed:
@@ -359,10 +362,48 @@ apart. Once the meal sells or is handed off, no more copies go out. If one copy 
 the others still go out and replies to the failed one still count, in case
 WhatsApp posted it anyway. The command stops only when no copy posts.
 
+**Plain DMs.** By default only a private reply that quotes a copy of the
+offer counts. Plenty of buyers just DM "price?" or "is the kadamba lunch
+available" instead. With `accept_plain_dms = true` (or `-accept-plain-dms`)
+such a DM joins the same queue, after anyone already in it, if:
+
+- it's a new text DM sent after the first copy was posted, not an edit, and
+  doesn't quote some other message;
+- it asks about this offer. It names the offer's mess, or it asks the price
+  or whether the meal is available and either names the meal or is at most
+  8 words. A DM that names only another mess or another meal, or says "not
+  interested", doesn't count;
+- you haven't sent that person a DM in the 30 minutes before it, or since.
+  messwa reads this from the DM times `run` records, plus anything you send
+  from your phone while the offer is up. This keeps the bot out of a chat
+  you're already having.
+
+The buyer then gets the usual payment request and the same two minutes,
+and only a matching WhatsApp Pay payment from them releases the QR.
+Everything else works as for quoted replies: one turn per person, the floor
+price, and for sell tasks the send limits. With `handoff = "on_reply"` the
+first such DM hands the chat to you.
+
+The risk is that the bot answers someone who wasn't asking about the meal,
+such as a friend who opens with "how much?" about something else. They get
+one payment request they can ignore. The 30-minute rule only catches chats
+you've been in recently, so if that worries you, leave the setting off.
+
 **Extras.** The extras come from the portal's `/registrations/extras`, the
 same read as IIITH-mess-MCP's `get_extra_registrations`. Extras already eaten
 or registered at another mess are left out. If the read fails, the offer goes
 out without extras and the log says why.
+
+**Saved contacts.** By default anyone who replies privately can buy,
+friends included. With `buyers = "unsaved_only"`, a reply from someone in
+your address book never joins the buyer queue: the bot logs `a saved contact
+replied to the offer; skipped them and sent nothing` and sends them nothing,
+not a payment request, not `sorry sold`, not a handoff. "Saved" is the same
+check that decides whether a DM's text is stored (see [What gets
+stored](#what-gets-stored)): a name in your address book, looked up under
+both the buyer's number and their LID, so a buyer who appears only by LID
+still matches a contact saved under their number. `-buyers` doesn't apply to
+`-peer`, where you picked the buyer yourself.
 
 ### Taking over the chat yourself
 
@@ -571,8 +612,8 @@ sell_tasks = true
 What a task does:
 
 1. Checks your portal registration for that meal with your saved mess API key, the same way `deliver-qr -portal-qr` does.
-2. Posts the offer using the `[sell]` settings, like `deliver-qr` does with no flags (see [Offer settings](#offer-settings)): `groups` or `group_count`, `post_gap` between copies, `show_price` and `mention_extras`. With `show_price` the post shows `max_price`, e.g. `sell bakul non-veg lunch ₹60`. If `[sell]` names no groups, the task posts in the first group in `groups`. A group that can't be found is skipped; the task fails only if no copy posts.
-3. Takes everyone who replies privately to any copy, in reply order. A plain DM that doesn't quote a post doesn't count.
+2. Posts the offer using the `[sell]` settings, like `deliver-qr` does with no flags (see [Offer settings](#offer-settings)): `groups` or `group_count`, `post_gap` between copies, `show_price`, `mention_extras` and `accept_plain_dms`. With `show_price` the post shows `max_price`, e.g. `sell bakul non-veg lunch ₹60`. If `[sell]` names no groups, the task posts in the first group in `groups`. A group that can't be found is skipped; the task fails only if no copy posts.
+3. Takes everyone who replies privately to any copy, in reply order. A plain DM that doesn't quote a post counts only with `[sell] accept_plain_dms = true`, under the rules in [Offer settings](#offer-settings). With `[sell] buyers = "unsaved_only"`, saved contacts are skipped and get nothing (see [Saved contacts](#offer-settings)).
 4. With `max_price` above `min_price`, negotiates with each of them at once (see [Negotiation](#negotiation)). Buyers who agree a price queue to pay in the order they agreed. With the two prices equal, every buyer queues to pay that price.
 5. Asks the first buyer in the pay queue to pay their price within two minutes. They can reply `not interested`. Then the next buyer gets a turn, as in `deliver-qr -group`.
 6. Sends the QR after a matching WhatsApp Pay payment, stops posting copies, tells everyone else who replied `sorry sold`, reacts ✅ to the meal's offer posts, and ends as `sold`.
@@ -592,7 +633,8 @@ A task also ends when you cancel it (`cancelled`), when the meal ends (`expired`
 `run` enforces these rules on every message, so the agent can't get around them:
 
 - Nothing is sent unless a task is active. The one exception is a QR for a payment that came in while the task was active. It still goes out if you cancel a moment later, and the task then ends as `sold`.
-- Besides one claimed post per group, a task messages only people who replied privately to one of its posts. After the QR goes out it may also react ✅ to the meal's recorded offer posts, and to nothing else.
+- Besides one claimed post per group, a task messages only people its posts queued: those who replied privately to one, or with `accept_plain_dms`, DMed about it. After the QR goes out it may also react ✅ to the meal's recorded offer posts, and to nothing else.
+- With `[sell] buyers = "unsaved_only"`, a task never queues or messages a saved contact. If you switch to it while a task is running, the restart skips saved contacts still waiting in the queue. A buyer already asked to pay keeps their turn, and gets the QR if they pay.
 - No buyer is quoted, agreed with or asked for less than `min_price`. The store checks this itself on every quote, agreement, reservation and sale, whatever the negotiation decided. A payment must match exactly the price agreed with that buyer, or a higher one the bot quoted them.
 - A task sends at most 12 messages a minute and 80 in total. All tasks together send at most 15 a minute. One buyer gets at most 6 negotiation messages. The ✅ reactions after a sale skip the per-minute wait, so they don't time out behind the sale's own sends.
 - A task stops at the meal's end time.

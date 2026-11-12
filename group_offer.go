@@ -263,6 +263,11 @@ type groupOffer struct {
 	// failed or are uncertain, so replies to them still count.
 	copies []postedOffer
 	posted []postedOffer
+	// plain, when set, lets DMs about the offer that don't quote it make
+	// their sender a buyer. sentDM is when you last messaged each chat
+	// while the offer was up. See plain_dm.go.
+	plain  *plainDMs
+	sentDM map[types.JID]time.Time
 
 	stopPosting   context.CancelFunc
 	donePosting   chan struct{}
@@ -281,12 +286,13 @@ func watchGroupOffer(ctx context.Context, conn saleConn, queue *offerQueue) *gro
 	o := &groupOffer{queue: queue, stopPosting: func() {}, donePosting: done, firstPosted: make(chan struct{})}
 	handlerID := conn.AddEventHandler(func(evt any) {
 		e, ok := evt.(*events.Message)
-		if !ok || !o.matches(e) || buyerPassed(e.Message) {
+		if !ok {
 			return
 		}
-		peer := buyerPeer(ctx, conn, e.Info)
-		queue.noteFirst(peer, e.Info.ID, messageText(e.Message))
-		queue.addFrom(peer, e.Info.Chat.ToNonAD(), e.Info.PushName)
+		if peer, ok := o.buyer(ctx, conn, e); ok {
+			queue.noteFirst(peer, e.Info.ID, messageText(e.Message))
+			queue.addFrom(peer, e.Info.Chat.ToNonAD(), e.Info.PushName)
+		}
 	})
 	o.removeHandler = func() { conn.RemoveEventHandler(handlerID) }
 	return o
@@ -307,6 +313,38 @@ func buyerPeer(ctx context.Context, conn saleConn, info types.MessageInfo) types
 	return peer
 }
 
+// acceptPlainDMs lets DMs about the offer that don't quote it make their
+// sender a buyer too. Call it before posting.
+func (o *groupOffer) acceptPlainDMs(p *plainDMs) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.plain = p
+}
+
+// buyer decides whether e makes its sender a buyer, and returns them by
+// phone number when WhatsApp tells us one. Every way into the queue comes
+// through here: a private reply quoting a copy of the offer, or, with plain
+// DMs on, a DM asking about it from someone you weren't chatting with.
+func (o *groupOffer) buyer(ctx context.Context, conn saleConn, e *events.Message) (types.JID, bool) {
+	o.mu.Lock()
+	o.noteSent(e)
+	quoted := o.quotesCopy(e)
+	plain := !quoted && o.plainCandidate(e)
+	p := o.plain
+	o.mu.Unlock()
+	if !quoted && !plain || buyerPassed(e.Message) {
+		return types.EmptyJID, false
+	}
+	peer := buyerPeer(ctx, conn, e.Info)
+	if plain {
+		if o.chatting(ctx, e, peer) {
+			return types.EmptyJID, false
+		}
+		p.log.Info("a DM asks about the offer without quoting it; its sender joins the queue unless already in it", "message_id", e.Info.ID)
+	}
+	return peer, true
+}
+
 // watch queues replies to p from now on.
 func (o *groupOffer) watch(p postedOffer) {
 	o.mu.Lock()
@@ -314,9 +352,15 @@ func (o *groupOffer) watch(p postedOffer) {
 	o.copies = append(o.copies, p)
 }
 
+// matches reports whether e is a private reply quoting a copy of the offer.
 func (o *groupOffer) matches(e *events.Message) bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	return o.quotesCopy(e)
+}
+
+// quotesCopy is matches with o.mu held.
+func (o *groupOffer) quotesCopy(e *events.Message) bool {
 	for _, p := range o.copies {
 		if privateOfferReply(e, p.Chat, p.ID, p.At) {
 			return true

@@ -44,6 +44,8 @@ type fakeConn struct {
 	sent     []sentMessage
 	groups   []*types.GroupInfo
 	lids     map[types.JID]types.JID
+	// saved are address book entries, by number or LID.
+	saved map[types.JID]bool
 }
 
 func newFakeConn(group types.JID) *fakeConn {
@@ -94,6 +96,25 @@ func (f *fakeConn) PNForLID(_ context.Context, lid types.JID) types.JID {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.lids[lid]
+}
+
+// SavedContact checks each JID and the number or LID lids maps it to, as
+// wa.SavedContact does.
+func (f *fakeConn) SavedContact(_ context.Context, jids ...types.JID) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, j := range jids {
+		j = j.ToNonAD()
+		if f.saved[j] || f.saved[f.lids[j]] {
+			return true
+		}
+		for lid, pn := range f.lids {
+			if pn == j && f.saved[lid] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (f *fakeConn) send(_ context.Context, to types.JID, msg *waE2E.Message, extra ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error) {

@@ -19,6 +19,7 @@ import (
 	"messwa/internal/meals"
 	"messwa/internal/portal"
 	"messwa/internal/store"
+	"messwa/internal/wa"
 )
 
 // saleConn is the part of the WhatsApp client a sale uses. deliver-qr
@@ -34,6 +35,9 @@ type saleConn interface {
 	GetJoinedGroups(ctx context.Context) ([]*types.GroupInfo, error)
 	// PNForLID returns the phone-number JID for a LID, or an empty JID.
 	PNForLID(ctx context.Context, lid types.JID) types.JID
+	// SavedContact reports whether any of jids, under its number or its
+	// LID, is in your address book.
+	SavedContact(ctx context.Context, jids ...types.JID) bool
 }
 
 // waConn adapts a whatsmeow client to saleConn.
@@ -45,6 +49,11 @@ func (c waConn) PNForLID(ctx context.Context, lid types.JID) types.JID {
 		return types.EmptyJID
 	}
 	return pn.ToNonAD()
+}
+
+func (c waConn) SavedContact(ctx context.Context, jids ...types.JID) bool {
+	saved, _ := wa.SavedContact(ctx, c.Store, jids...)
+	return saved
 }
 
 // sendFunc sends one chat message. Sell tasks pass a gate that enforces

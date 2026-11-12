@@ -25,7 +25,10 @@ import (
 //
 //   - nothing is sent unless the task is active;
 //   - besides the group post, messages go only to people who replied
-//     privately to that post;
+//     privately to that post, or with [sell] accept_plain_dms, DMed about
+//     it (see plain_dm.go);
+//   - with [sell] buyers = "unsaved_only", saved contacts never join the
+//     queue and get nothing;
 //   - no buyer is quoted, agreed with, asked, or armed for below the floor
 //     price (see negotiate.go for how a task haggles);
 //   - sends are rate-limited per task and across all tasks;
@@ -51,6 +54,7 @@ const resumeGrace = 30 * time.Second
 
 var errTaskInactive = errors.New("sell task is not active; nothing was sent")
 var errCancelledByUser = errors.New("cancelled")
+var errSavedContact = errors.New(`recipient is a saved contact and [sell] buyers is "unsaved_only"`)
 
 // taskSellSettings is how a task posts its offer: the [sell] section, in
 // the first configured group when [sell] picks none. With show_price the
@@ -352,6 +356,10 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, ga
 	}
 	queue := newOfferQueue()
 	queue.join = func(peer, chat types.JID) bool {
+		if gate.turnsAway(ctx, peer, chat) {
+			logSavedSkip(m.log, peer, "task", t.ID)
+			return false
+		}
 		added, err := m.st.AddSellTaskBuyer(ctx, t.ID, peer.String(), chat.String(), time.Now())
 		if err != nil {
 			m.log.Error("record sell task buyer", "task", t.ID, "err", err)
@@ -362,7 +370,7 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, ga
 	if negotiates(t) {
 		n = newNegotiation(ctx, m, t, s, gate, queue)
 	}
-	resume, err := m.restore(ctx, t, queue, n)
+	resume, err := m.restore(ctx, t, queue, gate, n)
 	if err != nil {
 		return err
 	}
@@ -372,6 +380,9 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, ga
 	}
 	posting := watchGroupOffer(ctx, m.conn, queue)
 	defer posting.close()
+	if settings.AcceptPlainDMs {
+		posting.acceptPlainDMs(newPlainDMs(m.cfg, m.st, m.log.With("task", t.ID), s.mess, t.Meal, ""))
+	}
 	claimed := map[string]bool{}
 	for _, o := range offers {
 		claimed[o.Group] = true
@@ -530,8 +541,8 @@ func (m *sellManager) handOff(ctx context.Context, t store.SellTask, buyer types
 // restore rebuilds the queue from the store and finds a buyer whose turn
 // was under way. A buyer whose prompt was claimed is never prompted again.
 // With n, buyers who were negotiating or waiting to pay get their sessions
-// back.
-func (m *sellManager) restore(ctx context.Context, t store.SellTask, queue *offerQueue, n *negotiation) (*resumedTurn, error) {
+// back. A queued buyer the buyers setting now turns away is skipped.
+func (m *sellManager) restore(ctx context.Context, t store.SellTask, queue *offerQueue, gate *taskGate, n *negotiation) (*resumedTurn, error) {
 	buyers, err := m.st.SellTaskBuyers(ctx, t.ID)
 	if err != nil {
 		return nil, err
@@ -548,8 +559,15 @@ func (m *sellManager) restore(ctx context.Context, t store.SellTask, queue *offe
 		}
 		switch b.State {
 		case store.BuyerQueued:
-			queue.restore(peer, true)
-			continue
+			alt, _ := types.ParseJID(b.Alt)
+			if !gate.turnsAway(ctx, peer, alt) {
+				queue.restore(peer, true)
+				continue
+			}
+			logSavedSkip(m.log, peer, "task", t.ID)
+			if _, err := m.st.MoveSellTaskBuyer(ctx, t.ID, b.Peer, store.BuyerQueued, store.BuyerSkipped, "", time.Time{}); err != nil {
+				return nil, err
+			}
 		case store.BuyerOffered:
 			if d != nil && d.Peer == b.Peer && d.Amount == b.Amount {
 				// A payment sent while run was down arrives once it
@@ -682,12 +700,23 @@ func (g *taskGate) react(ctx context.Context, chat types.JID, target, emoji stri
 	return resp.ID, resp.Timestamp, err
 }
 
+// turnsAway is the [sell] buyers check for this task. Every way a buyer
+// joins the queue calls it, and so does every DM the task sends.
+func (g *taskGate) turnsAway(ctx context.Context, peers ...types.JID) bool {
+	return turnsAway(ctx, g.m.conn, g.m.cfg.Sell.Buyers, peers...)
+}
+
 func (g *taskGate) deliver(ctx context.Context, paid bool, to types.JID, msg *waE2E.Message, extra ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error) {
 	if !paid && !g.active.Load() {
 		return whatsmeow.SendResponse{}, errTaskInactive
 	}
 	if err := g.allowed(ctx, to, extra); err != nil {
 		return whatsmeow.SendResponse{}, err
+	}
+	// A buyer who already paid gets the QR, even if the setting changed
+	// across a restart during their turn.
+	if !paid && to.Server != types.GroupServer && g.turnsAway(ctx, to) {
+		return whatsmeow.SendResponse{}, errSavedContact
 	}
 	if err := g.m.limits.wait(ctx, g.id); err != nil {
 		return whatsmeow.SendResponse{}, err
@@ -699,7 +728,8 @@ func (g *taskGate) deliver(ctx context.Context, paid bool, to types.JID, msg *wa
 }
 
 // allowed lets a task post only the group offer it claimed, and message
-// only people who replied privately to that offer.
+// only the buyers its offer queued: people who replied privately to it, or
+// DMed about it with [sell] accept_plain_dms on.
 func (g *taskGate) allowed(ctx context.Context, to types.JID, extra []whatsmeow.SendRequestExtra) error {
 	to = to.ToNonAD()
 	if to.Server == types.GroupServer {
