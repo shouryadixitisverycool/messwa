@@ -166,16 +166,16 @@ type offerDetails struct {
 	// Diet is "veg", "nonveg", "egg" or empty.
 	Diet string
 	Meal string
-	// Price is the asking price as posted, e.g. "₹60".
+	// Price is the asking price as posted, e.g. "60".
 	Price     string
 	ShowPrice bool
-	// Day labels a meal that isn't today's, e.g. "5 Nov 2026". Empty for today.
+	// Day labels a meal that isn't today's, "tmrw" or "5 nov". Empty for today.
 	Day    string
 	Extras []string
 }
 
 // offerText builds the group post, e.g.
-// "sell kadamba non-veg lunch ₹60 (5 Nov 2026) + extras: Chicken 65, Lassi".
+// "sell kadamba non-veg lunch 60 (tmrw) + extras: Chicken 65, Lassi".
 func offerText(o offerDetails) string {
 	parts := []string{"sell", portalMealLabel(o.Mess, o.Diet, o.Meal)}
 	if o.ShowPrice && o.Price != "" {

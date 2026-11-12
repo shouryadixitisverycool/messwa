@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -262,7 +261,7 @@ func TestSellTaskSellsToFirstPayingBuyer(t *testing.T) {
 		synctest.Wait()
 		posts := sentTo(f.conn.messages(), f.group)
 		// [sell] show_price defaults to true, so the post shows the max.
-		if len(posts) != 1 || posts[0].text != "sell bakul non-veg lunch ₹1" {
+		if len(posts) != 1 || posts[0].text != "sell bakul non-veg lunch 1" {
 			t.Fatalf("group posts = %+v", posts)
 		}
 		offerID := posts[0].id
@@ -290,7 +289,7 @@ func TestSellTaskSellsToFirstPayingBuyer(t *testing.T) {
 		f.conn.emit(f.reply(buyerB, "me too"))
 		synctest.Wait()
 		prompts := sentTo(f.conn.messages(), buyerA)
-		if len(prompts) != 1 || !strings.HasPrefix(prompts[0].text, "pay ₹1 here via WhatsApp Pay, I'll send the QR") {
+		if len(prompts) != 2 || prompts[0].text != "ok 1" || prompts[1].text != "pay on whatsapp pay in this chat, not gpay/upi. qr right after" {
 			t.Fatalf("buyer A got %+v", prompts)
 		}
 		if got := sentTo(f.conn.messages(), buyerB); len(got) != 0 {
@@ -302,11 +301,11 @@ func TestSellTaskSellsToFirstPayingBuyer(t *testing.T) {
 		f.conn.emit(payment(buyerA, "pay-a"))
 		synctest.Wait()
 		toA, toB := sentTo(f.conn.messages(), buyerA), sentTo(f.conn.messages(), buyerB)
-		if len(toA) != 2 || !toA[1].qr {
+		if len(toA) != 3 || !toA[2].qr {
 			t.Fatalf("buyer A got %+v, want the prompt then the QR", toA)
 		}
-		if len(toB) != 1 || toB[0].text != "sorry sold" {
-			t.Fatalf("buyer B got %+v, want sorry sold", toB)
+		if len(toB) != 1 || toB[0].text != "sold sorry" {
+			t.Fatalf("buyer B got %+v, want sold sorry", toB)
 		}
 		if len(sentTo(f.conn.messages(), stranger)) != 0 {
 			t.Fatal("stranger was messaged")
@@ -369,10 +368,10 @@ func TestSellTaskResumesWithoutResending(t *testing.T) {
 		time.Sleep(time.Second)
 		f.conn.emit(payment(buyerA, "pay-a"))
 		synctest.Wait()
-		if toA := sentTo(f.conn.messages(), buyerA); len(toA) != 2 || !toA[1].qr {
+		if toA := sentTo(f.conn.messages(), buyerA); len(toA) != 3 || !toA[2].qr {
 			t.Fatalf("buyer A got %+v", toA)
 		}
-		if toB := sentTo(f.conn.messages(), buyerB); len(toB) != 1 || toB[0].text != "sorry sold" {
+		if toB := sentTo(f.conn.messages(), buyerB); len(toB) != 1 || toB[0].text != "sold sorry" {
 			t.Fatalf("buyer B got %+v", toB)
 		}
 		if task := f.task(id); task.State != store.TaskSold {
@@ -418,7 +417,7 @@ func TestResumedTurnTakesPaymentSentWhileDown(t *testing.T) {
 		time.Sleep(5 * time.Second) // reconnecting
 		f.conn.emit(paymentAt(buyerA, "pay-a", paidAt))
 		synctest.Wait()
-		if toA := sentTo(f.conn.messages(), buyerA); len(toA) != 2 || !toA[1].qr {
+		if toA := sentTo(f.conn.messages(), buyerA); len(toA) != 3 || !toA[2].qr {
 			t.Fatalf("buyer A got %+v", toA)
 		}
 		if task := f.task(id); task.State != store.TaskSold {
@@ -447,7 +446,7 @@ func TestSellTaskTurnsAndExpiry(t *testing.T) {
 		f.conn.emit(&events.Message{Info: types.MessageInfo{MessageSource: types.MessageSource{Chat: buyerA}, ID: "pass", Timestamp: time.Now()},
 			Message: &waE2E.Message{Conversation: proto.String("not interested")}})
 		synctest.Wait()
-		if got := sentTo(f.conn.messages(), buyerB); len(got) != 1 || !strings.HasPrefix(got[0].text, "pay ₹1") {
+		if got := sentTo(f.conn.messages(), buyerB); len(got) != 2 || got[0].text != "ok 1" {
 			t.Fatalf("B's turn didn't start: %+v", got)
 		}
 		time.Sleep(3 * time.Minute)

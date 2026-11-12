@@ -301,12 +301,13 @@ extras.
 The first buyer must reply privately to the quoted post within ten minutes
 (or DM about it, with [plain DMs](#offer-settings) on).
 Later buyers who quote the same offer join the queue in arrival order. Only
-the current buyer gets payment instructions. That buyer has up to two minutes
-to pay or can reply `not interested` to give up their turn. The bot finishes checking
+the current buyer gets payment instructions (`ok 1`, then `pay on whatsapp pay
+in this chat, not gpay/upi. qr right after`). That buyer has up to two minutes
+to pay, or can drop out with `not interested`, `nvm` and the like. The bot finishes checking
 any payment it received on time before it moves on to the next buyer. A
 payment from a previous buyer cannot release the QR after their turn ends.
-Once the QR is sent, the bot privately replies `sorry sold` to everyone still
-in the queue. The queue also closes when the meal ends. The example sends the
+Once the QR is sent, the bot privately replies `sold sorry` to everyone still
+in the queue. See [What buyers see](#what-buyers-see) for every message. The queue also closes when the meal ends. The example sends the
 embedded placeholder image.
 
 For a live portal sale, pass `-portal-qr` and omit `-offer-text` to build the
@@ -325,8 +326,9 @@ fetches the current QR after a matching payment message.
 
 The `[sell]` section of `config.toml` sets where the offer goes and what it
 says. Each setting has a flag of the same name that overrides it for one run.
-The defaults post what `deliver-qr -group` always posted: one group, price
-included, no extras.
+The defaults post to one group, price included, no extras:
+`sell kadamba veg lunch 30`, with `(tmrw)` or `(13 nov)` for a meal that
+isn't today's.
 
 | Setting | Flag | Default | Does |
 | --- | --- | --- | --- |
@@ -407,8 +409,9 @@ still matches a contact saved under their number. `-buyers` doesn't apply to
 `-peer`, where you picked the buyer yourself.
 
 **Payment images.** Some buyers pay by UPI outside WhatsApp Pay and send a
-screenshot. The bot can't read those, so by default it ignores the image and
-the buyer's two minutes run out. With `accept_payment_images = true` (or
+screenshot. The bot can't read those, so by default the image doesn't count.
+The buyer hears `cant see screenshots, pay on whatsapp pay here pls` once,
+and their two minutes keep running. With `accept_payment_images = true` (or
 `-accept-payment-images`), an image counts as the payment if:
 
 - it's an image message, in a DM from the buyer whose payment turn it is;
@@ -418,7 +421,7 @@ the buyer's two minutes run out. With `accept_payment_images = true` (or
   for `-peer`.
 
 Then the sale goes on as after a WhatsApp Pay payment: the QR goes out, the
-others hear `sorry sold` and the offer posts get a ✅. The log warns that
+others hear `sold sorry` and the offer posts get a ✅. The log warns that
 the payment was assumed from an image, the delivery ledger records it as
 paid by image, the sales page shows "By image, not verified" and SOLD ·
 UNVERIFIED, and a sell task ends with a detail that says so.
@@ -643,11 +646,11 @@ sell_tasks = true
 What a task does:
 
 1. Checks your portal registration for that meal with your saved mess API key, the same way `deliver-qr -portal-qr` does.
-2. Posts the offer using the `[sell]` settings, like `deliver-qr` does with no flags (see [Offer settings](#offer-settings)): `groups` or `group_count`, `post_gap` between copies, `show_price`, `mention_extras` and `accept_plain_dms`. With `show_price` the post shows `max_price`, e.g. `sell bakul non-veg lunch ₹60`. If `[sell]` names no groups, the task posts in the first group in `groups`. A group that can't be found is skipped; the task fails only if no copy posts.
+2. Posts the offer using the `[sell]` settings, like `deliver-qr` does with no flags (see [Offer settings](#offer-settings)): `groups` or `group_count`, `post_gap` between copies, `show_price`, `mention_extras` and `accept_plain_dms`. With `show_price` the post shows `max_price`, e.g. `sell bakul non-veg lunch 60`. If `[sell]` names no groups, the task posts in the first group in `groups`. A group that can't be found is skipped; the task fails only if no copy posts.
 3. Takes everyone who replies privately to any copy, in reply order. A plain DM that doesn't quote a post counts only with `[sell] accept_plain_dms = true`, under the rules in [Offer settings](#offer-settings). With `[sell] buyers = "unsaved_only"`, saved contacts are skipped and get nothing (see [Saved contacts](#offer-settings)).
 4. With `max_price` above `min_price`, negotiates with each of them at once (see [Negotiation](#negotiation)). Buyers who agree a price queue to pay in the order they agreed. With the two prices equal, every buyer queues to pay that price.
-5. Asks the first buyer in the pay queue to pay their price within two minutes. They can reply `not interested`. Then the next buyer gets a turn, as in `deliver-qr -group`.
-6. Sends the QR after a matching WhatsApp Pay payment (or, with `[sell] accept_payment_images = true`, an unverified image from that buyer after the prompt; see [Payment images](#offer-settings)), stops posting copies, tells everyone else who replied `sorry sold`, reacts ✅ to the meal's offer posts, and ends as `sold`.
+5. Asks the first buyer in the pay queue to pay their price within two minutes. They can drop out with `not interested`, `nvm` and the like. Then the next buyer gets a turn, as in `deliver-qr -group`.
+6. Sends the QR after a matching WhatsApp Pay payment (or, with `[sell] accept_payment_images = true`, an unverified image from that buyer after the prompt; see [Payment images](#offer-settings)), stops posting copies, tells everyone else who replied `sold sorry`, reacts ✅ to the meal's offer posts, and ends as `sold`.
 
 `[sell] handoff` doesn't apply to tasks. Instead `start_sell_task` takes `handoff`, `never` by default:
 
@@ -670,28 +673,49 @@ A task also ends when you cancel it (`cancelled`), when the meal ends (`expired`
 - A task sends at most 12 messages a minute and 80 in total. All tasks together send at most 15 a minute. One buyer gets at most 6 negotiation messages. The ✅ reactions after a sale skip the per-minute wait, so they don't time out behind the sale's own sends.
 - A task stops at the meal's end time.
 
-Each send is written to the database before it goes out: each group post, each negotiation message, each payment prompt, each `sorry sold`. The QR goes through the existing delivery ledger. When `run` restarts, it resumes active tasks before reconnecting and never repeats a claimed send. Replies to copies from before the restart still count, and groups that had no copy yet get one, `post_gap` apart. A buyer whose turn was under way keeps it, with at least 30 seconds after the restart, so a payment sent while `run` was down still counts. Buyers who were negotiating carry on from the bot's last price, and buyers who had agreed keep their place in the pay queue. A post or QR send that was claimed but never confirmed is not retried. A task with an unconfirmed QR send ends as `failed`; check the buyer's chat. Turning `sell_tasks` off cancels active tasks on the next start.
+Each send is written to the database before it goes out: each group post, each negotiation message, each payment prompt, each `sold sorry`, and each once-only line (`only whatsapp pay sorry`, the screenshot reply). The QR goes through the existing delivery ledger. When `run` restarts, it resumes active tasks before reconnecting and never repeats a claimed send. Replies to copies from before the restart still count, and groups that had no copy yet get one, `post_gap` apart. A buyer whose turn was under way keeps it, with at least 30 seconds after the restart, so a payment sent while `run` was down still counts. Buyers who were negotiating carry on from the bot's last price, and buyers who had agreed keep their place in the pay queue. A post or QR send that was claimed but never confirmed is not retried. A task with an unconfirmed QR send ends as `failed`; check the buyer's chat. Turning `sell_tasks` off cancels active tasks on the next start.
 
 #### Negotiation
 
 Buyers message several sellers at once and leave within a minute, so the bot answers everyone who replies straight away, from fixed templates. It reads each reply with fixed rules (`negotiate_parse.go`), built from a study of a few hundred real mess trades in DMs. Buyer text can only pick one of a few meanings and, for an offer, one number; there is no LLM in the loop. Only the numbers are stored, never the text.
 
-**Prices.** The bot opens at `max_price`: `₹60 for the bakul non-veg lunch, slightly negotiable`. It doesn't invite payment yet, because two buyers paying at once means a refund. It aims for the meal's usual price: the median ask for that serving at that mess, falling back to the same weekday's meal at that mess over four weeks (Wednesday and Sunday lunches go for more), then every mess, then the meal over four weeks. With no asks it aims for `max_price`. The lowest it accepts starts at that target, and over the last three hours before the meal ends it slides down to `min_price`. While two or more buyers are negotiating or waiting to pay, it stays at the target.
+**Prices.** The bot opens at `max_price` with just the number: `60`. It never says the price is negotiable; buyers assume it is. It doesn't invite payment yet, because two buyers paying at once means a refund. It aims for the meal's usual price: the median ask for that serving at that mess, falling back to the same weekday's meal at that mess over four weeks (Wednesday and Sunday lunches go for more), then every mess, then the meal over four weeks. With no asks it aims for `max_price`. The lowest it accepts starts at that target, and over the last three hours before the meal ends it slides down to `min_price`. While two or more buyers are negotiating or waiting to pay, it stays at the target.
 
 | The buyer says | The bot |
 | --- | --- |
 | `available?`, `price?`, `buy`, `interested`, `?` | Quotes the opening price |
 | `40?`, `buy @50`, `rs 25`, `20-25` (the higher end), `sixty` | At or above its price: agrees to its price. At or above its lowest: agrees to theirs. Below: counters halfway, in ₹5 steps |
-| `45 final`, `max 45`, `last 45` below its lowest | Says `₹50 is the lowest I can do` |
+| `45 final`, `max 45`, `last 45` below its lowest | Says `50 only`, then `thats the least` |
 | `too much`, `negotiable?`, `pls`, `people are selling at 70` | Comes down one step |
 | `ok`, `fine`, `done` (after a price), `same number?`, `gpay?`, `paying` | Agrees to its current price |
-| `nv?`, `kadamba?` | `it's the bakul non-veg lunch, ₹50` |
+| `nv?`, `kadamba?` | `bakul non-veg, 50` |
+| `upi id?`, `send qr`, `cash?`, `can i pay in other ways` | `only whatsapp pay sorry`, once. Asking again hands them to you |
 | `nvm`, `sorry bought`, `got from other`, `no thanks` | Stops talking to them |
 
 After two counters the next one is its lowest. A buyer still below that after the bot says so is handed to you.
 
-**Agreeing and paying.** A buyer who agrees joins the pay queue. If nobody is paying, they get the usual payment prompt at once, at the agreed price. If someone is, they hear `ok ₹50. someone's paying for it right now, if they don't in 2 min it's yours`, and get the prompt when their turn comes. A buyer who pays a price the bot quoted them before their turn gets the meal if nobody holds it. If someone does, that payment isn't honoured, and the buyer shows in `needs_you` with the amount to send back.
+**Agreeing and paying.** A buyer who agrees joins the pay queue. If nobody is paying, they get the usual payment prompt at once, at the agreed price. If someone is, they hear `ok 50`, then `someone else is paying rn, if they dont in 2 min its yours`, and get the prompt when their turn comes. A buyer who pays a price the bot quoted them before their turn gets the meal if nobody holds it. If someone does, that payment isn't honoured, and the buyer shows in `needs_you` with the amount to send back.
 
-**Buyers who need you.** The bot stops talking to a buyer, without ending the task, when they send two messages it can't read in a row (it restates its price once first), stay below its lowest, ask to pay some other way (a UPI ID, a QR), say they paid but no WhatsApp Pay payment arrives within a minute, or reach the 6-message limit. `sell_task_status` lists them under `needs_you` with why, a `wa.me` link, the bot's last price and their last offer. To sell to one of them yourself, cancel the task and use `deliver-qr -peer`.
+**Buyers who need you.** The bot stops talking to a buyer, without ending the task, when they send two messages it can't read in a row (it restates its price once first), stay below its lowest, ask to pay some other way a second time, say they paid but no WhatsApp Pay payment arrives within a minute, or reach the limit of 6 replies (a two-message reply counts once). `sell_task_status` lists them under `needs_you` with why, a `wa.me` link, the bot's last price and their last offer. To sell to one of them yourself, cancel the task and use `deliver-qr -peer`.
 
 A negotiation ends when the buyer has been quiet for two minutes after the bot's last message, or after six minutes in all. At most 10 buyers negotiate at once; the rest wait their turn.
+
+#### What buyers see
+
+Every DM the bot sends is in `buyer_text.go`. It writes like the sellers in the mess groups: lowercase, a bare number with no ₹, the meal named only in the group post, and a `?` to ask. Most replies have two or three variants picked at random, so a buyer who asks every meal doesn't get the same lines each time. Some go out as two messages about a second apart, like `50 only` then `thats the least`.
+
+| When | The bot says (one variant) |
+| --- | --- |
+| First price | `60`. For a meal that isn't today's: `60, its for tmrw` |
+| Coming down | `how about 50`, then `45?` |
+| Its lowest | `40 only`, `thats the least` |
+| `nv?`, `kadamba?` | `kadamba non-veg, 60` |
+| A message it can't read | `60 bro, want it?` |
+| Wants to pay another way | `only whatsapp pay sorry` |
+| Agreed while someone else pays | `ok 50`, `someone else is paying rn, if they dont in 2 min its yours` |
+| Payment turn | `ok 50`, `pay on whatsapp pay in this chat, not gpay/upi. qr right after` |
+| An image during the turn, with `accept_payment_images` off | `cant see screenshots, pay on whatsapp pay here pls` |
+| The QR | captioned with the mess and meal, e.g. `kadamba lunch` |
+| Sold to someone else | `sold sorry` |
+
+The payment prompt names WhatsApp Pay and rules out GPay and UPI because a payment to the number never reaches the bot. It doesn't give a deadline; the two minutes still apply.

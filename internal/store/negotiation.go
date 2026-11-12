@@ -27,6 +27,7 @@ var sellBuyerColumns = []string{
 	"agreed_at INTEGER",
 	"note TEXT NOT NULL DEFAULT ''",   // why the buyer needs you
 	"refund TEXT NOT NULL DEFAULT ''", // a payment the bot could not honour
+	"told TEXT NOT NULL DEFAULT ''",   // once-per-buyer lines sent, comma separated
 }
 
 // Buyer states a negotiating task adds. negotiating: the bot is haggling.
@@ -85,6 +86,23 @@ func (s *Store) ClaimNegotiationMessage(ctx context.Context, id int64, peer stri
  AND ? >= (SELECT min_paise FROM sell_tasks WHERE id=?)`,
 		n.Ask, n.Rounds, n.BotMsgs, n.Unknowns, n.LastOffer, joinPaise(n.Quoted), n.SaidLowest, n.StartedAt.Unix(),
 		id, peer, sent, id, n.Ask, id)
+	if err != nil {
+		return false, err
+	}
+	c, err := r.RowsAffected()
+	return c == 1, err
+}
+
+// ClaimBuyerLine claims a line the bot says to peer at most once per task,
+// such as "only whatsapp pay sorry", before it is sent. It reports false
+// when it was already claimed or the task isn't active.
+func (s *Store) ClaimBuyerLine(ctx context.Context, id int64, peer, kind string) (bool, error) {
+	if kind == "" || strings.Contains(kind, ",") {
+		return false, fmt.Errorf("bad line kind %q", kind)
+	}
+	r, err := s.db.ExecContext(ctx, `UPDATE sell_task_buyers SET told=told||','||?
+ WHERE task_id=? AND peer=? AND instr(told||',', ','||?||',')=0 AND `+activeTask,
+		kind, id, peer, kind, id)
 	if err != nil {
 		return false, err
 	}

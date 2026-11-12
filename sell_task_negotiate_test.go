@@ -121,7 +121,7 @@ func TestNegotiationCountersAgreesAndSells(t *testing.T) {
 			t.Fatal(err)
 		}
 		synctest.Wait()
-		if posts := sentTo(f.conn.messages(), f.group); len(posts) != 1 || posts[0].text != "sell bakul non-veg lunch ₹60" {
+		if posts := sentTo(f.conn.messages(), f.group); len(posts) != 1 || posts[0].text != "sell bakul non-veg lunch 60" {
 			t.Fatalf("posts = %+v", posts)
 		}
 
@@ -129,10 +129,10 @@ func TestNegotiationCountersAgreesAndSells(t *testing.T) {
 		f.conn.emit(f.reply(buyerA, "30?"))
 		f.conn.emit(f.reply(buyerB, "available?"))
 		settle()
-		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 1 || got[0] != "can do ₹45 for the bakul non-veg lunch" {
+		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 1 || got[0] != "how about 45" {
 			t.Fatalf("A got %q", got)
 		}
-		if got := texts(sentTo(f.conn.messages(), buyerB)); len(got) != 1 || got[0] != "₹60 for the bakul non-veg lunch, slightly negotiable" {
+		if got := texts(sentTo(f.conn.messages(), buyerB)); len(got) != 1 || got[0] != "60" {
 			t.Fatalf("B got %q", got)
 		}
 
@@ -140,7 +140,7 @@ func TestNegotiationCountersAgreesAndSells(t *testing.T) {
 		f.conn.emit(dm(buyerA, "40?"))
 		settle()
 		toA := texts(sentTo(f.conn.messages(), buyerA))
-		if len(toA) != 2 || !strings.HasPrefix(toA[1], "pay ₹40 here via WhatsApp Pay, I'll send the QR. Please pay before") {
+		if len(toA) != 3 || toA[1] != "ok 40" || toA[2] != "pay on whatsapp pay in this chat, not gpay/upi. qr right after" {
 			t.Fatalf("A got %q", toA)
 		}
 		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerOffered || b.Amount != "40.00" {
@@ -151,7 +151,7 @@ func TestNegotiationCountersAgreesAndSells(t *testing.T) {
 		f.conn.emit(dm(buyerB, "same number?"))
 		settle()
 		toB := texts(sentTo(f.conn.messages(), buyerB))
-		if len(toB) != 2 || toB[1] != "ok ₹60. someone's paying for it right now, if they don't in 2 min it's yours" {
+		if len(toB) != 3 || toB[1] != "ok 60" || toB[2] != "someone else is paying rn, if they dont in 2 min its yours" {
 			t.Fatalf("B got %q", toB)
 		}
 
@@ -163,7 +163,7 @@ func TestNegotiationCountersAgreesAndSells(t *testing.T) {
 		if toA[len(toA)-1] != "[QR]" {
 			t.Fatalf("A got %q", toA)
 		}
-		if toB = texts(sentTo(f.conn.messages(), buyerB)); toB[len(toB)-1] != "sorry sold" {
+		if toB = texts(sentTo(f.conn.messages(), buyerB)); toB[len(toB)-1] != "sold sorry" {
 			t.Fatalf("B got %q", toB)
 		}
 		if task := f.task(id); task.State != store.TaskSold {
@@ -251,7 +251,7 @@ func TestNegotiationParksUnreadableBuyer(t *testing.T) {
 		f.conn.emit(dm(buyerA, "the weather is nice"))
 		settle()
 		got := texts(sentTo(f.conn.messages(), buyerA))
-		want := []string{"₹60 for the bakul non-veg lunch, slightly negotiable", "₹60 for the bakul non-veg lunch, ok?"}
+		want := []string{"60", "60 bro, want it?"}
 		if strings.Join(got, "|") != strings.Join(want, "|") {
 			t.Fatalf("A got %q, want %q", got, want)
 		}
@@ -290,7 +290,7 @@ func TestNegotiationPaymentBeforeTurn(t *testing.T) {
 		if len(toA) != 2 || toA[1] != "[QR]" {
 			t.Fatalf("A got %q", toA)
 		}
-		if toB := texts(sentTo(f.conn.messages(), buyerB)); toB[len(toB)-1] != "sorry sold" {
+		if toB := texts(sentTo(f.conn.messages(), buyerB)); toB[len(toB)-1] != "sold sorry" {
 			t.Fatalf("B got %q", toB)
 		}
 		if task := f.task(id); task.State != store.TaskSold {
@@ -363,13 +363,14 @@ func TestNegotiationMessageCap(t *testing.T) {
 		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerParked {
 			t.Fatalf("A = %+v", b)
 		}
-		// A burst collapses into one reply.
+		// A burst collapses into one reply, here the lowest in two
+		// messages.
 		f.conn.emit(f.reply(buyerB, "20?"))
 		f.conn.emit(dm(buyerB, "25?"))
 		f.conn.emit(dm(buyerB, "pls"))
 		settle()
-		if got := sentTo(f.conn.messages(), buyerB); len(got) != 1 {
-			t.Fatalf("B got %+v", got)
+		if got := texts(sentTo(f.conn.messages(), buyerB)); strings.Join(got, "|") != "50 only|thats the least" {
+			t.Fatalf("B got %q", got)
 		}
 	})
 }
@@ -433,7 +434,7 @@ func TestNegotiationResumesAfterRestart(t *testing.T) {
 		f.conn.emit(dm(buyerA, "ok"))
 		settle()
 		toA := texts(sentTo(f.conn.messages(), buyerA))
-		if len(toA) != 2 || !strings.HasPrefix(toA[1], "pay ₹45 here") {
+		if len(toA) != 3 || toA[1] != "ok 45" {
 			t.Fatalf("A got %q", toA)
 		}
 		if b := buyerState(t, f, id, buyerA); b.Agreed != "45.00" {
@@ -482,4 +483,57 @@ func TestNegotiationWithoutRoomBehavesAsBefore(t *testing.T) {
 	if !negotiates(task) {
 		t.Fatal("a price range doesn't negotiate")
 	}
+}
+
+// TestNegotiationPayOtherWay is the 12 Nov "can i pay in other ways" case.
+// The bot says once that it's WhatsApp Pay only and keeps going; asking
+// again hands the buyer to you.
+func TestNegotiationPayOtherWay(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m := f.negotiatingManager(ctx, 60)
+		id, err := m.Start(ctx, 0, f.date, "lunch", 30, 60, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+
+		// While haggling.
+		f.conn.emit(f.reply(buyerA, "price?"))
+		settle()
+		f.conn.emit(dm(buyerA, "upi id?"))
+		settle()
+		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerNegotiating {
+			t.Fatalf("A = %+v after the first ask", b)
+		}
+		f.conn.emit(dm(buyerA, "cash?"))
+		settle()
+		if got := texts(sentTo(f.conn.messages(), buyerA)); strings.Join(got, "|") != "60|only whatsapp pay sorry" {
+			t.Fatalf("A got %q", got)
+		}
+		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerParked {
+			t.Fatalf("A = %+v after asking again", b)
+		}
+
+		// During the buyer's own payment turn.
+		f.conn.emit(f.reply(buyerB, "price?"))
+		settle()
+		f.conn.emit(dm(buyerB, "ok"))
+		settle()
+		f.conn.emit(dm(buyerB, "can i pay in other ways *wink wink*"))
+		settle()
+		want := []string{"60", "ok 60", "pay on whatsapp pay in this chat, not gpay/upi. qr right after", "only whatsapp pay sorry"}
+		if got := texts(sentTo(f.conn.messages(), buyerB)); strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Fatalf("B got %q, want %q", got, want)
+		}
+		// B still holds the turn and can pay.
+		f.conn.emit(paymentOf(buyerB, "pay-b", "60.00", time.Now()))
+		synctest.Wait()
+		if got := texts(sentTo(f.conn.messages(), buyerB)); got[len(got)-1] != "[QR]" {
+			t.Fatalf("B got %q", got)
+		}
+	})
 }

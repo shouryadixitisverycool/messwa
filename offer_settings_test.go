@@ -19,22 +19,22 @@ import (
 )
 
 func TestOfferText(t *testing.T) {
-	base := offerDetails{Mess: "kadamba", Diet: "nonveg", Meal: "lunch", Price: "₹60", ShowPrice: true}
+	base := offerDetails{Mess: "kadamba", Diet: "nonveg", Meal: "lunch", Price: "60", ShowPrice: true}
 	for _, tc := range []struct {
 		name string
 		edit func(*offerDetails)
 		want string
 	}{
-		// The default settings must post exactly what deliver-qr posted before [sell].
-		{"default", func(*offerDetails) {}, "sell kadamba non-veg lunch ₹60"},
-		{"other day", func(o *offerDetails) { o.Day = "5 Nov 2026" }, "sell kadamba non-veg lunch ₹60 (5 Nov 2026)"},
+		// The default settings post the mess, diet, meal and price, the way people do.
+		{"default", func(*offerDetails) {}, "sell kadamba non-veg lunch 60"},
+		{"other day", func(o *offerDetails) { o.Day = "tmrw" }, "sell kadamba non-veg lunch 60 (tmrw)"},
 		{"no price", func(o *offerDetails) { o.ShowPrice = false }, "sell kadamba non-veg lunch"},
-		{"veg", func(o *offerDetails) { o.Mess, o.Diet = "palash", "veg" }, "sell palash veg lunch ₹60"},
-		{"no diet", func(o *offerDetails) { o.Diet = "" }, "sell kadamba lunch ₹60"},
-		{"extras", func(o *offerDetails) { o.Extras = []string{"Chicken 65", "Lassi"} }, "sell kadamba non-veg lunch ₹60 + extras: Chicken 65, Lassi"},
+		{"veg", func(o *offerDetails) { o.Mess, o.Diet = "palash", "veg" }, "sell palash veg lunch 60"},
+		{"no diet", func(o *offerDetails) { o.Diet = "" }, "sell kadamba lunch 60"},
+		{"extras", func(o *offerDetails) { o.Extras = []string{"Chicken 65", "Lassi"} }, "sell kadamba non-veg lunch 60 + extras: Chicken 65, Lassi"},
 		{"extras no price other day", func(o *offerDetails) {
-			o.ShowPrice, o.Day, o.Extras = false, "5 Nov 2026", []string{"Lassi"}
-		}, "sell kadamba non-veg lunch (5 Nov 2026) + extras: Lassi"},
+			o.ShowPrice, o.Day, o.Extras = false, "tmrw", []string{"Lassi"}
+		}, "sell kadamba non-veg lunch (tmrw) + extras: Lassi"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			o := base

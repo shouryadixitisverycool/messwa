@@ -2,13 +2,14 @@ package main
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestHaggleWalk(t *testing.T) {
 	end := time.Date(2026, 11, 11, 14, 30, 0, 0, time.UTC)
-	h := newHaggle(30, 60, 50, true, end, "lunch")
+	h := newHaggle(30, 60, 50, true, end, "kadamba veg", "")
 	cases := []struct {
 		left      time.Duration
 		competing bool
@@ -27,18 +28,18 @@ func TestHaggleWalk(t *testing.T) {
 		}
 	}
 	// No market data: hold at max until time runs short.
-	if h := newHaggle(30, 60, 0, false, end, "lunch"); h.target != 60 || h.walk(end.Add(-4*time.Hour), false) != 60 {
+	if h := newHaggle(30, 60, 0, false, end, "kadamba veg", ""); h.target != 60 || h.walk(end.Add(-4*time.Hour), false) != 60 {
 		t.Fatalf("target = %d", h.target)
 	}
 	// A median outside the range is clamped to it.
-	if h := newHaggle(30, 60, 80, true, end, "lunch"); h.target != 60 {
+	if h := newHaggle(30, 60, 80, true, end, "kadamba veg", ""); h.target != 60 {
 		t.Fatalf("target = %d", h.target)
 	}
-	if h := newHaggle(30, 60, 20, true, end, "lunch"); h.target != 30 {
+	if h := newHaggle(30, 60, 20, true, end, "kadamba veg", ""); h.target != 30 {
 		t.Fatalf("target = %d", h.target)
 	}
 	// Tiny prices concede by ₹1.
-	if h := newHaggle(1, 3, 0, false, end, "lunch"); h.unit != 1 {
+	if h := newHaggle(1, 3, 0, false, end, "kadamba veg", ""); h.unit != 1 {
 		t.Fatalf("unit = %d", h.unit)
 	}
 }
@@ -58,8 +59,8 @@ func replay(h haggle, now time.Time, msgs ...string) []string {
 		case s.pass:
 			return append(out, "PASS")
 		}
-		if s.reply != "" {
-			out = append(out, s.reply)
+		if len(s.reply) > 0 {
+			out = append(out, strings.Join(s.reply, " / "))
 			s.next.botMsgs++
 		}
 		st = s.next
@@ -78,41 +79,41 @@ func TestHaggleDecide(t *testing.T) {
 		want     []string
 	}{
 		{"opens then agrees", 30, 60, 50, []string{"available?", "ok"},
-			[]string{"₹60 for the lunch, slightly negotiable", "AGREE 60"}},
+			[]string{"60", "AGREE 60"}},
 		{"ok before any price is an opener", 30, 60, 50, []string{"ok"},
-			[]string{"₹60 for the lunch, slightly negotiable"}},
+			[]string{"60"}},
 		{"same number agrees at once", 30, 60, 50, []string{"same number?"},
 			[]string{"AGREE 60"}},
 		{"a fair first offer is taken", 30, 60, 50, []string{"Buy @55"},
 			[]string{"AGREE 55"}},
 		{"offer at or above the ask takes the ask", 30, 60, 50, []string{"price?", "70"},
-			[]string{"₹60 for the lunch, slightly negotiable", "AGREE 60"}},
+			[]string{"60", "AGREE 60"}},
 		// Your 2 Apr sale: 55 -> B50? -> 50. Here the bot opens at 60.
 		{"counter then meet", 30, 60, 45, []string{"price?", "40?", "45"},
-			[]string{"₹60 for the lunch, slightly negotiable", "can do ₹50", "AGREE 45"}},
+			[]string{"60", "how about 50", "AGREE 45"}},
 		// Your 8 Mar sale: 100 -> B80 x4 -> 80. The bot stops at its lowest
 		// and hands a buyer who won't move to you.
 		{"firm lowballer is parked", 60, 100, 90, []string{"price?", "80", "80", "80", "80"},
-			[]string{"₹100 for the lunch, slightly negotiable", "₹90 is the lowest I can do", "PARK"}},
+			[]string{"100", "90 only / thats the least", "PARK"}},
 		{"firm offer gets the lowest at once", 30, 60, 45, []string{"price?", "35 final"},
-			[]string{"₹60 for the lunch, slightly negotiable", "₹45 is the lowest I can do"}},
+			[]string{"60", "45 only / thats the least"}},
 		{"a counter that reaches the walk-away price is the lowest", 30, 80, 40, []string{"price?", "20", "25", "30"},
-			[]string{"₹80 for the lunch, slightly negotiable", "can do ₹50", "₹40 is the lowest I can do", "PARK"}},
+			[]string{"80", "how about 50", "40 only / thats the least", "PARK"}},
 		{"two counters then lowest", 30, 100, 80, []string{"price?", "75", "76", "77"},
-			[]string{"₹100 for the lunch, slightly negotiable", "can do ₹90", "can do ₹85", "₹80 is the lowest I can do"}},
+			[]string{"100", "how about 90", "85?", "80 only / thats the least"}},
 		{"lower without a number steps down", 30, 60, 40, []string{"price?", "too much", "too much", "too much", "too much"},
-			[]string{"₹60 for the lunch, slightly negotiable", "can do ₹50", "can do ₹45", "₹40 is the lowest I can do", "PARK"}},
+			[]string{"60", "how about 50", "45?", "40 only / thats the least", "PARK"}},
 		{"question gets the label and price", 30, 60, 50, []string{"price?", "nv?"},
-			[]string{"₹60 for the lunch, slightly negotiable", "it's the lunch, ₹60"}},
+			[]string{"60", "kadamba veg, 60"}},
 		{"pass", 30, 60, 50, []string{"price?", "sorry bought"},
-			[]string{"₹60 for the lunch, slightly negotiable", "PASS"}},
+			[]string{"60", "PASS"}},
 		{"pay another way parks", 30, 60, 50, []string{"price?", "upi id?"},
-			[]string{"₹60 for the lunch, slightly negotiable", "PARK"}},
+			[]string{"60", "PARK"}},
 		{"absurd number is unreadable", 30, 60, 50, []string{"price?", "500", "999"},
-			[]string{"₹60 for the lunch, slightly negotiable", "₹60 for the lunch, ok?", "PARK"}},
+			[]string{"60", "60 bro, want it?", "PARK"}},
 	}
 	for _, c := range cases {
-		h := newHaggle(c.min, c.max, c.median, true, end, "lunch")
+		h := newHaggle(c.min, c.max, c.median, true, end, "kadamba veg", "")
 		got := replay(h, early, c.msgs...)
 		if len(got) != len(c.want) {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
@@ -129,12 +130,29 @@ func TestHaggleDecide(t *testing.T) {
 
 func TestHaggleSoftensNearTheEnd(t *testing.T) {
 	end := time.Date(2026, 11, 11, 14, 30, 0, 0, time.UTC)
-	h := newHaggle(30, 60, 50, true, end, "lunch")
+	h := newHaggle(30, 60, 50, true, end, "kadamba veg", "")
 	// Four hours out ₹35 is too low; ten minutes out it's fine.
 	if got := replay(h, end.Add(-4*time.Hour), "price?", "35"); got[len(got)-1] == "AGREE 35" {
 		t.Fatalf("early: %q", got)
 	}
 	if got := replay(h, end.Add(-10*time.Minute), "price?", "35"); got[len(got)-1] != "AGREE 35" {
 		t.Fatalf("late: %q", got)
+	}
+}
+
+// A meal that isn't today's says so with the first price, whichever reply
+// carries it.
+func TestHaggleNamesTheDay(t *testing.T) {
+	end := time.Date(2026, 11, 12, 14, 30, 0, 0, time.UTC)
+	h := newHaggle(30, 60, 50, true, end, "kadamba veg", "tmrw")
+	early := end.Add(-4 * time.Hour)
+	if got := replay(h, early, "price?", "nv?"); strings.Join(got, "|") != "60, its for tmrw|kadamba veg, 60" {
+		t.Fatalf("opening: %q", got)
+	}
+	if got := replay(h, early, "45?"); strings.Join(got, "|") != "how about 55, its for tmrw" {
+		t.Fatalf("counter first: %q", got)
+	}
+	if got := replay(h, early, "35 final"); strings.Join(got, "|") != "50 only / thats the least, its for tmrw" {
+		t.Fatalf("lowest first: %q", got)
 	}
 }
