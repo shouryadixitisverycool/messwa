@@ -262,6 +262,16 @@ The old systemd unit (`~/.config/systemd/user/messwa.service`) is disabled. Don'
 
 `/healthz` returns 503 when the WhatsApp connection is down.
 
+### whatsmeow's log
+
+whatsmeow, the WhatsApp library, logs to the same output as messwa, tagged
+`component=whatsmeow` and its module. By default only warnings and errors
+show. Set `MESSWA_WA_LOG` to `info` or `debug` for more (in `.env` for Docker,
+then `docker compose up -d`). `debug` also logs every stanza sent and
+received, which is a lot. Stanzas are cut down to their tags and attributes
+first: chat JIDs, message IDs, push names and group settings appear, message
+bodies never do, encrypted or not.
+
 ## Known limits
 
 - History is mostly live-only. The first link gets a partial history sync (messages from the last 48h are ingested). After that, anything that arrives while messwa is down is lost.
@@ -344,6 +354,7 @@ included, no extras.
 | `repost_messages` | `-repost-messages` | `10` | Repost once this many messages came in after a copy. 0 turns it off |
 | `repost_listings` | `-repost-listings` | `3` | Repost once this many other sellers listed the same meal at the same mess after a copy. 0 turns it off |
 | `max_reposts` | `-max-reposts` | `6` | Most fresh copies per group for one offer, 0 to 12 |
+| `accept_payment_images` | `-accept-payment-images` | `false` | Count an image from the paying buyer as their payment, unverified, see below |
 
 With `groups` or `group_count` set, `deliver-qr` without `-peer` posts to
 those groups, so `-group` is no longer needed:
@@ -367,6 +378,18 @@ starts as soon as the first copy is posted and the rest follow `post_gap`
 apart. Once the meal sells or is handed off, no more copies go out. If one copy fails to post,
 the others still go out and replies to the failed one still count, in case
 WhatsApp posted it anyway. The command stops only when no copy posts.
+
+Right before each copy, messwa asks WhatsApp for that group's details
+again. whatsmeow builds a group message from the details it cached last,
+and the group list it reads first can describe a group only partly. On
+12 Nov 2026 the list returned "Mess Buy Sell @ IIITH - 2", a community
+subgroup, with no name, and every post to it failed with `server returned
+error 479` (invalid stanza). A partial cache entry is the suspected cause,
+not a confirmed one. Each failed copy is logged as it fails, with the
+group's name (or its JID when WhatsApp gives none) and the addressing mode
+and member count from both the list and the fresh query. If posts to a
+group keep failing, rerun with `MESSWA_WA_LOG=debug` (see
+[whatsmeow's log](#whatsmeows-log)).
 
 **Reposts.** In these groups a post scrolls out of view within minutes at
 lunch and dinner. While the meal is unsold, messwa puts a fresh copy in a
@@ -410,7 +433,6 @@ the copy before it.
 With `repost` on, `deliver-qr -group` waits for a first reply until ten
 minutes after its last copy, once no group can get another, instead of ten
 minutes after the first.
-
 **Plain DMs.** By default only a private reply that quotes a copy of the
 offer counts. Plenty of buyers just DM "price?" or "is the kadamba lunch
 available" instead. With `accept_plain_dms = true` (or `-accept-plain-dms`)
@@ -453,6 +475,35 @@ stored](#what-gets-stored)): a name in your address book, looked up under
 both the buyer's number and their LID, so a buyer who appears only by LID
 still matches a contact saved under their number. `-buyers` doesn't apply to
 `-peer`, where you picked the buyer yourself.
+
+**Payment images.** Some buyers pay by UPI outside WhatsApp Pay and send a
+screenshot. The bot can't read those, so by default it ignores the image and
+the buyer's two minutes run out. With `accept_payment_images = true` (or
+`-accept-payment-images`), an image counts as the payment if:
+
+- it's an image message, in a DM from the buyer whose payment turn it is;
+- it arrives after the bot sent them the payment prompt, so after they
+  agreed a price;
+- it's inside their pay window: their two minutes, or until the meal ends
+  for `-peer`.
+
+Then the sale goes on as after a WhatsApp Pay payment: the QR goes out, the
+others hear `sorry sold` and the offer posts get a ✅. The log warns that
+the payment was assumed from an image, the delivery ledger records it as
+paid by image, the sales page shows "By image, not verified" and SOLD ·
+UNVERIFIED, and a sell task ends with a detail that says so.
+
+**A screenshot proves nothing.** Anyone can send an old screenshot, someone
+else's, an edited one, or a picture of their lunch, and the bot sends the QR
+all the same. A sent QR can't be taken back. Turn this on only if you check
+your UPI app after every such sale and can live with losing a meal now and
+then. Images from other buyers, images sent before the prompt and anything
+after the window never count, and every image the buyer sends during their
+turn that doesn't count is logged with the reason.
+
+With `-peer`, the setting and the flag apply too. There's no prompt unless
+you pass `-offer-text`, so any image from the buyer after arming counts:
+`-peer` means you already agreed the price in the chat.
 
 ### Taking over the chat yourself
 
@@ -497,7 +548,8 @@ Finish the sale one of two ways:
   ```
 
   This changes only the database, so it's safe while `run` is up. It refuses
-  meals that are armed, paid or sent.
+  meals that are armed, paid or sent. For an armed meal nobody paid for, add
+  `-unpaid` (see [One-meal QR delivery](#one-meal-qr-delivery)).
 
 If you send the QR from your phone instead, messwa never sees the payment.
 The meal stays handed off on the sales page and doesn't count toward
@@ -589,9 +641,15 @@ triggering message ID. Anyone who can make WhatsApp deliver a payment message
 without a readable amount then gets the QR without paying, so leave it off
 unless you check payments yourself afterwards.
 
-Normal text, screenshots, other buyers, expired messages, mismatched payment
-details and known incomplete transactions do not qualify. The WhatsApp event
+Normal text, screenshots (unless `accept_payment_images` is on, see [Offer
+settings](#offer-settings)), other buyers, expired messages, mismatched
+payment details and known incomplete transactions do not qualify. The WhatsApp event
 does not independently verify that funds arrived.
+
+When the buyer's WhatsApp Pay payment doesn't qualify, the log says so at
+info level with the payment's message ID and which check failed, such as
+`payment amount or currency does not match`. It never logs the payment's
+contents. `-diagnostics` adds the same line for the buyer's other messages.
 
 The data database stores the buyer, amount, image hash or portal-account binding, arming time, payment
 message ID, outgoing image ID and state for each date/meal, plus the group
@@ -606,6 +664,21 @@ and make any follow-up manually; a timeout does not prove that delivery failed.
 The `sent` state records WhatsApp's send acknowledgement, not the buyer opening
 the image. Keep the same state database when restarting. Do not run two
 connections using the same linked-device session.
+
+A `-peer` run you stop before the buyer pays leaves the meal `armed` for that
+buyer at that price. Rerunning with the same `-peer`, `-amount` and image
+picks it up again. Any other buyer or price is refused until you free it:
+
+```sh
+./messwa release-handoff -date 2026-11-12 -meal lunch -unpaid
+```
+
+`-unpaid` frees a meal that is `armed` with no payment claimed, as well as a
+handed-off one. It refuses meals that are paid, `sending` or `sent`, and
+meals an active sell task is selling (cancel the task, which frees its
+reservation). It changes only the database, so it's safe while `run` is up.
+Stop the `deliver-qr` that armed the meal first: if that buyer pays after the
+release, that run finds no reservation and sends no QR.
 
 This command is not exposed through MCP and does not implement automatic
 registration imports, scheduling, negotiation or refunds. To negotiate,
@@ -665,7 +738,7 @@ What a task does:
 3. Takes everyone who replies privately to any copy, in reply order. A plain DM that doesn't quote a post counts only with `[sell] accept_plain_dms = true`, under the rules in [Offer settings](#offer-settings). With `[sell] buyers = "unsaved_only"`, saved contacts are skipped and get nothing (see [Saved contacts](#offer-settings)).
 4. With `max_price` above `min_price`, negotiates with each of them at once (see [Negotiation](#negotiation)). Buyers who agree a price queue to pay in the order they agreed. With the two prices equal, every buyer queues to pay that price.
 5. Asks the first buyer in the pay queue to pay their price within two minutes. They can reply `not interested`. Then the next buyer gets a turn, as in `deliver-qr -group`.
-6. Sends the QR after a matching WhatsApp Pay payment, stops posting copies, tells everyone else who replied `sorry sold`, reacts ✅ to the meal's offer posts, and ends as `sold`.
+6. Sends the QR after a matching WhatsApp Pay payment (or, with `[sell] accept_payment_images = true`, an unverified image from that buyer after the prompt; see [Payment images](#offer-settings)), stops posting copies, tells everyone else who replied `sorry sold`, reacts ✅ to the meal's offer posts, and ends as `sold`.
 
 `sell_task_status` lists every copy with its copy number (0 for the first in a group, then one per repost), marks each group's current copy, and under `reposts` says per group how many messages and same-mess listings came in after the current copy, when the next copy goes out and why, or why that group gets no more.
 

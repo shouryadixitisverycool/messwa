@@ -64,6 +64,12 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 		if len(sell.Groups) == 0 {
 			return errors.New("choose -peer, or -group/-group-count, or set groups or group_count under [sell] in the config")
 		}
+	} else {
+		// A -peer sale takes only this one [sell] setting.
+		sell.AcceptPaymentImages = cfg.Sell.AcceptPaymentImages
+		if overrides.paymentImages != nil {
+			sell.AcceptPaymentImages = *overrides.paymentImages
+		}
 	}
 	groupMode := len(sell.Groups) > 0
 	if groupMode && !*portalQR && strings.TrimSpace(*offer) == "" {
@@ -113,7 +119,10 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	s := &sale{
 		log: log, loc: cfg.Location(), date: *date, meal: *meal, end: slot.End,
 		image: data, testImage: *qr == "", imageHash: fmt.Sprintf("%x", sha256.Sum256(data)),
-		diagnostics: *diagnostics, assumeUnreadable: *assumeUnreadable,
+		diagnostics: *diagnostics, assumeUnreadable: *assumeUnreadable, acceptImages: sell.AcceptPaymentImages,
+	}
+	if s.acceptImages {
+		fmt.Fprintln(os.Stderr, "accept_payment_images is on: an image the buyer sends after the payment prompt counts as payment. Nothing verifies it; check your UPI app before trusting the sale.")
 	}
 	var extras []string
 	if *portalQR {
@@ -422,7 +431,9 @@ func paymentMatch(e *events.Message, amounts []string, armedAt, endsAt, now time
 	return "", first
 }
 
-func deliveryRejection(e *events.Message, amount string, armedAt, endsAt, now time.Time) error {
+// dmRejection checks what every message that can trigger a delivery needs:
+// an incoming personal DM sent inside the delivery window.
+func dmRejection(e *events.Message, armedAt, endsAt, now time.Time) error {
 	if e == nil || e.Info.IsFromMe || e.Info.IsGroup || e.Info.ID == "" {
 		return errors.New("not an incoming DM with a message ID")
 	}
@@ -431,6 +442,26 @@ func deliveryRejection(e *events.Message, amount string, armedAt, endsAt, now ti
 	}
 	if e.Info.Timestamp.Before(armedAt) || !e.Info.Timestamp.Before(endsAt) || !now.Before(endsAt) || e.Info.Timestamp.After(now.Add(5*time.Second)) {
 		return errors.New("message time outside the delivery window")
+	}
+	return nil
+}
+
+// imagePaymentRejection checks an image the buyer sent as their payment
+// under [sell] accept_payment_images. Only who sent it and when are
+// checked; what the image shows is not.
+func imagePaymentRejection(e *events.Message, armedAt, endsAt, now time.Time) error {
+	if err := dmRejection(e, armedAt, endsAt, now); err != nil {
+		return err
+	}
+	if e.Message.GetImageMessage() == nil {
+		return errors.New("not an image")
+	}
+	return nil
+}
+
+func deliveryRejection(e *events.Message, amount string, armedAt, endsAt, now time.Time) error {
+	if err := dmRejection(e, armedAt, endsAt, now); err != nil {
+		return err
 	}
 	payment := e.Message.GetSendPaymentMessage()
 	if payment == nil {

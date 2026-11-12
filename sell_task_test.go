@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
@@ -51,6 +52,10 @@ type fakeConn struct {
 	// 479 in some groups. tried counts those attempts.
 	refuse map[types.JID]bool
 	tried  map[types.JID]int
+	// info answers GetGroupInfo; groups answers it when info is nil.
+	info      map[types.JID]*types.GroupInfo
+	infoErr   error
+	infoAsked []types.JID
 }
 
 func newFakeConn(group types.JID) *fakeConn {
@@ -96,6 +101,24 @@ func (f *fakeConn) BuildReaction(chat, _ types.JID, id types.MessageID, reaction
 }
 
 func (f *fakeConn) GetJoinedGroups(context.Context) ([]*types.GroupInfo, error) { return f.groups, nil }
+
+func (f *fakeConn) GetGroupInfo(_ context.Context, jid types.JID) (*types.GroupInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.infoAsked = append(f.infoAsked, jid)
+	if f.infoErr != nil {
+		return nil, f.infoErr
+	}
+	if g := f.info[jid]; g != nil {
+		return g, nil
+	}
+	for _, g := range f.groups {
+		if g.JID == jid {
+			return g, nil
+		}
+	}
+	return nil, errors.New("not in group")
+}
 
 func (f *fakeConn) PNForLID(_ context.Context, lid types.JID) types.JID {
 	f.mu.Lock()
@@ -550,5 +573,38 @@ func TestSendLimits(t *testing.T) {
 		if err := l.wait(t.Context(), 5); err == nil {
 			t.Fatal("task sent past its cap")
 		}
+	})
+}
+
+// TestRejectedPaymentIsLogged covers the 12 Nov case where a recovered
+// payment was rejected and only -diagnostics would have said why.
+func TestRejectedPaymentIsLogged(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m := f.manager(ctx)
+		var buf bytes.Buffer
+		m.log = slog.New(slog.NewTextHandler(&buf, nil))
+		if _, err := m.Start(ctx, 0, f.date, "lunch", 1, 1, ""); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		f.conn.emit(f.reply(buyerA, "interested"))
+		synctest.Wait()
+		time.Sleep(time.Second)
+		f.conn.emit(paymentOf(buyerA, "pay-low", "0.50", time.Now()))
+		f.conn.emit(dm(buyerA, "paid"))
+		synctest.Wait()
+		out := buf.String()
+		if !strings.Contains(out, `msg="payment did not trigger delivery" payment_id=pay-low`) || !strings.Contains(out, `reason="payment amount or currency does not match"`) {
+			t.Fatalf("rejection not logged:\n%s", out)
+		}
+		if strings.Contains(out, "buyer message did not trigger delivery") {
+			t.Fatalf("a text message was logged without -diagnostics:\n%s", out)
+		}
+		cancel()
+		synctest.Wait()
 	})
 }

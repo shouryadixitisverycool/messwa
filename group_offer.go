@@ -214,8 +214,13 @@ func (q *offerQueue) next(ctx context.Context) (types.JID, error) {
 
 // offerTarget is a joined group an offer goes to.
 type offerTarget struct {
-	JID  types.JID
+	JID types.JID
+	// Name is the group's subject, or how the config names it when the
+	// group list returned none.
 	Name string
+	// listed is the group as the joined-groups list described it, fresh
+	// as a direct query did just before posting.
+	listed, fresh *types.GroupInfo
 }
 
 // findGroups resolves exact group names or JIDs among the joined groups.
@@ -256,7 +261,54 @@ func pickGroup(joined []*types.GroupInfo, group string) (offerTarget, error) {
 	if selected.JID.Server != types.GroupServer || selected.JID.User == "" {
 		return offerTarget{}, errors.New("selected group has an invalid JID")
 	}
-	return offerTarget{JID: selected.JID, Name: selected.Name}, nil
+	name := selected.Name
+	if name == "" {
+		name = group
+	}
+	return offerTarget{JID: selected.JID, Name: name, listed: selected}, nil
+}
+
+// groupAttrs describes a group's metadata for the log: what decides how
+// whatsmeow addresses a group message. No names or members.
+func groupAttrs(prefix string, g *types.GroupInfo) []any {
+	if g == nil {
+		return nil
+	}
+	return []any{
+		prefix + "addressing_mode", string(g.AddressingMode),
+		prefix + "participants", len(g.Participants),
+		prefix + "size", g.ParticipantCount,
+		prefix + "has_subject", g.Name != "",
+		prefix + "announce", g.IsAnnounce,
+		prefix + "default_subgroup", g.IsDefaultSubGroup,
+		prefix + "parent", g.LinkedParentJID.String(),
+	}
+}
+
+// refreshGroup asks WhatsApp for g's details right before a copy goes out.
+// whatsmeow builds a group message from the details it cached last
+// (addressing mode and members), and the joined-groups list overwrites
+// that cache. The list can describe a group only partly: it gave one
+// community subgroup no subject, and every post to that group failed with
+// error 479 (invalid stanza). A partial cache entry is the suspected
+// cause. A direct query replaces the entry with the group's full details.
+func refreshGroup(ctx context.Context, conn saleConn, log *slog.Logger, g offerTarget) offerTarget {
+	info, err := conn.GetGroupInfo(ctx, g.JID)
+	if err != nil {
+		log.Warn("could not refresh the group's details before posting; sending with the group list's", "group", g.Name, "jid", g.JID, "err", err)
+		return g
+	}
+	g.fresh = info
+	if info.Name != "" && g.listed != nil && g.listed.Name == "" {
+		g.Name = info.Name
+	}
+	log.Debug("group details before posting", append(append([]any{"group", g.Name, "jid", g.JID}, groupAttrs("listed_", g.listed)...), groupAttrs("", info)...)...)
+	if g.listed != nil && (g.listed.AddressingMode != info.AddressingMode || len(g.listed.Participants) != len(info.Participants)) {
+		log.Info("the group list described this group differently; posting with the fresh details", "group", g.Name, "jid", g.JID,
+			"listed_addressing_mode", string(g.listed.AddressingMode), "addressing_mode", string(info.AddressingMode),
+			"listed_participants", len(g.listed.Participants), "participants", len(info.Participants))
+	}
+	return g
 }
 
 // groupOffer is one offer posted as one or more copies, one per group.
@@ -265,6 +317,7 @@ func pickGroup(joined []*types.GroupInfo, group string) (offerTarget, error) {
 // once.
 type groupOffer struct {
 	queue *offerQueue
+	conn  saleConn
 
 	mu sync.Mutex
 	// copies are every copy that may be in a group, including sends that
@@ -296,7 +349,7 @@ type groupOffer struct {
 func watchGroupOffer(ctx context.Context, conn saleConn, queue *offerQueue) *groupOffer {
 	done := make(chan struct{})
 	close(done)
-	o := &groupOffer{queue: queue, stopPosting: func() {}, donePosting: done, firstPosted: make(chan struct{}),
+	o := &groupOffer{queue: queue, conn: conn, stopPosting: func() {}, donePosting: done, firstPosted: make(chan struct{}),
 		stopReposting: func() {}, doneReposting: done}
 	handlerID := conn.AddEventHandler(func(evt any) {
 		e, ok := evt.(*events.Message)
@@ -422,8 +475,18 @@ func (o *groupOffer) post(ctx context.Context, log *slog.Logger, targets []offer
 			case <-timer.C:
 			}
 		}
-		post := func(ctx context.Context, g offerTarget) (postedOffer, error) { return send(ctx, o, g, 0) }
-		_, err := postOfferCopies(postCtx, targets, gap, post, func(p postedOffer) {
+		failed := 0
+		post := func(ctx context.Context, g offerTarget) (postedOffer, error) {
+			g = refreshGroup(ctx, o.conn, log, g)
+			p, err := send(ctx, o, g, 0)
+			if err != nil {
+				failed++
+				log.Warn("group offer copy failed or is uncertain; replies to it still count",
+					append(append([]any{"group", g.Name, "jid", g.JID, "err", err}, groupAttrs("listed_", g.listed)...), groupAttrs("", g.fresh)...)...)
+			}
+			return p, err
+		}
+		copies, err := postOfferCopies(postCtx, targets, gap, post, func(p postedOffer) {
 			o.addPosted(p)
 			log.Info("group offer sent; waiting for a private reply", "group", p.GroupName, "offer_id", p.ID)
 			if onPosted != nil {
@@ -432,7 +495,7 @@ func (o *groupOffer) post(ctx context.Context, log *slog.Logger, targets []offer
 			o.firstOnce.Do(func() { close(o.firstPosted) })
 		})
 		if err != nil {
-			log.Warn("group offer send failed or is uncertain; replies to that copy still count", "err", err)
+			log.Warn("group offer posting finished with failures", "posted", len(copies), "failed", failed)
 		} else if postCtx.Err() != nil {
 			err = postCtx.Err()
 		}

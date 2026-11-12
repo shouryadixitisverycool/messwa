@@ -48,6 +48,11 @@ type Sell struct {
 	RepostListings int `toml:"repost_listings"`
 	// MaxReposts caps fresh copies per group for one offer.
 	MaxReposts int `toml:"max_reposts"`
+	// AcceptPaymentImages counts an image from the buyer whose payment
+	// turn it is as their payment, once they have the payment prompt. Off
+	// by default: a screenshot proves nothing, and a QR can't be taken
+	// back once sent.
+	AcceptPaymentImages bool `toml:"accept_payment_images"`
 }
 
 // MinRepostGap is the shortest time between two copies in one group,

@@ -232,6 +232,41 @@ func TestNegotiationNeverGoesBelowFloor(t *testing.T) {
 	})
 }
 
+// TestNegotiationParkKeepsLastOffer is the live case from 12 Nov: a buyer
+// went below the bot's lowest price, got parked, and the status still
+// showed their first offer.
+func TestNegotiationParkKeepsLastOffer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m := f.negotiatingManager(ctx, 0)
+		id, err := m.Start(ctx, 0, f.date, "lunch", 20, 30, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		f.conn.emit(f.reply(buyerA, "hi i want for 10"))
+		settle()
+		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 1 || !strings.Contains(got[0], "is the lowest I can do") {
+			t.Fatalf("A got %q", got)
+		}
+		if b := buyerState(t, f, id, buyerA); b.LastOffer != 1000 {
+			t.Fatalf("last offer after the first message = %d paise", b.LastOffer)
+		}
+		f.conn.emit(dm(buyerA, "15 last"))
+		settle()
+		b := buyerState(t, f, id, buyerA)
+		if b.State != store.BuyerParked || !strings.HasPrefix(b.Note, "offered ₹15 after the bot's lowest") {
+			t.Fatalf("A = %+v", b)
+		}
+		if b.LastOffer != 1500 {
+			t.Fatalf("parked buyer's last offer = %d paise, want 1500", b.LastOffer)
+		}
+	})
+}
+
 func TestNegotiationParksUnreadableBuyer(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data.db")
 	synctest.Test(t, func(t *testing.T) {

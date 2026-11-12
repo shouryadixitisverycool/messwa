@@ -104,9 +104,11 @@ func (r *reposter) round(ctx context.Context, o *groupOffer) bool {
 		}
 		sent++
 		why := n.Why(r.rules)
+		g = refreshGroup(ctx, o.conn, r.log, g)
 		p, err := r.send(ctx, o, g, n.Current.Seq+1)
 		if err != nil {
-			r.log.Warn("repost failed or is uncertain; replies to it still count, and this group gets no more", "group", g.Name, "err", err)
+			r.log.Warn("repost failed or is uncertain; replies to it still count, and this group gets no more",
+				append(append([]any{"group", g.Name, "jid", g.JID, "err", err}, groupAttrs("listed_", g.listed)...), groupAttrs("", g.fresh)...)...)
 			continue
 		}
 		alive = alive || n.Current.Seq+1 < r.rules.Max

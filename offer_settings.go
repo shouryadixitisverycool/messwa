@@ -26,6 +26,9 @@ type sellSettings struct {
 	Buyers config.Buyers
 	// Repost is when a copy that dropped out of view gets a fresh one.
 	Repost repost.Rules
+	// AcceptPaymentImages counts an image from the paying buyer as their
+	// payment; see sale.acceptImages.
+	AcceptPaymentImages bool
 }
 
 // sellFlags are the deliver-qr flags that override [sell] for one run. A
@@ -43,6 +46,7 @@ type sellFlags struct {
 	repostMessages *int
 	repostListings *int
 	maxReposts     *int
+	paymentImages  *bool
 }
 
 // pickGroups reports whether any flag picks offer groups.
@@ -76,6 +80,7 @@ func addSellFlags(fs *flag.FlagSet) func() sellFlags {
 	messages := fs.Int("repost-messages", 0, "repost once this many messages came in after a copy; 0 turns this off (overrides [sell] repost_messages)")
 	listings := fs.Int("repost-listings", 0, "repost once this many other sellers listed the same meal at the same mess after a copy; 0 turns this off (overrides [sell] repost_listings)")
 	maxReposts := fs.Int("max-reposts", 0, "most fresh copies per group (overrides [sell] max_reposts)")
+	images := fs.Bool("accept-payment-images", false, "count an image from the paying buyer, sent after the payment prompt, as their payment; nothing verifies it (overrides [sell] accept_payment_images)")
 	return func() sellFlags {
 		f := sellFlags{groups: groups}
 		fs.Visit(func(fl *flag.Flag) {
@@ -102,6 +107,8 @@ func addSellFlags(fs *flag.FlagSet) func() sellFlags {
 				f.repostListings = listings
 			case "max-reposts":
 				f.maxReposts = maxReposts
+			case "accept-payment-images":
+				f.paymentImages = images
 			}
 		})
 		return f
@@ -112,12 +119,13 @@ func addSellFlags(fs *flag.FlagSet) func() sellFlags {
 // empty Groups means no group was picked.
 func resolveSellSettings(cfg *config.Config, f sellFlags) (sellSettings, error) {
 	s := sellSettings{
-		PostGap:        cfg.Sell.PostGap.Duration,
-		ShowPrice:      cfg.Sell.ShowPrice,
-		MentionExtras:  cfg.Sell.MentionExtras,
-		AcceptPlainDMs: cfg.Sell.AcceptPlainDMs,
-		Buyers:         cfg.Sell.Buyers,
-		Repost:         repost.FromConfig(cfg.Sell),
+		PostGap:             cfg.Sell.PostGap.Duration,
+		ShowPrice:           cfg.Sell.ShowPrice,
+		MentionExtras:       cfg.Sell.MentionExtras,
+		AcceptPlainDMs:      cfg.Sell.AcceptPlainDMs,
+		Buyers:              cfg.Sell.Buyers,
+		Repost:              repost.FromConfig(cfg.Sell),
+		AcceptPaymentImages: cfg.Sell.AcceptPaymentImages,
 	}
 	firstN := func(n int, name string) ([]string, error) {
 		if n < 1 || n > len(cfg.Groups) {
@@ -164,6 +172,9 @@ func resolveSellSettings(cfg *config.Config, f sellFlags) (sellSettings, error) 
 	}
 	if f.acceptPlainDMs != nil {
 		s.AcceptPlainDMs = *f.acceptPlainDMs
+	}
+	if f.paymentImages != nil {
+		s.AcceptPaymentImages = *f.paymentImages
 	}
 	if f.buyers != nil {
 		if s.Buyers, err = config.ParseBuyers(*f.buyers); err != nil {
