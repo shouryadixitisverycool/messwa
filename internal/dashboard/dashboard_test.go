@@ -30,6 +30,9 @@ func TestHandler(t *testing.T) {
 	if err := in.Post(context.Background(), ingest.GroupPost{Chat: "g1@g.us", ID: "a", Sender: "911@s.whatsapp.net", TS: now, Text: "Sell palash lunch @25 <script>"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := in.Post(context.Background(), ingest.GroupPost{Chat: "g1@g.us", ID: "b", Sender: "912@s.whatsapp.net", TS: now, Text: "Selling kadamba non veg lunch 60"}); err != nil {
+		t.Fatal(err)
+	}
 	ms := mcpserver.New(cfg, st, nil)
 	ms.SetClock(func() time.Time { return now.Add(time.Minute) })
 	srv := startDashboard(t, cfg, st, ms, NewHub())
@@ -44,8 +47,20 @@ func TestHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 	res.Body.Close()
-	if len(s.Listings) != 1 || s.Listings[0].Mess != "palash" || s.Listings[0].Diet != "veg" || *s.Listings[0].Price != 25 {
+	if len(s.Listings) != 2 {
 		t.Fatalf("listings: %+v", s.Listings)
+	}
+	for _, l := range s.Listings {
+		if l.Mess == "palash" && (l.Diet != "veg" || *l.Price != 25) {
+			t.Errorf("palash listing: %+v", l)
+		}
+	}
+	diets := map[string]string{}
+	for _, p := range s.Market.Posts {
+		diets[p.Mess] = p.Diet
+	}
+	if diets["palash"] != "veg" || diets["kadamba"] != "nonveg" {
+		t.Errorf("market diets: %v", diets)
 	}
 	if s.Current != nil || s.Next == nil || s.Next.Meal != "lunch" {
 		t.Errorf("schedule: current %+v next %+v", s.Current, s.Next)

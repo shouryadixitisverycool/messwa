@@ -701,13 +701,28 @@ function rate(v) {
 }
 const pctText = (v) => (v == null ? '-' : `${Math.round(v * 100)}%`);
 
-// stats sums one mess (or every mess, for null) over the last `win` minutes.
-// Messages are posts selling or swapping a meal; buy orders count as wanted.
-function stats(mess, win) {
+// Messes that serve both get a veg card and a non-veg card. Egg counts as
+// non-veg. Posts that don't say which stay out of both cards but count
+// toward the market as a whole.
+const marketDiet = (d) => (d === 'egg' ? 'nonveg' : d || '');
+const inMarket = (x, k) => !k || (x.mess === k.mess && (!k.diet || marketDiet(x.diet) === k.diet));
+const marketKey = (k) => `${k.mess}:${k.diet || 'all'}`;
+const marketName = (k) => cap(k.mess) + (k.diet ? ` ${DIET_LABEL[k.diet].toLowerCase()}` : '');
+
+function markets() {
+  return D.messes.flatMap((m) => (m.veg_only
+    ? [{ mess: m.name, diet: null }]
+    : [{ mess: m.name, diet: 'veg' }, { mess: m.name, diet: 'nonveg' }]));
+}
+
+// stats sums one market (or every mess, for null) over the last `win`
+// minutes. Messages are posts selling or swapping a meal; buy orders count
+// as wanted.
+function stats(k, win) {
   const from = now() - win * 60;
   const M = D.market;
-  const posts = M.posts.filter((p) => p.t > from && (!mess || p.mess === mess));
-  const sales = M.sales.filter((x) => x.t > from && (!mess || x.mess === mess));
+  const posts = M.posts.filter((p) => p.t > from && inMarket(p, k));
+  const sales = M.sales.filter((x) => x.t > from && inMarket(x, k));
   const offers = posts.filter((p) => p.kind !== 'buy');
   const asks = [...new Map(offers.filter((p) => p.kind === 'sell' && p.price != null).map((p) => [p.id, p.price])).values()];
   return {
@@ -731,13 +746,19 @@ function verdict(s, all) {
   return { k: 'steady', w: 'STEADY', why: 'Selling about as well as the market.' };
 }
 
-function buckets(mess, start) {
+function buckets(k, start) {
   const out = [];
   for (let i = 0; i < SPAN / STEP; i++) out.push({ t0: start + i * STEP * 60, msgs: 0, sales: 0 });
   const at = (t) => out[Math.floor((t - start) / (STEP * 60))];
-  for (const p of D.market.posts) if (p.mess === mess && p.kind !== 'buy' && at(p.t)) at(p.t).msgs++;
-  for (const x of D.market.sales) if (x.mess === mess && at(x.t)) at(x.t).sales++;
+  for (const p of D.market.posts) if (inMarket(p, k) && p.kind !== 'buy' && at(p.t)) at(p.t).msgs++;
+  for (const x of D.market.sales) if (inMarket(x, k) && at(x.t)) at(x.t).sales++;
   return out;
+}
+
+// untagged counts posts in a two-diet mess that didn't say veg or non-veg.
+function untagged(mess, win) {
+  const from = now() - win * 60;
+  return D.market.posts.filter((p) => p.t > from && p.mess === mess && p.kind !== 'buy' && !marketDiet(p.diet)).length;
 }
 
 function renderStats() {
@@ -761,48 +782,56 @@ function renderStats() {
   // Buckets line up with the clock; the last one is still filling.
   const end = Math.ceil(n / (STEP * 60)) * STEP * 60;
   const start = end - SPAN * 60;
-  const messes = D.messes.map((m) => m.name);
-  const series = new Map(messes.map((m) => [m, buckets(m, start)]));
+  const ks = markets();
+  const series = new Map(ks.map((k) => [marketKey(k), buckets(k, start)]));
   const top = Math.max(1, ...[...series.values()].flat().map((b) => Math.max(b.msgs, b.sales)));
 
-  $('cards').replaceChildren(...messes.map((m) => {
-    const s = stats(m, win);
+  $('cards').replaceChildren(...ks.map((k) => {
+    const m = k.mess, key = marketKey(k);
+    const s = stats(k, win);
     const v = verdict(s, all);
-    const card = el('div', 'card' + (S.tab === m ? ' on' : ''));
+    const on = S.tab === m && (!k.diet || S.diet === 'all' || S.diet === k.diet);
+    const card = el('div', 'card' + (on ? ' on' : ''));
     card.style.setProperty('--m', messColor(m));
-    card.addEventListener('click', () => setTab(m));
+    card.addEventListener('click', () => (k.diet ? update(() => { S.tab = m; S.diet = k.diet; S.page = 0; }) : setTab(m)));
 
     const head = el('div', 'card-head');
-    head.append(svgEl(messIcon(m)), el('span', 'card-name', cap(m)), el('span', 'verdict ' + v.k, v.w));
+    const name = el('span', 'card-name', cap(m));
+    if (k.diet) {
+      const d = el('span', 'card-diet ' + k.diet);
+      d.append(svgEl(dietMark(k.diet)), document.createTextNode(DIET_LABEL[k.diet].toUpperCase()));
+      name.append(d);
+    }
+    head.append(svgEl(messIcon(m)), name, el('span', 'verdict ' + v.k, v.w));
     card.append(head);
 
     const kpis = el('div', 'kpis');
-    kpis.dataset.tk = `kpi:${m}`;
+    kpis.dataset.tk = `kpi:${key}`;
     const kpi = (val, label) => {
       const k = el('div', 'kpi');
       k.append(el('b', val === '-' ? 'none' : '', val), el('span', '', label));
       return k;
     };
     kpis.append(kpi(rate(s.msgs / win), 'MSGS/MIN'), kpi(rate(s.sales / win), 'SALES/MIN'), kpi(pctText(s.demand), 'DEMAND'));
-    tip(kpis, () => statsTip(m, s, v, win));
+    tip(kpis, () => statsTip(k, s, v, win));
     card.append(kpis);
 
     const spark = el('div', 'spark');
     spark.setAttribute('role', 'img');
-    spark.setAttribute('aria-label', `${cap(m)}: messages and sales per 5 minutes over the last 2 hours`);
+    spark.setAttribute('aria-label', `${marketName(k)}: messages and sales per 5 minutes over the last 2 hours`);
     const band = el('span', 'band');
     band.style.setProperty('left', `${Math.max(0, ((n - win * 60 - start) / (end - start)) * 100)}%`);
     spark.append(band);
-    for (const b of series.get(m)) {
+    for (const b of series.get(key)) {
       const col = el('span', 'bk');
-      col.dataset.tk = `bk:${m}:${b.t0}`;
+      col.dataset.tk = `bk:${key}:${b.t0}`;
       const bar = (cls, v) => {
         const i = el('i', cls);
         i.style.setProperty('height', v ? `max(2px, ${(v / top) * 100}%)` : '0');
         return i;
       };
       col.append(bar('m', b.msgs), bar('s', b.sales));
-      tip(col, () => bucketTip(m, b));
+      tip(col, () => bucketTip(k, b));
       spark.append(col);
     }
     card.append(spark);
@@ -826,15 +855,20 @@ function renderStats() {
   }));
 }
 
-function statsTip(m, s, v, win) {
+function statsTip(k, s, v, win) {
+  const m = k.mess;
   const n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
+  const loose = k.diet ? untagged(m, win) : 0;
+  const browsing = S.tab === m && (!k.diet || S.diet === k.diet);
   return [
-    [{ t: `${cap(m)} market`, c: 'nm', color: messColor(m) }],
+    [{ t: `${marketName(k)} market`, c: 'nm', color: messColor(m) }],
     [{ t: `Last ${winWords(win)}`, c: 'c8' }],
     0,
     [{ t: 'Messages: ', c: 'c7' }, { t: `${s.msgs} (${rate(s.msgs / win)}/min)`, c: 'cf' }],
     [{ t: '  posts selling or swapping it, every copy', c: 'c8' }],
     [{ t: '  in every group, not replies', c: 'c8' }],
+    ...(k.diet === 'nonveg' ? [[{ t: '  egg counts as non-veg', c: 'c8' }]] : []),
+    ...(loose ? [[{ t: `  ${n(loose, 'post', 'posts')} for ${cap(m)} didn't say veg or non-veg`, c: 'c8' }]] : []),
     [{ t: 'Sales: ', c: 'c7' }, { t: `${s.sales} (${rate(s.sales / win)}/min)`, c: 'cf' }],
     [{ t: '  the seller ticked it or said sold', c: 'c8' }],
     [{ t: 'Demand: ', c: 'c7' }, { t: s.demand == null ? 'no messages' : `${pctText(s.demand)} sales per message`, c: 'cf' }],
@@ -845,14 +879,14 @@ function statsTip(m, s, v, win) {
     0,
     [{ t: v.why, c: v.k === 'hot' ? 'c6' : 'c7' }],
     0,
-    [{ t: S.tab === m ? 'Currently browsing' : 'Click to browse!', c: 'ce' }],
+    [{ t: browsing ? 'Currently browsing' : 'Click to browse!', c: 'ce' }],
   ];
 }
 
-function bucketTip(m, b) {
+function bucketTip(k, b) {
   const t1 = b.t0 + STEP * 60;
   return [
-    [{ t: `${cap(m)}, ${hm(b.t0)}-${t1 > now() ? 'now' : hm(t1)}`, c: 'nm', color: messColor(m) }],
+    [{ t: `${marketName(k)}, ${hm(b.t0)}-${t1 > now() ? 'now' : hm(t1)}`, c: 'nm', color: messColor(k.mess) }],
     0,
     [{ t: 'Messages: ', c: 'c7' }, { t: String(b.msgs), c: 'cf' }],
     [{ t: 'Sales: ', c: 'c7' }, { t: String(b.sales), c: 'cf' }],
