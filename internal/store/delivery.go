@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -120,6 +121,41 @@ func (s *Store) ReleaseHandoff(ctx context.Context, date, meal string) (bool, er
 	}
 	n, err := r.RowsAffected()
 	return n == 1, err
+}
+
+// ReleaseUnpaid frees a meal whose buyer never paid: a handed-off slot, or
+// an armed one with no payment claimed, such as a stopped deliver-qr -peer
+// leaves behind. It refuses meals that are paid, being sent or sent, and
+// meals an active sell task is still selling. It returns the freed state.
+func (s *Store) ReleaseUnpaid(ctx context.Context, date, meal string) (string, error) {
+	var state string
+	var paid bool
+	var task sql.NullInt64
+	var taskActive bool
+	err := s.db.QueryRowContext(ctx, `SELECT d.state, d.payment_id IS NOT NULL, d.task_id,
+ coalesce((SELECT t.state='active' FROM sell_tasks t WHERE t.id=d.task_id), 0)
+ FROM qr_deliveries d WHERE d.date=? AND d.meal=?`, date, meal).Scan(&state, &paid, &task, &taskActive)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", errors.New("that meal has no reservation")
+	}
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case paid || (state != "armed" && state != "handed_off"):
+		return "", fmt.Errorf("meal is %s; paid, sending and sent meals are left alone", state)
+	case taskActive:
+		return "", fmt.Errorf("sell task %d is still selling this meal; cancel it instead, which frees the reservation", task.Int64)
+	}
+	r, err := s.db.ExecContext(ctx, `DELETE FROM qr_deliveries WHERE date=? AND meal=? AND state=? AND payment_id IS NULL
+ AND NOT EXISTS(SELECT 1 FROM sell_tasks t WHERE t.id=qr_deliveries.task_id AND t.state='active')`, date, meal, state)
+	if err != nil {
+		return "", err
+	}
+	if n, err := r.RowsAffected(); err != nil || n != 1 {
+		return "", errors.Join(err, errors.New("the reservation changed while releasing it; check it again"))
+	}
+	return state, nil
 }
 
 // An existing slot can only resume with the exact same buyer, price and image,
