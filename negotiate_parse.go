@@ -134,7 +134,8 @@ var (
 	refuseFirst   = newVocab("no", "nope", "nah", "na", "nahi", "nhi")
 	payOtherWords = newVocab("upi id", "upi qr", "qr code", "scanner", "scan", "send qr", "send your qr", "send the qr", "your qr", "payment qr",
 		"cant pay", "can't pay", "cannot pay", "not working", "cash", "pay later", "later", "tomorrow", "tmrw", "tmr", "account number",
-		"bank", "send upi", "send number", "number send", "upi not")
+		"bank", "send upi", "send number", "number send", "upi not", "other way", "other ways", "another way", "different way", "other method",
+		"other mode", "some other way")
 	lowerWords = newVocab("too much", "to much", "too high", "too costly", "costly", "expensive", "mehenga", "mehnga", "mehanga", "kam", "kum",
 		"less", "lower", "reduce", "discount", "negotiable", "nego", "negotiate", "best price", "final price", "last price", "lowest",
 		"half", "fair", "cmon", "c'mon", "come on", "thoda", "cheaper", "cheap", "bargain", "selling at", "norm", "milra", "people",

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -75,7 +76,7 @@ func TestSellTaskTakesPaymentImage(t *testing.T) {
 		synctest.Wait()
 		f.conn.emit(f.reply(buyerB, "me too"))
 		synctest.Wait()
-		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 1 || !strings.HasPrefix(got[0], "pay ₹20 here") {
+		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 2 || got[0] != "ok 20" || !strings.HasPrefix(got[1], "pay on whatsapp pay") {
 			t.Fatalf("A got %q", got)
 		}
 		time.Sleep(time.Second)
@@ -84,7 +85,7 @@ func TestSellTaskTakesPaymentImage(t *testing.T) {
 		f.conn.emit(imageFrom(buyerB, "img-b", time.Now()))
 		f.conn.emit(imageFrom(buyerA, "img-old", time.Now().Add(-time.Hour)))
 		synctest.Wait()
-		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 1 {
+		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 2 {
 			t.Fatalf("A got %q before a qualifying image", got)
 		}
 		if got := sentTo(f.conn.messages(), buyerB); len(got) != 0 {
@@ -94,11 +95,11 @@ func TestSellTaskTakesPaymentImage(t *testing.T) {
 		f.conn.emit(dm(buyerA, "20"))
 		f.conn.emit(imageFrom(buyerA, "img-a", time.Now()))
 		synctest.Wait()
-		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 2 || got[1] != "[QR]" {
+		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 3 || got[2] != "[QR]" {
 			t.Fatalf("A got %q, want the prompt then the QR", got)
 		}
-		if got := texts(sentTo(f.conn.messages(), buyerB)); len(got) != 1 || got[0] != "sorry sold" {
-			t.Fatalf("B got %q, want sorry sold", got)
+		if got := texts(sentTo(f.conn.messages(), buyerB)); len(got) != 1 || got[0] != "sold sorry" {
+			t.Fatalf("B got %q, want sold sorry", got)
 		}
 		task := f.task(id)
 		if task.State != store.TaskSold || !strings.Contains(task.Detail, "NOT verified") {
@@ -116,7 +117,7 @@ func TestSellTaskTakesPaymentImage(t *testing.T) {
 }
 
 // TestPaymentImageOffByDefault keeps today's behaviour: an image is not a
-// payment.
+// payment. The buyer hears once that screenshots don't count.
 func TestPaymentImageOffByDefault(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data.db")
 	synctest.Test(t, func(t *testing.T) {
@@ -134,8 +135,12 @@ func TestPaymentImageOffByDefault(t *testing.T) {
 		time.Sleep(time.Second)
 		f.conn.emit(imageFrom(buyerA, "img-a", time.Now()))
 		synctest.Wait()
-		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 1 {
-			t.Fatalf("A got %q; an image sold the meal with the setting off", got)
+		f.conn.emit(imageFrom(buyerA, "img-a2", time.Now()))
+		synctest.Wait()
+		want := []string{"ok 20", "pay on whatsapp pay in this chat, not gpay/upi. qr right after",
+			"cant see screenshots, pay on whatsapp pay here pls"}
+		if got := texts(sentTo(f.conn.messages(), buyerA)); !slices.Equal(got, want) {
+			t.Fatalf("A got %q, want %q", got, want)
 		}
 		if task := f.task(id); task.State != store.TaskActive {
 			t.Fatalf("task is %s", task.State)
@@ -163,7 +168,7 @@ func TestPaymentImageNeedsThePrompt(t *testing.T) {
 		go func() {
 			done <- s.takeTurn(ctx, buyerA, d, turn{
 				arm:    f.st.ArmNewDelivery,
-				prompt: "pay ₹20",
+				prompt: reply{"pay ₹20"},
 				prompting: func(context.Context) (bool, error) {
 					// The buyer's image lands while the prompt is being claimed.
 					f.conn.emit(imageFrom(buyerA, "img-early", time.Now()))
