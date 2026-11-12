@@ -15,6 +15,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"messwa/internal/config"
+	"messwa/internal/repost"
 	"messwa/internal/store"
 )
 
@@ -276,6 +277,11 @@ func (m *sellManager) launch(t store.SellTask, s *sale, ready chan struct{}) {
 		err := m.runTask(ctx, t, s, gate, signal)
 		gate.active.Store(false)
 		state, detail := m.outcome(ctx, err)
+		if state == store.TaskSold {
+			if kind, err := m.st.PaymentKind(context.WithoutCancel(ctx), t.Date, t.Meal); err == nil && kind == store.PaidByImage {
+				detail = "QR sent for an image the buyer sent after the payment prompt; the payment is NOT verified, check your UPI app"
+			}
+		}
 		if state == "" {
 			m.log.Info("sell task paused until run restarts", "task", t.ID)
 			return
@@ -385,6 +391,7 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, ga
 	if err != nil {
 		return err
 	}
+	s.acceptImages = settings.AcceptPaymentImages
 	queue := newOfferQueue()
 	queue.join = func(peer, chat types.JID) bool {
 		if gate.turnsAway(ctx, peer, chat) {
@@ -459,54 +466,91 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, ga
 }
 
 // postCopies posts the offer to every [sell] group that has no copy from
-// this task yet, post_gap apart, in the background. When no copy went out
-// before, it waits for the first one and fails if none posts.
+// this task yet, post_gap apart, in the background, then keeps the copies
+// in view with reposts. When no copy went out before, it waits for the
+// first one and fails if none posts.
 func (m *sellManager) postCopies(ctx context.Context, t store.SellTask, s *sale, gate *taskGate, posting *groupOffer, settings sellSettings, claimed map[string]bool) error {
 	first := len(claimed) == 0
+	var groups []offerTarget
+	var listed bool
+	// targets are the [sell] groups we're in, listed once.
+	targets := func(ctx context.Context) ([]offerTarget, error) {
+		if listed {
+			return groups, nil
+		}
+		joined, err := m.conn.GetJoinedGroups(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, g := range settings.Groups {
+			target, err := pickGroup(joined, g)
+			if err != nil {
+				m.log.Warn("not posting the offer to this group", "task", t.ID, "group", g, "err", err)
+				continue
+			}
+			groups = append(groups, target)
+		}
+		listed = true
+		return groups, nil
+	}
+	text := sync.OnceValue(func() string {
+		var extras []string
+		if ep, ok := s.portal.(extrasPortal); ok && settings.MentionExtras {
+			extras = readExtras(ctx, ep, m.log, t.Date, t.Meal, s.mess)
+		}
+		return offerText(offerDetails{Mess: s.mess, Diet: s.diet, Meal: t.Meal, Price: rupees(store.FormatPaise(t.MaxPaise)),
+			ShowPrice: settings.ShowPrice, Day: offerDay(m.cfg, t.Date), Extras: extras})
+	})
+	send := m.taskCopy(t, gate, text)
+	record := func(p postedOffer) { recordOffers(ctx, m.st, m.own, m.log, t.Date, t.Meal, []postedOffer{p}) }
+	keepInView := func() {
+		posting.keepInView(ctx, &reposter{
+			log: m.log.With("task", t.ID), st: m.st, rules: settings.Repost, end: t.EndsAt, gap: settings.PostGap,
+			groups: targets,
+			copies: func(ctx context.Context) ([]repost.Copy, error) {
+				offers, err := m.st.SellTaskOffers(ctx, t.ID)
+				return storedCopies(offers), err
+			},
+			send: send, record: record,
+			room: func() bool { return m.limits.left(t.ID) > repostReserve },
+		})
+	}
 	if !m.connected(30 * time.Second) {
 		if first {
 			return errors.New("WhatsApp is not connected; the offer was not posted")
 		}
-		m.log.Warn("WhatsApp is not connected; posting no further copies", "task", t.ID)
+		m.log.Warn("WhatsApp is not connected; posting no further copies for now", "task", t.ID)
+		keepInView()
 		return nil
 	}
-	joined, err := m.conn.GetJoinedGroups(ctx)
+	all, err := targets(ctx)
 	if err != nil {
 		if first {
 			return err
 		}
-		m.log.Warn("could not list groups; posting no further copies", "task", t.ID, "err", err)
+		m.log.Warn("could not list groups; posting no further copies for now", "task", t.ID, "err", err)
+		keepInView()
 		return nil
 	}
-	var targets []offerTarget
-	for _, g := range settings.Groups {
-		target, err := pickGroup(joined, g)
-		if err != nil {
-			m.log.Warn("not posting the offer to this group", "task", t.ID, "group", g, "err", err)
-			continue
-		}
+	var fresh []offerTarget
+	for _, target := range all {
 		if !claimed[target.JID.String()] {
-			targets = append(targets, target)
+			fresh = append(fresh, target)
 		}
 	}
-	if len(targets) == 0 {
+	if len(fresh) == 0 {
 		if first {
 			return errors.New("the offer could not be posted in any group")
 		}
+		keepInView()
 		return nil
 	}
-	var extras []string
-	if ep, ok := s.portal.(extrasPortal); ok && settings.MentionExtras {
-		extras = readExtras(ctx, ep, m.log, t.Date, t.Meal, s.mess)
-	}
-	text := offerText(offerDetails{Mess: s.mess, Diet: s.diet, Meal: t.Meal, Price: rupees(store.FormatPaise(t.MaxPaise)),
-		ShowPrice: settings.ShowPrice, Day: offerDay(m.cfg, t.Date), Extras: extras})
-	record := func(p postedOffer) { recordOffers(ctx, m.st, m.own, m.log, t.Date, t.Meal, []postedOffer{p}) }
 	var delay time.Duration
 	if !first {
 		delay = settings.PostGap
 	}
-	posting.post(ctx, m.log, targets, delay, settings.PostGap, m.taskCopy(t, gate, text), record)
+	posting.post(ctx, m.log, fresh, delay, settings.PostGap, send, record)
+	keepInView()
 	if !first {
 		return nil
 	}
@@ -518,14 +562,14 @@ func (m *sellManager) postCopies(ctx context.Context, t store.SellTask, s *sale,
 
 // taskCopy claims each copy in the store before the gate sends it, so a
 // restart never posts to the same group twice.
-func (m *sellManager) taskCopy(t store.SellTask, gate *taskGate, text string) sendCopy {
-	return func(ctx context.Context, o *groupOffer, g offerTarget) (postedOffer, error) {
-		p := postedOffer{Chat: g.JID, GroupName: g.Name, ID: m.conn.GenerateMessageID(), At: time.Now().Truncate(time.Second), Text: text}
-		if err := m.st.ClaimOfferPost(ctx, t.ID, g.JID.String(), p.ID, p.At); err != nil {
+func (m *sellManager) taskCopy(t store.SellTask, gate *taskGate, text func() string) sendCopy {
+	return func(ctx context.Context, o *groupOffer, g offerTarget, seq int) (postedOffer, error) {
+		p := postedOffer{Chat: g.JID, GroupName: g.Name, ID: m.conn.GenerateMessageID(), At: time.Now().Truncate(time.Second), Text: text()}
+		if err := m.st.ClaimOfferPost(ctx, t.ID, g.JID.String(), p.ID, seq, p.At); err != nil {
 			return p, err
 		}
 		o.watch(p)
-		resp, err := gate.send(ctx, g.JID, &waE2E.Message{Conversation: proto.String(text)}, whatsmeow.SendRequestExtra{ID: p.ID})
+		resp, err := gate.send(ctx, g.JID, &waE2E.Message{Conversation: proto.String(p.Text)}, whatsmeow.SendRequestExtra{ID: p.ID})
 		// The copy's state must be written even if posting stopped mid-send.
 		stateCtx := context.WithoutCancel(ctx)
 		if err != nil {
@@ -542,7 +586,7 @@ func (m *sellManager) taskCopy(t store.SellTask, gate *taskGate, text string) se
 		}
 		m.event(stateCtx, store.SellEvent{TaskID: t.ID, Peer: g.JID.String(), Kind: store.EventPosted})
 		p.At = firstTime(resp.Timestamp, p.At)
-		m.log.Info("sell task offer posted", "task", t.ID, "group", g.Name, "offer_id", p.ID)
+		m.log.Info("sell task offer posted", "task", t.ID, "group", g.Name, "offer_id", p.ID, "copy", seq)
 		return p, nil
 	}
 }
@@ -835,6 +879,13 @@ func (l *sendLimits) wait(ctx context.Context, task int64) error {
 			return ctx.Err()
 		}
 	}
+}
+
+// left is how many more messages the task may send in total.
+func (l *sendLimits) left(task int64) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return taskSendCap - l.totals[task]
 }
 
 // recent drops sends older than a minute.

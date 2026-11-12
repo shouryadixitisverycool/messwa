@@ -119,6 +119,11 @@ func Open(path string) (*Store, error) {
 			return nil, fmt.Errorf("migrate: %w", err)
 		}
 	}
+	// Rebuild sell_task_offers for reposts first: the rebuilt table has no
+	// error column, so the ALTERs below must run after it.
+	if err := migrateSellOffers(db); err != nil {
+		return nil, fmt.Errorf("migrate sell_task_offers: %w", err)
+	}
 	for _, c := range []struct{ table, col string }{
 		{"sell_tasks", "target_paise INTEGER NOT NULL DEFAULT 0"},
 		{"sell_task_offers", "error TEXT NOT NULL DEFAULT ''"},

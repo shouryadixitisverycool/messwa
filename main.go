@@ -57,8 +57,9 @@ commands:
              [-buyers anyone|unsaved_only]
                                 arm one meal's QR delivery after a matching payment message;
                                 without -peer it posts an offer to the [sell] groups
-  release-handoff -date DATE -meal MEAL
-                                free a meal handed to you by -handoff on_reply so it can be offered again
+  release-handoff -date DATE -meal MEAL [-unpaid]
+                                free a meal handed to you by -handoff on_reply so it can be offered again;
+                                -unpaid also frees one armed for a buyer who never paid
   mark-sold -date DATE -meal MEAL
                                 react ✅ to the meal's offer posts, for a sale finished by hand
 
@@ -78,7 +79,9 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	// messwa logs at info. MESSWA_WA_LOG=debug lowers the level for
+	// whatsmeow's lines; messwa itself logs nothing at debug.
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: min(slog.LevelInfo, wa.LogLevel())}))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

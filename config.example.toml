@@ -58,8 +58,8 @@ monthly_fee = 0
 [sell]
 # Group offers posted by `deliver-qr` without -peer, and by sell tasks.
 # Flags of the same name (-group, -group-count, -post-gap, -show-price,
-# -mention-extras, -handoff, -accept-plain-dms, -buyers) override these for
-# one deliver-qr run. Sell tasks use everything here except handoff, which
+# -mention-extras, -handoff, -accept-plain-dms, -buyers,
+# -accept-payment-images) override these for one deliver-qr run. Sell tasks use everything here except handoff, which
 # start_sell_task sets per task; with show_price they post the task's max
 # price.
 #
@@ -95,6 +95,35 @@ accept_plain_dms = false
 # LID: the bot logs that they replied and sends them nothing. It applies to
 # deliver-qr group offers and sell tasks; a -peer delivery is your own pick.
 buyers = "anyone"
+# Repost the offer in a group once the last copy has dropped out of view,
+# while the sale is still open. A fresh copy goes out when the first of the
+# three triggers below is reached in that group, but never sooner than 5
+# minutes after the last copy and never in the meal's last 15 minutes.
+# Replies to every copy count. The defaults come from 11 days of these
+# groups at lunch and dinner, when the busiest get 9 to 14 posts every 10
+# minutes. Flags of the same name override them for one deliver-qr run
+# (-repost, -repost-after, -repost-messages, -repost-listings, -max-reposts).
+repost = true
+# Repost once the copy is this old, at least 5m. "0s" turns it off.
+repost_after = "10m"
+# Repost once this many messages came in after the copy, about a phone
+# screen of short posts. 0 turns it off.
+repost_messages = 10
+# Repost once this many other sellers listed the same meal at the same mess
+# after the copy. A listing tagged with a different diet doesn't count. 0
+# turns it off.
+repost_listings = 3
+# The most fresh copies one group gets for one offer, 0 to 12. A group whose
+# copy failed to send gets none.
+max_reposts = 6
+# Count an image from the buyer whose payment turn it is as their payment,
+# for buyers who pay by UPI outside WhatsApp Pay and send a screenshot. It
+# must arrive after the payment prompt and inside their pay window. Nothing
+# checks what the image shows: a screenshot proves nothing, anyone can fake
+# one, and the QR can't be taken back. Check your UPI app after each such
+# sale; the log, sell_task_status and the sales page mark it unverified.
+# Off by default. Applies to group offers, sell tasks and deliver-qr -peer.
+accept_payment_images = false
 
 # Seasons split the year for the insights page. In a term everyone is
 # registered with a mess, so the market is far busier than in a break, and the

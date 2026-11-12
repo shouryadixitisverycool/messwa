@@ -38,6 +38,18 @@ func TestAcceptPlainDMsSetting(t *testing.T) {
 	}
 }
 
+func TestAcceptPaymentImagesSetting(t *testing.T) {
+	if Default().Sell.AcceptPaymentImages {
+		t.Fatal("payment images are accepted by default")
+	}
+	p := filepath.Join(t.TempDir(), "c.toml")
+	os.WriteFile(p, []byte("[sell]\naccept_payment_images = true\n"), 0o600)
+	c, err := Load(p)
+	if err != nil || !c.Sell.AcceptPaymentImages {
+		t.Fatalf("accept_payment_images = true loaded as %v, %v", c.Sell.AcceptPaymentImages, err)
+	}
+}
+
 func TestHandoffOverride(t *testing.T) {
 	for _, tc := range []struct {
 		configured     Handoff

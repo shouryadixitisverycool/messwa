@@ -1,6 +1,8 @@
 package store
 
 import (
+	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -26,11 +28,14 @@ func TestSellTaskClaims(t *testing.T) {
 		t.Fatal("second active task for one meal")
 	}
 
-	if err := s.ClaimOfferPost(ctx, id, "g@g.us", "offer", now); err != nil {
+	if err := s.ClaimOfferPost(ctx, id, "g@g.us", "offer", 0, now); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.ClaimOfferPost(ctx, id, "g@g.us", "offer2", now); err == nil {
+	if err := s.ClaimOfferPost(ctx, id, "g@g.us", "offer2", 0, now); err == nil {
 		t.Fatal("group posted twice")
+	}
+	if err := s.ClaimOfferPost(ctx, id, "g@g.us", "repost", 2, now); err == nil {
+		t.Fatal("repost skipped a copy number")
 	}
 	if ok, _ := s.OfferClaimed(ctx, id, "g@g.us", "offer"); !ok {
 		t.Fatal("claimed post not sendable")
@@ -38,6 +43,19 @@ func TestSellTaskClaims(t *testing.T) {
 	s.SetOfferState(ctx, id, "offer", OfferPosted)
 	if ok, _ := s.OfferClaimed(ctx, id, "g@g.us", "offer"); ok {
 		t.Fatal("posted offer could be sent again")
+	}
+	// A repost is the next copy number, claimed once.
+	if err := s.ClaimOfferPost(ctx, id, "g@g.us", "repost", 1, now.Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClaimOfferPost(ctx, id, "g@g.us", "repost-again", 1, now.Add(10*time.Minute)); err == nil {
+		t.Fatal("repost claimed twice")
+	}
+	if ok, _ := s.OfferClaimed(ctx, id, "g@g.us", "repost"); !ok {
+		t.Fatal("claimed repost not sendable")
+	}
+	if offers, _ := s.SellTaskOffers(ctx, id); len(offers) != 2 || offers[0].Seq != 0 || offers[1].Seq != 1 || offers[1].ID != "repost" {
+		t.Fatalf("offers = %+v", offers)
 	}
 
 	if ok, _ := s.AddSellTaskBuyer(ctx, id, "1@s.whatsapp.net", "9@lid", now); !ok {
@@ -83,7 +101,7 @@ func TestSellTaskClaims(t *testing.T) {
 	if ok, _ := s.AddSellTaskBuyer(ctx, id, "3@s.whatsapp.net", "", now); ok {
 		t.Fatal("ended task took a new buyer")
 	}
-	if err := s.ClaimOfferPost(ctx, id, "h@g.us", "offer3", now); err == nil {
+	if err := s.ClaimOfferPost(ctx, id, "h@g.us", "offer3", 0, now); err == nil {
 		t.Fatal("ended task claimed a post")
 	}
 	if ok, _ := s.EndSellTask(ctx, id, TaskSold, "", now); ok {
@@ -108,5 +126,102 @@ func TestPaise(t *testing.T) {
 		if _, err := ParsePaise(bad); err == nil {
 			t.Errorf("ParsePaise(%q) accepted", bad)
 		}
+	}
+}
+
+// A data file from before reposts keeps its copies, as copy 0, and takes
+// reposts afterwards.
+func TestSellOffersMigrate(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "data.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`CREATE TABLE sell_task_offers (task_id INTEGER NOT NULL, group_jid TEXT NOT NULL, offer_id TEXT NOT NULL, state TEXT NOT NULL, posted_at INTEGER NOT NULL, PRIMARY KEY(task_id, group_jid))`,
+		`INSERT INTO sell_task_offers VALUES (1,'b@g.us','second','failed',200), (1,'a@g.us','first','posted',100)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	offers, err := s.SellTaskOffers(ctx, 1)
+	if err != nil || len(offers) != 2 || offers[0].ID != "first" || offers[1].ID != "second" || offers[1].Seq != 0 || offers[1].State != OfferFailed {
+		t.Fatalf("offers after migrating = %+v, %v", offers, err)
+	}
+	now := time.Now()
+	id, err := s.CreateSellTask(ctx, SellTask{Date: "2026-11-11", Meal: "lunch", MinPaise: 100, MaxPaise: 100, CreatedAt: now, EndsAt: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for seq, offer := range []string{"one", "two"} {
+		if err := s.ClaimOfferPost(ctx, id, "c@g.us", offer, seq, now); err != nil {
+			t.Fatalf("copy %d: %v", seq, err)
+		}
+	}
+	s.Close()
+	if s, err = Open(path); err != nil {
+		t.Fatalf("reopening a migrated file: %v", err)
+	}
+}
+
+func TestAfterPost(t *testing.T) {
+	ctx := t.Context()
+	s, err := Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const chat, me = "g@g.us", "me@s.whatsapp.net"
+	at := time.Unix(1794467890, 0)
+	n := 0
+	post := func(sender, mess, diet string, ts time.Time, text string) string {
+		t.Helper()
+		n++
+		id := fmt.Sprintf("m%d", n)
+		if _, err := s.AppendLog(ctx, LogEntry{Chat: chat, ID: id, Type: "post", Sender: sender, TS: ts, Text: text}); err != nil {
+			t.Fatal(err)
+		}
+		if mess != "" {
+			l := Listing{Seller: sender, Kind: "sell", Meal: "lunch", MealDate: "2026-11-12", Mess: mess, Diet: diet, Text: text, FirstSeen: ts, LastSeen: ts}
+			if err := s.CreateListing(ctx, &l); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.AddPost(ctx, Post{Chat: chat, ID: id, ListingID: l.ID, Sender: sender, TS: ts, Text: text}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return id
+	}
+	if _, known, err := s.After(ctx, chat, "missing"); known || err != nil {
+		t.Fatalf("a post not in the log was known: %v", err)
+	}
+	post("1@s.whatsapp.net", "kadamba", "", at.Add(-time.Minute), "sell kadamba lunch")
+	// A post from the same second that synced before ours counts as before it.
+	post("2@s.whatsapp.net", "", "", at, "anyone selling?")
+	ours := post(me, "kadamba", "veg", at, "sell kadamba veg lunch")
+	post("3@s.whatsapp.net", "", "", at, "hi")
+	post("4@s.whatsapp.net", "kadamba", "", at.Add(time.Minute), "kadamba lunch 40")
+	post("5@s.whatsapp.net", "kadamba", "nonveg", at.Add(time.Minute), "sell kadamba nv lunch")
+	post("6@s.whatsapp.net", "bakul", "", at.Add(time.Minute), "sell bakul lunch")
+	post(me, "kadamba", "veg", at.Add(2*time.Minute), "sell kadamba veg lunch again")
+	post("4@s.whatsapp.net", "kadamba", "", at.Add(3*time.Minute), "kadamba lunch 35")
+	// History that syncs late lands by its time, not its row.
+	post("7@s.whatsapp.net", "kadamba", "veg", at.Add(-2*time.Minute), "late sync kadamba")
+	got, known, err := s.After(ctx, chat, ours)
+	if err != nil || !known {
+		t.Fatalf("After = %v %v", known, err)
+	}
+	// Messages: hi, kadamba 40, nv, bakul, ours again, kadamba 35.
+	// Listings: only 4's kadamba listing; the non-veg one and ours don't.
+	if got.Messages != 6 || got.Listings != 1 {
+		t.Fatalf("After = %+v, want 6 messages and 1 listing", got)
 	}
 }

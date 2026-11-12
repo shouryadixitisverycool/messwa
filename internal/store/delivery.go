@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -42,7 +43,14 @@ var deliveryColumns = []string{
 	"sent_at INTEGER",
 	// The sell task that armed this delivery, if any.
 	"task_id INTEGER",
+	// What counted as the payment: empty for WhatsApp Pay, PaidByImage
+	// for an image accepted under [sell] accept_payment_images.
+	"payment_kind TEXT NOT NULL DEFAULT ''",
 }
+
+// PaidByImage marks a delivery sent for an image the buyer sent, assumed
+// to show a payment. Nothing verified it.
+const PaidByImage = "image"
 
 type Delivery struct {
 	Date, Meal, Peer, Amount, ImageHash string
@@ -122,6 +130,41 @@ func (s *Store) ReleaseHandoff(ctx context.Context, date, meal string) (bool, er
 	return n == 1, err
 }
 
+// ReleaseUnpaid frees a meal whose buyer never paid: a handed-off slot, or
+// an armed one with no payment claimed, such as a stopped deliver-qr -peer
+// leaves behind. It refuses meals that are paid, being sent or sent, and
+// meals an active sell task is still selling. It returns the freed state.
+func (s *Store) ReleaseUnpaid(ctx context.Context, date, meal string) (string, error) {
+	var state string
+	var paid bool
+	var task sql.NullInt64
+	var taskActive bool
+	err := s.db.QueryRowContext(ctx, `SELECT d.state, d.payment_id IS NOT NULL, d.task_id,
+ coalesce((SELECT t.state='active' FROM sell_tasks t WHERE t.id=d.task_id), 0)
+ FROM qr_deliveries d WHERE d.date=? AND d.meal=?`, date, meal).Scan(&state, &paid, &task, &taskActive)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", errors.New("that meal has no reservation")
+	}
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case paid || (state != "armed" && state != "handed_off"):
+		return "", fmt.Errorf("meal is %s; paid, sending and sent meals are left alone", state)
+	case taskActive:
+		return "", fmt.Errorf("sell task %d is still selling this meal; cancel it instead, which frees the reservation", task.Int64)
+	}
+	r, err := s.db.ExecContext(ctx, `DELETE FROM qr_deliveries WHERE date=? AND meal=? AND state=? AND payment_id IS NULL
+ AND NOT EXISTS(SELECT 1 FROM sell_tasks t WHERE t.id=qr_deliveries.task_id AND t.state='active')`, date, meal, state)
+	if err != nil {
+		return "", err
+	}
+	if n, err := r.RowsAffected(); err != nil || n != 1 {
+		return "", errors.Join(err, errors.New("the reservation changed while releasing it; check it again"))
+	}
+	return state, nil
+}
+
 // An existing slot can only resume with the exact same buyer, price and image,
 // except a handed-off one: you own that sale, so arming it takes whatever
 // buyer, price and image you give.
@@ -168,6 +211,8 @@ type Payment struct {
 	ID        string
 	At        time.Time
 	BuyerName string // the buyer's WhatsApp push name; untrusted
+	// Kind is empty for a WhatsApp Pay payment, or PaidByImage.
+	Kind string
 }
 
 // Claim before network I/O. Uncertain sends deliberately remain 'sending' and
@@ -180,8 +225,8 @@ func (s *Store) ClaimDelivery(ctx context.Context, d Delivery, p Payment, messag
 	if !p.At.IsZero() {
 		paidAt = p.At.Unix()
 	}
-	r, err := s.db.ExecContext(ctx, `UPDATE qr_deliveries SET state='sending',payment_id=?,message_id=?,paid_at=?,buyer_name=?
- WHERE date=? AND meal=? AND peer=? AND amount=? AND image_hash=? AND state='armed'`, p.ID, messageID, paidAt, p.BuyerName, d.Date, d.Meal, d.Peer, d.Amount, d.ImageHash)
+	r, err := s.db.ExecContext(ctx, `UPDATE qr_deliveries SET state='sending',payment_id=?,message_id=?,paid_at=?,buyer_name=?,payment_kind=?
+ WHERE date=? AND meal=? AND peer=? AND amount=? AND image_hash=? AND state='armed'`, p.ID, messageID, paidAt, p.BuyerName, p.Kind, d.Date, d.Meal, d.Peer, d.Amount, d.ImageHash)
 	if err != nil {
 		return false, err
 	}
@@ -213,6 +258,8 @@ type DeliveryRecord struct {
 	// or LID) when known. Both are untrusted.
 	BuyerName, PeerAlt               string
 	ArmedAt, OfferAt, PaidAt, SentAt time.Time // zero when unknown
+	// PaymentKind is empty for WhatsApp Pay, or PaidByImage.
+	PaymentKind string
 }
 
 // Deliveries returns every recorded meal, oldest first: armed, handed_off,
@@ -221,7 +268,7 @@ func (s *Store) Deliveries(ctx context.Context) ([]DeliveryRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT d.date,d.meal,d.peer,d.amount,d.state,d.mess,d.diet,
  CASE WHEN d.buyer_name != '' THEN d.buyer_name ELSE coalesce((SELECT p.push_name FROM dm_peers p WHERE d.peer IN (p.jid, p.alt) AND p.push_name != '' LIMIT 1), '') END,
  coalesce((SELECT CASE WHEN p.jid = d.peer THEN p.alt ELSE p.jid END FROM dm_peers p WHERE d.peer IN (p.jid, p.alt) LIMIT 1), ''),
- d.armed_at, coalesce(d.offer_at,0), coalesce(d.paid_at,0), coalesce(d.sent_at,0)
+ d.armed_at, coalesce(d.offer_at,0), coalesce(d.paid_at,0), coalesce(d.sent_at,0), d.payment_kind
  FROM qr_deliveries d ORDER BY d.date, d.meal`)
 	if err != nil {
 		return nil, err
@@ -237,13 +284,21 @@ func (s *Store) Deliveries(ctx context.Context) ([]DeliveryRecord, error) {
 	for rows.Next() {
 		var r DeliveryRecord
 		var armed, offer, paid, sent int64
-		if err := rows.Scan(&r.Date, &r.Meal, &r.Peer, &r.Amount, &r.State, &r.Mess, &r.Diet, &r.BuyerName, &r.PeerAlt, &armed, &offer, &paid, &sent); err != nil {
+		if err := rows.Scan(&r.Date, &r.Meal, &r.Peer, &r.Amount, &r.State, &r.Mess, &r.Diet, &r.BuyerName, &r.PeerAlt, &armed, &offer, &paid, &sent, &r.PaymentKind); err != nil {
 			return nil, err
 		}
 		r.ArmedAt, r.OfferAt, r.PaidAt, r.SentAt = unix(armed), unix(offer), unix(paid), unix(sent)
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// PaymentKind is what counted as the payment for the meal's delivery:
+// empty for WhatsApp Pay, or PaidByImage.
+func (s *Store) PaymentKind(ctx context.Context, date, meal string) (string, error) {
+	var kind string
+	err := s.db.QueryRowContext(ctx, `SELECT payment_kind FROM qr_deliveries WHERE date=? AND meal=?`, date, meal).Scan(&kind)
+	return kind, err
 }
 
 // OfferPost is a group post offering a meal. A meal can have several: one per

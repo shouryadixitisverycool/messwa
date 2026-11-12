@@ -35,10 +35,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS sell_tasks_one_active ON sell_tasks(date, meal
 CREATE TABLE IF NOT EXISTS sell_task_offers (
  task_id INTEGER NOT NULL,
  group_jid TEXT NOT NULL,
+ seq INTEGER NOT NULL DEFAULT 0,
  offer_id TEXT NOT NULL,
  state TEXT NOT NULL,
  posted_at INTEGER NOT NULL,
- PRIMARY KEY(task_id, group_jid)
+ PRIMARY KEY(task_id, group_jid, seq)
 );
 CREATE TABLE IF NOT EXISTS sell_task_buyers (
  task_id INTEGER NOT NULL,
@@ -106,8 +107,11 @@ type SellTask struct {
 	TargetPaise int64
 }
 
+// SellOffer is one copy of a task's offer in a group. Seq 0 is the first
+// copy there and each repost is one higher.
 type SellOffer struct {
 	Group, ID, State string
+	Seq              int
 	PostedAt         time.Time
 	Error            string // why a failed post failed
 }
@@ -225,19 +229,57 @@ func (s *Store) EndSellTask(ctx context.Context, id int64, state, detail string,
 	return n == 1, err
 }
 
-// ClaimOfferPost records a group post before it is sent. Each group gets at
-// most one post per task, whatever happens to the send.
-func (s *Store) ClaimOfferPost(ctx context.Context, id int64, group, offerID string, at time.Time) error {
-	r, err := s.db.ExecContext(ctx, `INSERT INTO sell_task_offers(task_id,group_jid,offer_id,state,posted_at)
- SELECT ?,?,?,'posting',? WHERE EXISTS(SELECT 1 FROM sell_tasks WHERE id=? AND state='active')
- ON CONFLICT(task_id,group_jid) DO NOTHING`, id, group, offerID, at.Unix(), id)
+// ClaimOfferPost records copy number seq of the offer in a group before it
+// is sent: 0 for the first copy, then one more for each repost. Each
+// number is claimed at most once per group, whatever happens to the send,
+// and only after the copy before it was claimed.
+func (s *Store) ClaimOfferPost(ctx context.Context, id int64, group, offerID string, seq int, at time.Time) error {
+	r, err := s.db.ExecContext(ctx, `INSERT INTO sell_task_offers(task_id,group_jid,seq,offer_id,state,posted_at)
+ SELECT ?,?,?,?,'posting',? WHERE EXISTS(SELECT 1 FROM sell_tasks WHERE id=? AND state='active')
+ AND (SELECT count(*) FROM sell_task_offers WHERE task_id=? AND group_jid=?)=?
+ ON CONFLICT(task_id,group_jid,seq) DO NOTHING`, id, group, seq, offerID, at.Unix(), id, id, group, seq)
 	if err != nil {
 		return err
 	}
 	if n, err := r.RowsAffected(); err != nil || n != 1 {
-		return errors.Join(err, errors.New("offer already posted to this group, or the task has ended"))
+		return errors.Join(err, errors.New("this copy of the offer was already claimed for this group, or the task has ended"))
 	}
 	return nil
+}
+
+// migrateSellOffers moves a sell_task_offers table from before reposts,
+// which allowed one copy per group, to one keyed by copy number. Existing
+// copies become copy 0.
+func migrateSellOffers(db *sql.DB) error {
+	var has bool
+	if err := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('sell_task_offers') WHERE name='seq')`).Scan(&has); err != nil || has {
+		return err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		`ALTER TABLE sell_task_offers RENAME TO sell_task_offers_old`,
+		`CREATE TABLE sell_task_offers (
+ task_id INTEGER NOT NULL,
+ group_jid TEXT NOT NULL,
+ seq INTEGER NOT NULL DEFAULT 0,
+ offer_id TEXT NOT NULL,
+ state TEXT NOT NULL,
+ posted_at INTEGER NOT NULL,
+ PRIMARY KEY(task_id, group_jid, seq)
+)`,
+		`INSERT INTO sell_task_offers(task_id,group_jid,seq,offer_id,state,posted_at)
+ SELECT task_id,group_jid,0,offer_id,state,posted_at FROM sell_task_offers_old ORDER BY rowid`,
+		`DROP TABLE sell_task_offers_old`,
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) SetOfferState(ctx context.Context, id int64, offerID, state string) error {
@@ -254,7 +296,7 @@ func (s *Store) OfferClaimed(ctx context.Context, id int64, group, offerID strin
 }
 
 func (s *Store) SellTaskOffers(ctx context.Context, id int64) ([]SellOffer, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT group_jid,offer_id,state,posted_at,error FROM sell_task_offers WHERE task_id=? ORDER BY rowid`, id)
+	rows, err := s.db.QueryContext(ctx, `SELECT group_jid,seq,offer_id,state,posted_at,error FROM sell_task_offers WHERE task_id=? ORDER BY posted_at, rowid`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -263,7 +305,7 @@ func (s *Store) SellTaskOffers(ctx context.Context, id int64) ([]SellOffer, erro
 	for rows.Next() {
 		var o SellOffer
 		var at int64
-		if err := rows.Scan(&o.Group, &o.ID, &o.State, &at, &o.Error); err != nil {
+		if err := rows.Scan(&o.Group, &o.Seq, &o.ID, &o.State, &at, &o.Error); err != nil {
 			return nil, err
 		}
 		o.PostedAt = time.Unix(at, 0)

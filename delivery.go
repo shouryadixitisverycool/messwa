@@ -64,6 +64,12 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 		if len(sell.Groups) == 0 {
 			return errors.New("choose -peer, or -group/-group-count, or set groups or group_count under [sell] in the config")
 		}
+	} else {
+		// A -peer sale takes only this one [sell] setting.
+		sell.AcceptPaymentImages = cfg.Sell.AcceptPaymentImages
+		if overrides.paymentImages != nil {
+			sell.AcceptPaymentImages = *overrides.paymentImages
+		}
 	}
 	groupMode := len(sell.Groups) > 0
 	if groupMode && !*portalQR && strings.TrimSpace(*offer) == "" {
@@ -113,7 +119,10 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	s := &sale{
 		log: log, loc: cfg.Location(), date: *date, meal: *meal, end: slot.End,
 		image: data, testImage: *qr == "", imageHash: fmt.Sprintf("%x", sha256.Sum256(data)),
-		diagnostics: *diagnostics, assumeUnreadable: *assumeUnreadable,
+		diagnostics: *diagnostics, assumeUnreadable: *assumeUnreadable, acceptImages: sell.AcceptPaymentImages,
+	}
+	if s.acceptImages {
+		fmt.Fprintln(os.Stderr, "accept_payment_images is on: an image the buyer sends after the payment prompt counts as payment. Nothing verifies it; check your UPI app before trusting the sale.")
 	}
 	var extras []string
 	if *portalQR {
@@ -220,7 +229,13 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	// Record each copy as it posts, so the ✅ after a sale reaches copies
 	// that went out after the first.
 	record := func(p postedOffer) { recordOffers(ctx, st, own, log, *date, *meal, []postedOffer{p}) }
-	posting.post(ctx, log, targets, 0, sell.PostGap, directCopy(s.conn, s.send, groupPost), record)
+	send := directCopy(s.conn, s.send, groupPost)
+	posting.post(ctx, log, targets, 0, sell.PostGap, send, record)
+	posting.keepInView(ctx, &reposter{
+		log: log, st: st, rules: sell.Repost, end: slot.End, gap: sell.PostGap,
+		groups: func(context.Context) ([]offerTarget, error) { return targets, nil },
+		copies: posting.memoryCopies, send: send, record: record,
+	})
 	if err := posting.waitPosted(); err != nil {
 		return err
 	}
@@ -236,15 +251,60 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 			return handOff(ctx, st, log, os.Stdout, d, posting.queue.name(buyer), resumeFlags(*portalQR, *user, *qr), others)
 		}
 	}
-	err = s.sellToQueue(ctx, commandCtx, posting.queue, memoryJournal{amount: *amount, st: st}, 10*time.Minute, nil)
+	saleCtx, firstWait := ctx, firstReplyWait
+	if sell.Repost.On {
+		// Reposts keep the offer up, so the wait for a first reply runs
+		// from the last copy, once no more will go out.
+		var stopWaiting context.CancelCauseFunc
+		saleCtx, stopWaiting = context.WithCancelCause(ctx)
+		defer stopWaiting(nil)
+		firstWait = 0
+		go waitForFirstReply(saleCtx, posting, firstReplyWait, stopWaiting)
+	}
+	err = s.sellToQueue(saleCtx, commandCtx, posting.queue, memoryJournal{amount: *amount, st: st}, firstWait, nil)
 	switch {
 	case errors.Is(err, errHandedOff):
 		return nil
+	case errors.Is(context.Cause(saleCtx), errNoFirstReply):
+		return fmt.Errorf("%w; %d copies posted", errNoFirstReply, len(posting.stop()))
 	case err != nil:
 		return err
 	}
 	tickOffers()
 	return nil
+}
+
+// firstReplyWait is how long deliver-qr -group waits for a first private
+// reply after the offer goes up, or with reposts after its latest copy.
+const firstReplyWait = 10 * time.Minute
+
+var errNoFirstReply = fmt.Errorf("no private reply within %s of the last copy of the offer", firstReplyWait)
+
+// waitForFirstReply ends a reposting offer with errNoFirstReply when nobody
+// joined the queue by wait after its last copy, once no more copies will go
+// out.
+func waitForFirstReply(ctx context.Context, o *groupOffer, wait time.Duration, stop context.CancelCauseFunc) {
+	tick := time.NewTicker(5 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		if o.queue.joined() {
+			return
+		}
+		select {
+		case <-o.repostsDone():
+		default:
+			continue
+		}
+		if last := o.lastPosted(); !last.IsZero() && time.Since(last) >= wait {
+			stop(errNoFirstReply)
+			return
+		}
+	}
 }
 
 // resumeFlags are the image flags for resuming a handed-off sale with
@@ -371,7 +431,9 @@ func paymentMatch(e *events.Message, amounts []string, armedAt, endsAt, now time
 	return "", first
 }
 
-func deliveryRejection(e *events.Message, amount string, armedAt, endsAt, now time.Time) error {
+// dmRejection checks what every message that can trigger a delivery needs:
+// an incoming personal DM sent inside the delivery window.
+func dmRejection(e *events.Message, armedAt, endsAt, now time.Time) error {
 	if e == nil || e.Info.IsFromMe || e.Info.IsGroup || e.Info.ID == "" {
 		return errors.New("not an incoming DM with a message ID")
 	}
@@ -380,6 +442,26 @@ func deliveryRejection(e *events.Message, amount string, armedAt, endsAt, now ti
 	}
 	if e.Info.Timestamp.Before(armedAt) || !e.Info.Timestamp.Before(endsAt) || !now.Before(endsAt) || e.Info.Timestamp.After(now.Add(5*time.Second)) {
 		return errors.New("message time outside the delivery window")
+	}
+	return nil
+}
+
+// imagePaymentRejection checks an image the buyer sent as their payment
+// under [sell] accept_payment_images. Only who sent it and when are
+// checked; what the image shows is not.
+func imagePaymentRejection(e *events.Message, armedAt, endsAt, now time.Time) error {
+	if err := dmRejection(e, armedAt, endsAt, now); err != nil {
+		return err
+	}
+	if e.Message.GetImageMessage() == nil {
+		return errors.New("not an image")
+	}
+	return nil
+}
+
+func deliveryRejection(e *events.Message, amount string, armedAt, endsAt, now time.Time) error {
+	if err := dmRejection(e, armedAt, endsAt, now); err != nil {
+		return err
 	}
 	payment := e.Message.GetSendPaymentMessage()
 	if payment == nil {

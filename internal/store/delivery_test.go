@@ -205,3 +205,74 @@ func TestHandedOffSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestReleaseUnpaid frees what a stopped deliver-qr -peer leaves armed, and
+// nothing a buyer paid for or a running sell task holds.
+func TestReleaseUnpaid(t *testing.T) {
+	ctx := t.Context()
+	s, err := Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.ReleaseUnpaid(ctx, "2026-11-12", "lunch"); err == nil {
+		t.Fatal("released a meal with no reservation")
+	}
+	d := Delivery{Date: "2026-11-12", Meal: "lunch", Peer: "a", Amount: "15.00", ImageHash: "portal:x", ArmedAt: time.Unix(1794000000, 0)}
+	if _, err := s.ArmDelivery(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	if freed, err := s.ReleaseHandoff(ctx, d.Date, d.Meal); err != nil || freed {
+		t.Fatalf("release-handoff without -unpaid freed an armed meal: %t, %v", freed, err)
+	}
+	if state, err := s.ReleaseUnpaid(ctx, d.Date, d.Meal); err != nil || state != "armed" {
+		t.Fatalf("release armed: %q, %v", state, err)
+	}
+	if _, err := s.ArmNewDelivery(ctx, d); err != nil {
+		t.Fatalf("meal not free after release: %v", err)
+	}
+
+	// Paid, sending and sent meals stay.
+	if ok, err := s.ClaimDelivery(ctx, d, Payment{ID: "pay"}, "out"); err != nil || !ok {
+		t.Fatalf("claim: %t, %v", ok, err)
+	}
+	if _, err := s.ReleaseUnpaid(ctx, d.Date, d.Meal); err == nil {
+		t.Fatal("released a meal being sent")
+	}
+	if err := s.FinishDelivery(ctx, d, "out"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ReleaseUnpaid(ctx, d.Date, d.Meal); err == nil {
+		t.Fatal("released a sent meal")
+	}
+
+	// A handed-off meal is freed too.
+	handed := d
+	handed.Meal = "dinner"
+	if err := s.HandOffDelivery(ctx, handed, ""); err != nil {
+		t.Fatal(err)
+	}
+	if state, err := s.ReleaseUnpaid(ctx, handed.Date, handed.Meal); err != nil || state != "handed_off" {
+		t.Fatalf("release handoff: %q, %v", state, err)
+	}
+
+	// An active sell task's reservation is the task's to free.
+	task := SellTask{Date: "2026-11-13", Meal: "lunch", MinPaise: 2000, MaxPaise: 3000, CreatedAt: time.Now(), EndsAt: time.Now().Add(time.Hour)}
+	id, err := s.CreateSellTask(ctx, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	td := Delivery{Date: task.Date, Meal: task.Meal, Peer: "c", Amount: "20.00", ImageHash: "portal:x", ArmedAt: time.Now()}
+	if _, err := s.ArmTaskDelivery(ctx, id, td); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ReleaseUnpaid(ctx, td.Date, td.Meal); err == nil {
+		t.Fatal("released a reservation an active sell task holds")
+	}
+	if ok, _ := s.EndSellTask(ctx, id, TaskFailed, "stopped", time.Now()); !ok {
+		t.Fatal("could not end the task")
+	}
+	if state, err := s.ReleaseUnpaid(ctx, td.Date, td.Meal); err != nil || state != "armed" {
+		t.Fatalf("release after the task ended: %q, %v", state, err)
+	}
+}

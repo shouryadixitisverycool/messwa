@@ -48,12 +48,22 @@ func TestSellSettings(t *testing.T) {
 	if err != nil || c.Sell.GroupCount != 2 || c.Sell.ShowPrice || !c.Sell.MentionExtras || c.Sell.PostGap.Seconds() != 30 {
 		t.Fatalf("sell = %+v, %v", c.Sell, err)
 	}
+	if !c.Sell.Repost || c.Sell.RepostAfter.Minutes() != 10 || c.Sell.RepostMessages != 10 || c.Sell.RepostListings != 3 || c.Sell.MaxReposts != 6 {
+		t.Errorf("repost settings = %+v", c.Sell)
+	}
+	c, err = load("[sell]\nrepost = false\nrepost_after = \"0s\"\nrepost_messages = 15\nmax_reposts = 0\n")
+	if err != nil || c.Sell.Repost || c.Sell.RepostAfter.Duration != 0 || c.Sell.RepostMessages != 15 || c.Sell.RepostListings != 3 || c.Sell.MaxReposts != 0 {
+		t.Fatalf("repost settings = %+v, %v", c.Sell, err)
+	}
 	for name, body := range map[string]string{
 		"both":          "groups = [\"1@g.us\"]\n[sell]\ngroups = [\"Mess\"]\ngroup_count = 1\n",
 		"count high":    "groups = [\"1@g.us\"]\n[sell]\ngroup_count = 2\n",
 		"count low":     "[sell]\ngroup_count = -1\n",
 		"empty group":   "[sell]\ngroups = [\" \"]\n",
 		"gap too short": "[sell]\npost_gap = \"1s\"\n",
+		"repost soon":   "[sell]\nrepost_after = \"1m\"\n",
+		"bad count":     "[sell]\nrepost_listings = -1\n",
+		"many reposts":  "[sell]\nmax_reposts = 13\n",
 	} {
 		if _, err := load(body); err == nil {
 			t.Errorf("%s: accepted", name)

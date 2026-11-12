@@ -37,9 +37,9 @@ func TestSaleViews(t *testing.T) {
 
 	// Two posts: one went up and got buried under 23 others, one failed.
 	posted := now.Add(-31 * time.Minute)
-	st.ClaimOfferPost(ctx, id, "a@g.us", "o1", posted)
+	st.ClaimOfferPost(ctx, id, "a@g.us", "o1", 0, posted)
 	st.SetOfferState(ctx, id, "o1", store.OfferPosted)
-	st.ClaimOfferPost(ctx, id, "b@g.us", "o2", posted)
+	st.ClaimOfferPost(ctx, id, "b@g.us", "o2", 0, posted)
 	st.SetOfferFailed(ctx, id, "o2", "server returned error 479")
 	mine := &store.Listing{Seller: "me", Kind: "sell", Meal: "lunch", MealDate: "2026-11-12", MealEnd: now.Add(38 * time.Minute), FirstSeen: posted, LastSeen: posted}
 	st.CreateListing(ctx, mine)

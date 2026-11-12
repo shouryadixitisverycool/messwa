@@ -33,6 +33,7 @@ type saleConn interface {
 	BuildUnavailableMessageRequest(chat, sender types.JID, id string) *waE2E.Message
 	BuildReaction(chat, sender types.JID, id types.MessageID, reaction string) *waE2E.Message
 	GetJoinedGroups(ctx context.Context) ([]*types.GroupInfo, error)
+	GetGroupInfo(ctx context.Context, jid types.JID) (*types.GroupInfo, error)
 	// PNForLID returns the phone-number JID for a LID, or an empty JID.
 	PNForLID(ctx context.Context, lid types.JID) types.JID
 	// SavedContact reports whether any of jids, under its number or its
@@ -102,6 +103,10 @@ type sale struct {
 
 	diagnostics      bool
 	assumeUnreadable bool
+	// acceptImages counts an image from the buyer whose turn it is as
+	// their payment, once they have the payment prompt. Nothing about the
+	// image is checked. See [sell] accept_payment_images.
+	acceptImages bool
 
 	// handoff, when set, gets the first buyer from the queue instead of the
 	// bot, which sends them nothing. others are the buyers still queued.
@@ -263,10 +268,14 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 	pending := 0
 	var mu sync.Mutex
 	attempted, delivering := false, false
+	// prompted is set once the buyer has the payment prompt. A turn
+	// without one (deliver-qr -peer without -offer-text, or one resumed
+	// after a restart) had its price settled before it started.
+	prompted := t.prompt == ""
 	requestedPayments := map[string]context.CancelFunc{}
 	// finish runs with mu held. The delivery itself runs in a goroutine so
 	// the event handler doesn't hold up the rest of run's ingest.
-	finish := func(e *events.Message, amountMissing bool, paidAmount string) {
+	finish := func(e *events.Message, amountMissing bool, paidAmount string, image bool) {
 		attempted, delivering = true, true
 		for _, stop := range requestedPayments {
 			stop()
@@ -278,6 +287,11 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 		}
 		id := s.conn.GenerateMessageID()
 		paid := store.Payment{ID: e.Info.ID, At: e.Info.Timestamp, BuyerName: e.Info.PushName}
+		if image {
+			paid.Kind = store.PaidByImage
+			s.log.Warn("buyer sent an image after the payment prompt; assuming it shows a payment, which is NOT verified. Check your UPI app",
+				"date", d.Date, "meal", d.Meal, "amount_assumed", d.Amount, "image_id", e.Info.ID)
+		}
 		go func() {
 			// Once a payment is claimed, cancelling the task or the meal
 			// ending must not cut the QR upload short.
@@ -295,7 +309,7 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 					return
 				}
 			}
-			s.log.Info("payment assumed; sending meal image", "date", d.Date, "meal", d.Meal, "amount", d.Amount)
+			s.log.Info("payment assumed; sending meal image", "date", d.Date, "meal", d.Meal, "amount", d.Amount, "paid_by", paidBy(paid.Kind))
 			err := deliverOnce(sendCtx, s.st, d, paid, id, func() error { return s.sendQR(sendCtx, e.Info.Chat, id, d, queued) })
 			if err == nil {
 				s.log.Info("meal image sent", "date", d.Date, "meal", d.Meal, "message_id", id)
@@ -347,6 +361,18 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 		if queued && pending == 0 && !e.Info.Timestamp.Before(armedAt) && buyerPassed(e.Message) {
 			attempted = true
 			done <- errBuyerPassed
+			return
+		}
+		if s.acceptImages && e.Message.GetImageMessage() != nil {
+			reason := imagePaymentRejection(e, armedAt, s.end, time.Now())
+			if reason == nil && !prompted {
+				reason = errors.New("image arrived before the payment prompt went out")
+			}
+			if reason != nil {
+				s.log.Info("image did not count as payment", "image_id", e.Info.ID, "at", e.Info.Timestamp, "reason", reason.Error())
+				return
+			}
+			finish(e, false, "", true)
 			return
 		}
 		paidAmount, reason := paymentMatch(e, append([]string{d.Amount}, t.amounts...), armedAt, s.end, time.Now())
@@ -401,19 +427,25 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 						return
 					}
 					if s.assumeUnreadable {
-						finish(e, true, "")
+						finish(e, true, "", false)
 						return
 					}
 					s.log.Warn("payment amount unreadable after recovery; not sending the meal image. Check the buyer's chat, or rerun with -assume-unreadable-payment",
 						"date", d.Date, "meal", d.Meal, "payment_id", e.Info.ID)
 				}()
 			}
-			if s.diagnostics {
+			switch {
+			case e.Message.GetSendPaymentMessage() != nil:
+				// A payment that sends nothing looks like a hang, so say why
+				// even without -diagnostics. The reason names a check, never
+				// what the message says.
+				s.log.Info("payment did not trigger delivery", "payment_id", e.Info.ID, "at", e.Info.Timestamp, "reason", reason.Error())
+			case s.diagnostics:
 				s.log.Info("buyer message did not trigger delivery", "at", e.Info.Timestamp, "reason", reason.Error())
 			}
 			return
 		}
-		finish(e, false, paidAmount)
+		finish(e, false, paidAmount, false)
 	})
 	defer s.conn.RemoveEventHandler(handler)
 	if t.listening != nil {
@@ -428,6 +460,12 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 				return err
 			}
 		}
+		if !send {
+			// It went out before a restart.
+			mu.Lock()
+			prompted = true
+			mu.Unlock()
+		}
 		if send {
 			prompt := t.prompt
 			if queued {
@@ -436,6 +474,9 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 			if _, err := s.send(ctx, buyer, &waE2E.Message{Conversation: proto.String(prompt)}); err != nil {
 				return fmt.Errorf("offer send failed or is uncertain; inspect chat before retrying: %w", err)
 			}
+			mu.Lock()
+			prompted = true
+			mu.Unlock()
 			s.log.Info("offer sent to selected buyer")
 			s.note(buyer, store.EventPrompt, paise(d.Amount), prompt)
 			if err := s.st.MarkOfferSent(ctx, d, time.Now()); err != nil {
@@ -481,6 +522,14 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 	case <-ctx.Done():
 		return waitDelivery(ctx.Err())
 	}
+}
+
+// paidBy names a payment kind for the log.
+func paidBy(kind string) string {
+	if kind == store.PaidByImage {
+		return "image (not verified)"
+	}
+	return "WhatsApp Pay"
 }
 
 // saleJournal records a queued sale's progress. Sell tasks persist it so
