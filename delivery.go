@@ -78,6 +78,9 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	if *peer != "" && overrides.acceptPlainDMs != nil {
 		return errors.New("-accept-plain-dms applies only to group offers; -peer is already your own buyer")
 	}
+	if *peer != "" && overrides.buyers != nil {
+		return errors.New("-buyers applies only to group offers; -peer is already your own buyer")
+	}
 	handoff := config.HandoffNever
 	if groupMode {
 		var err error
@@ -178,6 +181,9 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 		tickOffers()
 		return nil
 	}
+	if sell.Buyers.UnsavedOnly() {
+		fmt.Fprintln(os.Stderr, "Buyers is unsaved_only: replies from saved contacts are skipped and get nothing.")
+	}
 	if sell.MentionExtras && (!*portalQR || strings.TrimSpace(*offer) != "") {
 		log.Info("extras are only listed in the offer built with -portal-qr and no -offer-text")
 	}
@@ -203,7 +209,9 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 		groupPost = offerText(offerDetails{Mess: s.mess, Diet: s.diet, Meal: *meal, Price: rupees(*amount),
 			ShowPrice: sell.ShowPrice, Day: offerDay(cfg, *date), Extras: extras})
 	}
-	posting := watchGroupOffer(ctx, s.conn, newOfferQueue())
+	queue := newOfferQueue()
+	queue.join = savedContactFilter(ctx, s.conn, log, sell.Buyers)
+	posting := watchGroupOffer(ctx, s.conn, queue)
 	defer posting.close()
 	if sell.AcceptPlainDMs {
 		fmt.Fprintln(os.Stderr, "accept_plain_dms is on: DMs that ask about the offer join the queue without quoting it.")

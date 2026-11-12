@@ -21,6 +21,8 @@ type sellSettings struct {
 	// AcceptPlainDMs lets DMs about the offer that don't quote it join the
 	// buyer queue; see plainDMs.
 	AcceptPlainDMs bool
+	// Buyers is who may buy; with unsaved_only, saved contacts are skipped.
+	Buyers config.Buyers
 }
 
 // sellFlags are the deliver-qr flags that override [sell] for one run. A
@@ -32,6 +34,7 @@ type sellFlags struct {
 	showPrice      *bool
 	mentionExtras  *bool
 	acceptPlainDMs *bool
+	buyers         *string
 }
 
 // pickGroups reports whether any flag picks offer groups.
@@ -59,6 +62,7 @@ func addSellFlags(fs *flag.FlagSet) func() sellFlags {
 	price := fs.Bool("show-price", true, "put the price in the group post (overrides [sell] show_price)")
 	extras := fs.Bool("mention-extras", false, "list the meal's registered extras in the group post (overrides [sell] mention_extras)")
 	plain := fs.Bool("accept-plain-dms", false, "let DMs that ask about the offer without quoting it join the buyer queue (overrides [sell] accept_plain_dms)")
+	buyers := fs.String("buyers", "", "who may buy from a group offer: anyone or unsaved_only (overrides [sell] buyers)")
 	return func() sellFlags {
 		f := sellFlags{groups: groups}
 		fs.Visit(func(fl *flag.Flag) {
@@ -73,6 +77,8 @@ func addSellFlags(fs *flag.FlagSet) func() sellFlags {
 				f.mentionExtras = extras
 			case "accept-plain-dms":
 				f.acceptPlainDMs = plain
+			case "buyers":
+				f.buyers = buyers
 			}
 		})
 		return f
@@ -87,6 +93,7 @@ func resolveSellSettings(cfg *config.Config, f sellFlags) (sellSettings, error) 
 		ShowPrice:      cfg.Sell.ShowPrice,
 		MentionExtras:  cfg.Sell.MentionExtras,
 		AcceptPlainDMs: cfg.Sell.AcceptPlainDMs,
+		Buyers:         cfg.Sell.Buyers,
 	}
 	firstN := func(n int, name string) ([]string, error) {
 		if n < 1 || n > len(cfg.Groups) {
@@ -133,6 +140,11 @@ func resolveSellSettings(cfg *config.Config, f sellFlags) (sellSettings, error) 
 	}
 	if f.acceptPlainDMs != nil {
 		s.AcceptPlainDMs = *f.acceptPlainDMs
+	}
+	if f.buyers != nil {
+		if s.Buyers, err = config.ParseBuyers(*f.buyers); err != nil {
+			return s, fmt.Errorf("-buyers: %w", err)
+		}
 	}
 	return s, nil
 }

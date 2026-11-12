@@ -337,6 +337,7 @@ included, no extras.
 | `mention_extras` | `-mention-extras` | `false` | List the extras registered for that meal |
 | `handoff` | `-handoff` | `never` | When to hand the buyer's chat to you, see below |
 | `accept_plain_dms` | `-accept-plain-dms` | `false` | Let DMs that ask about the offer without quoting it join the queue, see below |
+| `buyers` | `-buyers` | `anyone` | Who may buy. `unsaved_only` skips saved contacts, see below |
 
 With `groups` or `group_count` set, `deliver-qr` without `-peer` posts to
 those groups, so `-group` is no longer needed:
@@ -392,6 +393,17 @@ you've been in recently, so if that worries you, leave the setting off.
 same read as IIITH-mess-MCP's `get_extra_registrations`. Extras already eaten
 or registered at another mess are left out. If the read fails, the offer goes
 out without extras and the log says why.
+
+**Saved contacts.** By default anyone who replies privately can buy,
+friends included. With `buyers = "unsaved_only"`, a reply from someone in
+your address book never joins the buyer queue: the bot logs `a saved contact
+replied to the offer; skipped them and sent nothing` and sends them nothing,
+not a payment request, not `sorry sold`, not a handoff. "Saved" is the same
+check that decides whether a DM's text is stored (see [What gets
+stored](#what-gets-stored)): a name in your address book, looked up under
+both the buyer's number and their LID, so a buyer who appears only by LID
+still matches a contact saved under their number. `-buyers` doesn't apply to
+`-peer`, where you picked the buyer yourself.
 
 ### Taking over the chat yourself
 
@@ -600,7 +612,7 @@ What a task does:
 
 1. Checks your portal registration for that meal with your saved mess API key, the same way `deliver-qr -portal-qr` does.
 2. Posts the offer using the `[sell]` settings, like `deliver-qr` does with no flags (see [Offer settings](#offer-settings)): `groups` or `group_count`, `post_gap` between copies, `show_price`, `mention_extras` and `accept_plain_dms`. With `show_price` the post shows `max_price`, e.g. `sell bakul non-veg lunch ₹60`. If `[sell]` names no groups, the task posts in the first group in `groups`. A group that can't be found is skipped; the task fails only if no copy posts.
-3. Queues everyone who replies privately to any copy, in reply order. A plain DM that doesn't quote a post counts only with `[sell] accept_plain_dms = true`, under the rules in [Offer settings](#offer-settings).
+3. Queues everyone who replies privately to any copy, in reply order. A plain DM that doesn't quote a post counts only with `[sell] accept_plain_dms = true`, under the rules in [Offer settings](#offer-settings). With `[sell] buyers = "unsaved_only"`, saved contacts are skipped and get nothing (see [Saved contacts](#offer-settings)).
 4. Asks the first buyer to pay `max_price` within two minutes. They can reply `not interested`. Then the next buyer gets a turn, as in `deliver-qr -group`.
 5. Sends the QR after a matching WhatsApp Pay payment, stops posting copies, tells the rest of the queue `sorry sold`, reacts ✅ to the meal's offer posts, and ends as `sold`.
 
@@ -612,6 +624,7 @@ A task also ends when you cancel it (`cancelled`), when the meal ends (`expired`
 
 - Nothing is sent unless a task is active. The one exception is a QR for a payment that came in while the task was active. It still goes out if you cancel a moment later, and the task then ends as `sold`.
 - Besides one claimed post per group, a task messages only people its posts queued: those who replied privately to one, or with `accept_plain_dms`, DMed about it. After the QR goes out it may also react ✅ to the meal's recorded offer posts, and to nothing else.
+- With `[sell] buyers = "unsaved_only"`, a task never queues or messages a saved contact. If you switch to it while a task is running, the restart skips saved contacts still waiting in the queue. A buyer already asked to pay keeps their turn, and gets the QR if they pay.
 - No buyer is asked for less than `min_price`, and the store refuses to reserve the meal below it. The payment must match the asked price exactly.
 - A task sends at most 6 messages a minute and 40 in total. All tasks together send at most 12 a minute. The ✅ reactions after a sale skip the per-minute wait, so they don't time out behind the sale's own sends.
 - A task stops at the meal's end time.
