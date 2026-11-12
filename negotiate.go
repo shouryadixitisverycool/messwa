@@ -792,6 +792,7 @@ func (ss *session) handle(texts []string) handled {
 		n.log.Info("buyer passed", "buyer", ss.buyer)
 		return handledEnded
 	case st.park != "":
+		ss.keepOffer(hs, st.next)
 		n.park(context.WithoutCancel(ctx), ss, st.park)
 		return handledEnded
 	case st.paidClaim:
@@ -805,6 +806,24 @@ func (ss *session) handle(texts []string) handled {
 		return handledReplied
 	}
 	return handledNothing
+}
+
+// keepOffer records the buyer's latest offer when the bot answers it
+// without a message, as when it parks them. say and agree record it with
+// the rest of the state; without this, the status kept showing an earlier
+// offer.
+func (ss *session) keepOffer(prev, next haggleState) {
+	if next.lastOffer == prev.lastOffer {
+		return
+	}
+	n := ss.n
+	if err := n.m.st.RecordBuyerOffer(context.WithoutCancel(n.talk), n.t.ID, ss.buyer.String(), int64(next.lastOffer)*100); err != nil {
+		n.log.Warn("could not record the buyer's offer", "buyer", ss.buyer, "err", err)
+		return
+	}
+	n.mu.Lock()
+	ss.hs.lastOffer = next.lastOffer
+	n.mu.Unlock()
 }
 
 // say claims and sends one message, recording next as the buyer's state.
