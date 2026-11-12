@@ -380,7 +380,13 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 						"date", d.Date, "meal", d.Meal, "payment_id", e.Info.ID)
 				}()
 			}
-			if s.diagnostics {
+			switch {
+			case e.Message.GetSendPaymentMessage() != nil:
+				// A payment that sends nothing looks like a hang, so say why
+				// even without -diagnostics. The reason names a check, never
+				// what the message says.
+				s.log.Info("payment did not trigger delivery", "payment_id", e.Info.ID, "at", e.Info.Timestamp, "reason", reason.Error())
+			case s.diagnostics:
 				s.log.Info("buyer message did not trigger delivery", "at", e.Info.Timestamp, "reason", reason.Error())
 			}
 			return
