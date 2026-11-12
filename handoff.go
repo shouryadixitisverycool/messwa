@@ -65,11 +65,13 @@ func handoffNotice(d store.Delivery, name, resumeFlags string, others []types.JI
 }
 
 // releaseHandoff frees a handed-off meal so a new deliver-qr can offer it.
-// It only reads and writes the database, so it is safe while run is up.
+// With -unpaid it also frees a reservation still waiting for payment.
+// It only touches the database, so it is safe while run is up.
 func releaseHandoff(ctx context.Context, cfg *config.Config, out io.Writer, args []string) error {
 	fs := flag.NewFlagSet("release-handoff", flag.ContinueOnError)
 	date := fs.String("date", "", "meal date, YYYY-MM-DD")
 	meal := fs.String("meal", "", "configured meal name")
+	unpaid := fs.Bool("unpaid", false, "also free a reservation still waiting for payment, such as one a stopped deliver-qr -peer left armed")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -81,12 +83,24 @@ func releaseHandoff(ctx context.Context, cfg *config.Config, out io.Writer, args
 		return err
 	}
 	defer st.Close()
+	if *unpaid {
+		state, err := st.ReleaseUnpaid(ctx, *date, *meal)
+		if err != nil {
+			return err
+		}
+		if state == "armed" {
+			fmt.Fprintf(out, "Released %s %s, which was waiting for a payment. It can be offered again. Stop any deliver-qr still waiting on it: a payment it sees now gets no QR.\n", *date, *meal)
+		} else {
+			fmt.Fprintf(out, "Released %s %s. It can be offered again.\n", *date, *meal)
+		}
+		return nil
+	}
 	freed, err := st.ReleaseHandoff(ctx, *date, *meal)
 	if err != nil {
 		return err
 	}
 	if !freed {
-		return errors.New("no handed-off sale for that meal; armed, paid and sent meals are left alone")
+		return errors.New("no handed-off sale for that meal; armed, paid and sent meals are left alone. To free an unpaid armed reservation, add -unpaid")
 	}
 	fmt.Fprintf(out, "Released %s %s. It can be offered again.\n", *date, *meal)
 	return nil

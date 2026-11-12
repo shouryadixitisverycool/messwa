@@ -448,7 +448,8 @@ Finish the sale one of two ways:
   ```
 
   This changes only the database, so it's safe while `run` is up. It refuses
-  meals that are armed, paid or sent.
+  meals that are armed, paid or sent. For an armed meal nobody paid for, add
+  `-unpaid` (see [One-meal QR delivery](#one-meal-qr-delivery)).
 
 If you send the QR from your phone instead, messwa never sees the payment.
 The meal stays handed off on the sales page and doesn't count toward
@@ -557,6 +558,21 @@ and make any follow-up manually; a timeout does not prove that delivery failed.
 The `sent` state records WhatsApp's send acknowledgement, not the buyer opening
 the image. Keep the same state database when restarting. Do not run two
 connections using the same linked-device session.
+
+A `-peer` run you stop before the buyer pays leaves the meal `armed` for that
+buyer at that price. Rerunning with the same `-peer`, `-amount` and image
+picks it up again. Any other buyer or price is refused until you free it:
+
+```sh
+./messwa release-handoff -date 2026-11-12 -meal lunch -unpaid
+```
+
+`-unpaid` frees a meal that is `armed` with no payment claimed, as well as a
+handed-off one. It refuses meals that are paid, `sending` or `sent`, and
+meals an active sell task is selling (cancel the task, which frees its
+reservation). It changes only the database, so it's safe while `run` is up.
+Stop the `deliver-qr` that armed the meal first: if that buyer pays after the
+release, that run finds no reservation and sends no QR.
 
 This command is not exposed through MCP and does not implement automatic
 registration imports, scheduling, negotiation or refunds. To negotiate,

@@ -57,8 +57,9 @@ commands:
              [-buyers anyone|unsaved_only]
                                 arm one meal's QR delivery after a matching payment message;
                                 without -peer it posts an offer to the [sell] groups
-  release-handoff -date DATE -meal MEAL
-                                free a meal handed to you by -handoff on_reply so it can be offered again
+  release-handoff -date DATE -meal MEAL [-unpaid]
+                                free a meal handed to you by -handoff on_reply so it can be offered again;
+                                -unpaid also frees one armed for a buyer who never paid
   mark-sold -date DATE -meal MEAL
                                 react ✅ to the meal's offer posts, for a sale finished by hand
 
