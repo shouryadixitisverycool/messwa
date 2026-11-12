@@ -222,7 +222,7 @@ func (m *sellManager) Resume(ctx context.Context, enabled bool) error {
 		}
 		switch {
 		case !enabled:
-			m.end(t, store.TaskCancelled, "sell tasks are turned off in config.toml")
+			m.end(t, store.TaskCancelled, "sell tasks are turned off in settings")
 		case !time.Now().Before(t.EndsAt):
 			m.end(t, store.TaskExpired, "the meal ended while messwa was stopped")
 		default:
@@ -243,6 +243,10 @@ func (m *sellManager) Resume(ctx context.Context, enabled bool) error {
 	}
 	return nil
 }
+
+// repostRules are the repost settings as saved now. Running tasks read them
+// every round, and so does sell_task_status, so both agree.
+func (m *sellManager) repostRules() repost.Rules { return repost.FromConfig(m.cfg.Live().Sell) }
 
 func (m *sellManager) newSale(date, meal string, end time.Time) *sale {
 	return &sale{log: m.log, loc: m.cfg.Location(), conn: m.conn, st: m.st, date: date, meal: meal, end: end}
@@ -505,7 +509,7 @@ func (m *sellManager) postCopies(ctx context.Context, t store.SellTask, s *sale,
 	record := func(p postedOffer) { recordOffers(ctx, m.st, m.own, m.log, t.Date, t.Meal, []postedOffer{p}) }
 	keepInView := func() {
 		posting.keepInView(ctx, &reposter{
-			log: m.log.With("task", t.ID), st: m.st, rules: settings.Repost, end: t.EndsAt, gap: settings.PostGap,
+			log: m.log.With("task", t.ID), st: m.st, live: m.repostRules, end: t.EndsAt, gap: settings.PostGap,
 			groups: targets,
 			copies: func(ctx context.Context) ([]repost.Copy, error) {
 				offers, err := m.st.SellTaskOffers(ctx, t.ID)
@@ -783,7 +787,7 @@ func (g *taskGate) react(ctx context.Context, chat types.JID, target, emoji stri
 // turnsAway is the [sell] buyers check for this task. Every way a buyer
 // joins the queue calls it, and so does every DM the task sends.
 func (g *taskGate) turnsAway(ctx context.Context, peers ...types.JID) bool {
-	return turnsAway(ctx, g.m.conn, g.m.cfg.Sell.Buyers, peers...)
+	return turnsAway(ctx, g.m.conn, g.m.cfg.Live().Sell.Buyers, peers...)
 }
 
 func (g *taskGate) deliver(ctx context.Context, paid bool, to types.JID, msg *waE2E.Message, extra ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error) {

@@ -106,7 +106,7 @@ func (in *Ingester) ownReply(ctx context.Context, p GroupPost, l *store.Listing)
 		return false, err
 	}
 	t := classify.Prepare(p.Text)
-	sold := t.Words() <= 6 && t.Has(in.cfg.Sold.Words...)
+	sold := t.Words() <= 6 && t.Has(in.cfg.Live().Sold.Words...)
 	if !sold && l.Mess != "" && l.Kind != "" {
 		return false, nil
 	}
@@ -129,11 +129,12 @@ func (in *Ingester) ownReply(ctx context.Context, p GroupPost, l *store.Listing)
 // different listing. A sold listing never absorbs a new post: a repost after
 // a buyer backs out should show as available.
 func (in *Ingester) findDuplicate(ctx context.Context, l *store.Listing, p GroupPost) (*store.Listing, error) {
-	recent, err := in.st.RecentBySeller(ctx, []string{p.Sender, p.SenderAlt}, p.TS.Add(-in.cfg.Dedupe.Window.Duration))
+	live := in.cfg.Live()
+	recent, err := in.st.RecentBySeller(ctx, []string{p.Sender, p.SenderAlt}, p.TS.Add(-live.Dedupe.Window.Duration))
 	if err != nil {
 		return nil, err
 	}
-	rule := store.SoldRule{Emojis: in.cfg.Sold.Emojis, ClosedEmojis: in.cfg.Sold.ClosedEmojis, AdminsCount: in.cfg.Sold.AdminsCount}
+	rule := store.SoldRule{Emojis: live.Sold.Emojis, ClosedEmojis: live.Sold.ClosedEmojis, AdminsCount: live.Sold.AdminsCount}
 	for i := range recent {
 		r := &recent[i]
 		if r.Meal != l.Meal || r.MealDate != l.MealDate || r.Kind != l.Kind {
@@ -238,7 +239,7 @@ func (in *Ingester) Edit(ctx context.Context, chat, id, editor, editorAlt, text 
 	if err := in.st.EditPost(ctx, chat, id, text, at); err != nil {
 		return err
 	}
-	if classify.Prepare(text).Has(in.cfg.Sold.Words...) {
+	if classify.Prepare(text).Has(in.cfg.Live().Sold.Words...) {
 		if err := in.st.MarkSoldByText(ctx, l.ID, at); err != nil {
 			return err
 		}

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -291,6 +292,47 @@ func TestRepostsFromMemoryAndFirstReplyWait(t *testing.T) {
 		}
 		if p := groupPosts(conn, group); len(p) != 2 {
 			t.Fatalf("reposted past max_reposts: %+v", p)
+		}
+	})
+}
+
+// A sell task reads its repost rules every round, so reposting switched on
+// from the settings page reaches an offer that is already up.
+func TestRepostFollowsLiveRules(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		group := types.NewJID("120363000000000001", types.GroupServer)
+		conn := newFakeConn(group)
+		log := slog.New(slog.NewTextHandler(io.Discard, nil))
+		targets := []offerTarget{{JID: group, Name: "Mess sell"}}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		posting := watchGroupOffer(ctx, conn, newOfferQueue())
+		defer posting.close()
+		send := directCopy(conn, conn.send, "sell bakul lunch")
+		posting.post(ctx, log, targets, 0, 15*time.Second, send, nil)
+		var mu sync.Mutex
+		rules := repost.Rules{After: 10 * time.Minute, Max: 2}
+		posting.keepInView(ctx, &reposter{
+			log: log, end: time.Now().Add(3 * time.Hour), gap: 15 * time.Second,
+			live:   func() repost.Rules { mu.Lock(); defer mu.Unlock(); return rules },
+			groups: func(context.Context) ([]offerTarget, error) { return targets, nil },
+			copies: posting.memoryCopies, send: send,
+		})
+		if err := posting.waitPosted(); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(30 * time.Minute)
+		synctest.Wait()
+		if p := groupPosts(conn, group); len(p) != 1 {
+			t.Fatalf("reposted while reposting was off: %+v", p)
+		}
+		mu.Lock()
+		rules.On = true
+		mu.Unlock()
+		time.Sleep(repostCheck)
+		synctest.Wait()
+		if p := groupPosts(conn, group); len(p) != 2 {
+			t.Fatalf("no repost after turning reposting on: %+v", p)
 		}
 	})
 }

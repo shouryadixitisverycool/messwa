@@ -236,7 +236,7 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 	}
 	ymd := func(t time.Time) string { return t.Format("2006-01-02") }
 	out := salesState{Now: now.Unix(), TZ: cfg.Timezone, Today: ymd(today), From: ymd(from), Recent: ymd(recent),
-		Days: []salesDay{}, Sales: []sale{}, Market: []mealMarket{}, Month: month{Start: ymd(monthStart), Fee: float64(cfg.Sales.MonthlyFee)}, Owner: u.IsAdmin()}
+		Days: []salesDay{}, Sales: []sale{}, Market: []mealMarket{}, Month: month{Start: ymd(monthStart), Fee: float64(cfg.Live().Sales.MonthlyFee)}, Owner: u.IsAdmin()}
 	for _, m := range cfg.Messes {
 		out.Messes = append(out.Messes, mess{m.Name, m.VegOnly})
 	}

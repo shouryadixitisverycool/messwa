@@ -11,13 +11,13 @@ import (
 // busier than in a break, when only people who registered themselves eat
 // there. The insights page never averages across the two.
 type Season struct {
-	Name string `toml:"name"`
+	Name string `toml:"name" json:"name"`
 	// Term marks a semester. Everything else is a break.
-	Term bool `toml:"term"`
+	Term bool `toml:"term" json:"term"`
 	// Starts and Ends are "MM-DD", both inclusive. A season whose end comes
 	// before its start runs over New Year and belongs to the year it starts.
-	Starts string `toml:"starts"`
-	Ends   string `toml:"ends"`
+	Starts string `toml:"starts" json:"starts"`
+	Ends   string `toml:"ends" json:"ends"`
 }
 
 // SeasonSpan is one dated run of a season. Days no season covers make an

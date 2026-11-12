@@ -94,7 +94,7 @@ Until the key has moved, the first admin's portal reads (MCP, the sales page, th
 - Each slot is one listing, showing its price, "?" when none was stated, FREE, or SWAP with the mess wanted. The corners show the diet mark, the meal, and the quantity. The bar along the bottom drains as the meal's serving window runs out. Listings posted in the last 2 minutes shine, and an amber dot means someone other than the seller ticked it.
 - The bottom row sorts by recency or price (click again to flip), filters by diet on Kadamba and Bakul, filters by meal, shows sold and withdrawn listings, and switches to buy requests.
 - Hovering a slot shows the seller, phone, groups, times and the original text. Clicking opens every copy of the post and a button that opens a draft to the seller. Nothing is sent from messwa.
-- SETTINGS in the header picks your messaging app: WhatsApp (`wa.me`) or Beeper Desktop (`beeper://compose/whatsapp/phone/...`). The message button then opens that app. The choice is saved in the browser. Beeper links only work in Beeper Desktop, so phones and tablets always open WhatsApp.
+- SETTINGS in the header opens the [settings page](#settings-page). Its YOU tab picks your messaging app: WhatsApp (`wa.me`) or Beeper Desktop (`beeper://compose/whatsapp/phone/...`). The message button then opens that app. The choice is saved in the browser. Beeper links only work in Beeper Desktop, so phones and tablets always open WhatsApp.
 - With Beeper picked and `dashboard.beeper_db` set, each copy of a post in the listing is also a link to that message in its group (`beeper://select-thread/whatsapp/<room>/<sortKey>`). messwa finds it in Beeper's `index.db`, opened read-only: the room by the group's JID, the message by its timestamp and the seller's ID. Beeper's room IDs and sortKeys are the same on every device, so the database of a Beeper Server on this machine works for Beeper Desktop on a laptop. These groups delete messages after 24 hours, so older copies have no link. In Docker, mount the Beeper data folder with a `compose.override.yaml`:
 
   ```yaml
@@ -126,6 +126,24 @@ While a [sell task](#sell-tasks) runs, admins get a MY SALE box above the board,
 Tap a buyer for the negotiation as a tug of war: each row is one round, their offer in red and the bot's answer in green, with the bot's lowest at the bottom and the gap between them in red. Below it, the payment steps (armed, paid, read, QR, ✅), with the attempts to read an unreadable payment from your phone. CHAT opens their chat in WhatsApp or Beeper. For a buyer who needs you, COPY SELL copies the `deliver-qr -peer` command at their offer; cancel the task and stop `run` before you use it. Tap the clock or the posts for the lowest price over time, each post, and the meal's tries.
 
 The box only reads. Nothing on the dashboard sends anything. It updates over the same event stream as the board: every step a task records wakes it.
+
+### Settings page
+
+`settings.html` has a YOU tab for everyone and five tabs for admins, which change `config.toml`'s settings from the browser:
+
+| Tab | Settings |
+| --- | --- |
+| OFFER | `[mcp] sell_tasks`, `[sell] groups` or `group_count`, `post_gap`, `show_price`, `mention_extras`, with a preview of the group post |
+| REPOST | `[sell] repost`, `repost_after`, `repost_messages`, `repost_listings`, `max_reposts` |
+| BUYERS | `[sell] buyers`, `handoff`, `accept_plain_dms`, `accept_payment_images` |
+| MARKET | `[sold]` emojis, closed emojis, words and `admins_count`, `[dedupe] window`, `[dms] retention` |
+| CALENDAR | meal times, `[[seasons]]`, each mess's `veg_only`, `[sales] monthly_fee` |
+
+Edits wait for SAVE. messwa stores what you save in a `settings` table in `messwa.db`, on top of `config.toml`: a value equal to the file's isn't stored, so it keeps following the file. Every command reads the saved values when it starts, and `deliver-qr` flags still override them for one run.
+
+Saves made in `run`'s own dashboard apply at once: the next sell task, `sell_task_status` and running tasks' reposts, the sold rule, dedupe, pruning, the sales page target and the insights seasons. Turning sell tasks on or off adds or removes their MCP tools for connected agents. A save made from `messwa dashboard` reaches a running `run` within 30 seconds. Meal times and `veg_only` show APPLIES ON RESTART: `run` builds its listing classifier and meal schedule once, when it starts.
+
+Some things stay in `config.toml`: the listen addresses, `state_dir`, `timezone`, `token_env`, `beeper_db`, the top-level `groups`, and meal keywords and mess names and aliases. If a saved value stops fitting the file, for example a `group_count` above the groups it now lists, messwa logs a warning, skips that value and starts anyway.
 
 ### My sales
 
@@ -766,7 +784,7 @@ wrappers, duplicate note keys and Unicode. No Java objects are deserialized.
 
 Sell tasks are steps 1 to 6 of the selling plan in `instructions/selling-instructions.md`: you tell your agent "sell my lunch for between 30 and 60" and it calls `start_sell_task`. The task runs inside `run`, on its WhatsApp connection, so the board and the rest of MCP keep working during a sale. It uses the same code as `deliver-qr -group -portal-qr`: the registration check, the group posts, the buyer queue, payment matching, the QR delivery and the ✅ on the posts.
 
-Turn them on in `config.toml` and restart `run`:
+Turn them on with the switch on the settings page's OFFER tab, or in `config.toml` and restart `run`:
 
 ```toml
 [mcp]

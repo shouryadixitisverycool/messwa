@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -30,6 +31,10 @@ type Config struct {
 	Sell    Sell     `toml:"sell"`
 
 	loc *time.Location
+	// file is the config as config.toml has it, before saved settings.
+	file *Config
+	// live holds the config with the latest saved settings; see Live.
+	live *atomic.Pointer[Config]
 }
 
 type Meal struct {
@@ -132,6 +137,7 @@ func Load(path string) (*Config, error) {
 
 func Default() *Config {
 	return &Config{
+		live:     &atomic.Pointer[Config]{},
 		StateDir: "state",
 		Timezone: "Asia/Kolkata",
 		Meals: []Meal{

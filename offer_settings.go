@@ -118,6 +118,7 @@ func addSellFlags(fs *flag.FlagSet) func() sellFlags {
 // resolveSellSettings applies one run's flags over cfg's [sell] section. An
 // empty Groups means no group was picked.
 func resolveSellSettings(cfg *config.Config, f sellFlags) (sellSettings, error) {
+	cfg = cfg.Live()
 	s := sellSettings{
 		PostGap:             cfg.Sell.PostGap.Duration,
 		ShowPrice:           cfg.Sell.ShowPrice,

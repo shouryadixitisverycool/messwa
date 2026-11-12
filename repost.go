@@ -24,6 +24,9 @@ type reposter struct {
 	log   *slog.Logger
 	st    *store.Store
 	rules repost.Rules
+	// live, when set, replaces rules: it is read every round, so a sell
+	// task follows repost settings saved on the dashboard while it runs.
+	live func() repost.Rules
 	// end is when the meal ends.
 	end time.Time
 	// gap is the pause between two reposts in one round.
@@ -40,6 +43,18 @@ type reposter struct {
 	// means always.
 	room func() bool
 }
+
+// current is the rules for this round.
+func (r *reposter) current() repost.Rules {
+	if r.live != nil {
+		return r.live()
+	}
+	return r.rules
+}
+
+// enabled reports whether r may ever repost: with live rules, reposting
+// can be switched on while the offer is open.
+func (r *reposter) enabled() bool { return r.live != nil || r.rules.On }
 
 // run reposts until ctx ends or no group can get another copy.
 func (r *reposter) run(ctx context.Context, o *groupOffer) {
@@ -64,6 +79,11 @@ func (r *reposter) round(ctx context.Context, o *groupOffer) bool {
 	if !time.Now().Before(r.end) {
 		return false
 	}
+	rules := r.current()
+	if !rules.On {
+		// Only live rules get here; wait for reposting to come back on.
+		return true
+	}
 	groups, err := r.groups(ctx)
 	if err != nil {
 		r.log.Warn("could not list groups; not reposting this round", "err", err)
@@ -81,7 +101,7 @@ func (r *reposter) round(ctx context.Context, o *groupOffer) bool {
 	sent := 0
 	alive := false
 	for _, g := range groups {
-		n, ok := r.plan(ctx, byGroup[g.JID.String()])
+		n, ok := r.plan(ctx, rules, byGroup[g.JID.String()])
 		if !ok || n.Stopped != "" {
 			continue
 		}
@@ -103,7 +123,7 @@ func (r *reposter) round(ctx context.Context, o *groupOffer) bool {
 			}
 		}
 		sent++
-		why := n.Why(r.rules)
+		why := n.Why(rules)
 		g = refreshGroup(ctx, o.conn, r.log, g)
 		p, err := r.send(ctx, o, g, n.Current.Seq+1)
 		if err != nil {
@@ -111,7 +131,7 @@ func (r *reposter) round(ctx context.Context, o *groupOffer) bool {
 				append(append([]any{"group", g.Name, "jid", g.JID, "err", err}, groupAttrs("listed_", g.listed)...), groupAttrs("", g.fresh)...)...)
 			continue
 		}
-		alive = alive || n.Current.Seq+1 < r.rules.Max
+		alive = alive || n.Current.Seq+1 < rules.Max
 		o.addPosted(p)
 		if r.record != nil {
 			r.record(p)
@@ -123,7 +143,7 @@ func (r *reposter) round(ctx context.Context, o *groupOffer) bool {
 
 // plan is repost.Plan for one group's copies, with the activity after the
 // latest one read from the group log.
-func (r *reposter) plan(ctx context.Context, copies []repost.Copy) (repost.Next, bool) {
+func (r *reposter) plan(ctx context.Context, rules repost.Rules, copies []repost.Copy) (repost.Next, bool) {
 	if len(copies) == 0 {
 		return repost.Next{}, false
 	}
@@ -137,7 +157,7 @@ func (r *reposter) plan(ctx context.Context, copies []repost.Copy) (repost.Next,
 	if err != nil {
 		r.log.Warn("could not count messages after the offer; going by time only", "group", current.Group, "err", err)
 	}
-	return repost.Plan(r.rules, copies, act, time.Now(), r.end), true
+	return repost.Plan(rules, copies, act, time.Now(), r.end), true
 }
 
 // groupActivity reads what came into the group after c from the group log.
