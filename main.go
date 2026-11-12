@@ -79,7 +79,9 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	// messwa logs at info. MESSWA_WA_LOG=debug lowers the level for
+	// whatsmeow's lines; messwa itself logs nothing at debug.
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: min(slog.LevelInfo, wa.LogLevel())}))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

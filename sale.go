@@ -33,6 +33,7 @@ type saleConn interface {
 	BuildUnavailableMessageRequest(chat, sender types.JID, id string) *waE2E.Message
 	BuildReaction(chat, sender types.JID, id types.MessageID, reaction string) *waE2E.Message
 	GetJoinedGroups(ctx context.Context) ([]*types.GroupInfo, error)
+	GetGroupInfo(ctx context.Context, jid types.JID) (*types.GroupInfo, error)
 	// PNForLID returns the phone-number JID for a LID, or an empty JID.
 	PNForLID(ctx context.Context, lid types.JID) types.JID
 	// SavedContact reports whether any of jids, under its number or its

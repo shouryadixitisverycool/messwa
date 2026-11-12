@@ -22,7 +22,6 @@ import (
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
-	waLog "go.mau.fi/whatsmeow/util/log"
 
 	"messwa/internal/config"
 	"messwa/internal/ingest"
@@ -37,7 +36,7 @@ type Client struct {
 
 func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Client, error) {
 	store.SetOSInfo("messwa", [3]uint32{0, 1, 0})
-	container, err := sqlstore.New(ctx, "sqlite", "file:"+cfg.SessionDB()+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)", waLog.Noop)
+	container, err := sqlstore.New(ctx, "sqlite", "file:"+cfg.SessionDB()+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)", newWALogger(log, "Database"))
 	if err != nil {
 		return nil, fmt.Errorf("session store: %w", err)
 	}
@@ -46,7 +45,7 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Client, e
 	if err != nil {
 		return nil, err
 	}
-	return &Client{WA: whatsmeow.NewClient(dev, waLog.Noop), cfg: cfg, log: log}, nil
+	return &Client{WA: whatsmeow.NewClient(dev, newWALogger(log, "Client")), cfg: cfg, log: log}, nil
 }
 
 func (c *Client) LoggedIn() bool { return c.WA.Store.ID != nil }
