@@ -157,8 +157,13 @@ func Default() *Config {
 		DMs: DMs{Retention: duration{72 * time.Hour}},
 		MCP: MCP{Listen: "127.0.0.1:8766", TokenEnv: "MESSWA_MCP_TOKEN"},
 		Sell: Sell{
-			PostGap:   duration{15 * time.Second},
-			ShowPrice: true,
+			PostGap:        duration{15 * time.Second},
+			ShowPrice:      true,
+			Repost:         true,
+			RepostAfter:    duration{10 * time.Minute},
+			RepostMessages: 10,
+			RepostListings: 3,
+			MaxReposts:     6,
 		},
 	}
 }
@@ -198,6 +203,28 @@ func (c *Config) validateSell() error {
 	}
 	if s.PostGap.Duration < MinPostGap {
 		return fmt.Errorf("sell.post_gap must be at least %s", MinPostGap)
+	}
+	return ValidateRepost(s.RepostAfter.Duration, s.RepostMessages, s.RepostListings, s.MaxReposts, "sell.")
+}
+
+// ValidateRepost checks the repost thresholds. prefix names them in the
+// error: "sell." for config.toml, "-" for flags.
+func ValidateRepost(after time.Duration, messages, listings, maxReposts int, prefix string) error {
+	name := func(n string) string {
+		if prefix == "-" {
+			return "-" + strings.ReplaceAll(n, "_", "-")
+		}
+		return prefix + n
+	}
+	switch {
+	case after != 0 && after < MinRepostGap:
+		return fmt.Errorf("%s must be 0 (off) or at least %s", name("repost_after"), MinRepostGap)
+	case messages < 0:
+		return fmt.Errorf("%s must be 0 (off) or more", name("repost_messages"))
+	case listings < 0:
+		return fmt.Errorf("%s must be 0 (off) or more", name("repost_listings"))
+	case maxReposts < 0 || maxReposts > MaxRepostsLimit:
+		return fmt.Errorf("%s must be between 0 and %d", name("max_reposts"), MaxRepostsLimit)
 	}
 	return nil
 }

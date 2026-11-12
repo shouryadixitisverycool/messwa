@@ -47,7 +47,7 @@ func TestEveryCopyQueriesItsGroup(t *testing.T) {
 	o := watchGroupOffer(t.Context(), conn, newOfferQueue())
 	defer o.close()
 	var order []string
-	send := func(_ context.Context, _ *groupOffer, g offerTarget) (postedOffer, error) {
+	send := func(_ context.Context, _ *groupOffer, g offerTarget, _ int) (postedOffer, error) {
 		order = append(order, "send "+g.JID.User)
 		if g.JID == b {
 			return postedOffer{}, errors.New("server returned error 479")

@@ -119,6 +119,9 @@ func Open(path string) (*Store, error) {
 			return nil, fmt.Errorf("migrate: %w", err)
 		}
 	}
+	if err := migrateSellOffers(db); err != nil {
+		return nil, fmt.Errorf("migrate sell_task_offers: %w", err)
+	}
 	return &Store{db}, nil
 }
 

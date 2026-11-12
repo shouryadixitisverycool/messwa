@@ -48,6 +48,10 @@ type fakeConn struct {
 	lids     map[types.JID]types.JID
 	// saved are address book entries, by number or LID.
 	saved map[types.JID]bool
+	// refuse makes every send to a chat fail, as WhatsApp does with error
+	// 479 in some groups. tried counts those attempts.
+	refuse map[types.JID]bool
+	tried  map[types.JID]int
 	// info answers GetGroupInfo; groups answers it when info is nil.
 	info      map[types.JID]*types.GroupInfo
 	infoErr   error
@@ -144,6 +148,13 @@ func (f *fakeConn) SavedContact(_ context.Context, jids ...types.JID) bool {
 func (f *fakeConn) send(_ context.Context, to types.JID, msg *waE2E.Message, extra ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.refuse[to] {
+		if f.tried == nil {
+			f.tried = map[types.JID]int{}
+		}
+		f.tried[to]++
+		return whatsmeow.SendResponse{}, errors.New("server returned error 479")
+	}
 	m := sentMessage{to: to, text: msg.GetConversation(), qr: msg.GetImageMessage() != nil,
 		reaction: msg.GetReactionMessage().GetText(), target: msg.GetReactionMessage().GetKey().GetID()}
 	if len(extra) > 0 {

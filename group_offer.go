@@ -17,6 +17,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"messwa/internal/config"
+	"messwa/internal/repost"
 	"messwa/internal/wa"
 )
 
@@ -147,6 +148,13 @@ func (q *offerQueue) has(peer types.JID) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.seen[peer]
+}
+
+// joined reports whether anyone ever joined the queue.
+func (q *offerQueue) joined() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.seen) > 0
 }
 
 // waiting is how many buyers are queued.
@@ -328,6 +336,11 @@ type groupOffer struct {
 	firstOnce     sync.Once
 	postErr       error
 	removeHandler func()
+
+	// Reposting runs beside posting and stops with it; see keepInView.
+	stopped       bool
+	stopReposting context.CancelFunc
+	doneReposting chan struct{}
 }
 
 // watchGroupOffer queues everyone who replies privately to a copy of the
@@ -336,7 +349,8 @@ type groupOffer struct {
 func watchGroupOffer(ctx context.Context, conn saleConn, queue *offerQueue) *groupOffer {
 	done := make(chan struct{})
 	close(done)
-	o := &groupOffer{queue: queue, conn: conn, stopPosting: func() {}, donePosting: done, firstPosted: make(chan struct{})}
+	o := &groupOffer{queue: queue, conn: conn, stopPosting: func() {}, donePosting: done, firstPosted: make(chan struct{}),
+		stopReposting: func() {}, doneReposting: done}
 	handlerID := conn.AddEventHandler(func(evt any) {
 		e, ok := evt.(*events.Message)
 		if !ok {
@@ -422,13 +436,14 @@ func (o *groupOffer) quotesCopy(e *events.Message) bool {
 	return false
 }
 
-// sendCopy sends one copy of the offer to g. It must watch the copy before
-// sending, so an instant reply still matches.
-type sendCopy func(ctx context.Context, o *groupOffer, g offerTarget) (postedOffer, error)
+// sendCopy sends copy number seq of the offer to g: 0 for the first copy
+// there, one more for each repost. It must watch the copy before sending,
+// so an instant reply still matches.
+type sendCopy func(ctx context.Context, o *groupOffer, g offerTarget, seq int) (postedOffer, error)
 
 // directCopy posts text with send, for deliver-qr and offer-group.
 func directCopy(conn saleConn, send sendFunc, text string) sendCopy {
-	return func(ctx context.Context, o *groupOffer, g offerTarget) (postedOffer, error) {
+	return func(ctx context.Context, o *groupOffer, g offerTarget, _ int) (postedOffer, error) {
 		p := postedOffer{Chat: g.JID, GroupName: g.Name, ID: conn.GenerateMessageID(), At: time.Now().Truncate(time.Second), Text: text}
 		o.watch(p)
 		resp, err := send(ctx, g.JID, &waE2E.Message{Conversation: proto.String(text)}, whatsmeow.SendRequestExtra{ID: p.ID})
@@ -463,7 +478,7 @@ func (o *groupOffer) post(ctx context.Context, log *slog.Logger, targets []offer
 		failed := 0
 		post := func(ctx context.Context, g offerTarget) (postedOffer, error) {
 			g = refreshGroup(ctx, o.conn, log, g)
-			p, err := send(ctx, o, g)
+			p, err := send(ctx, o, g, 0)
 			if err != nil {
 				failed++
 				log.Warn("group offer copy failed or is uncertain; replies to it still count",
@@ -472,9 +487,7 @@ func (o *groupOffer) post(ctx context.Context, log *slog.Logger, targets []offer
 			return p, err
 		}
 		copies, err := postOfferCopies(postCtx, targets, gap, post, func(p postedOffer) {
-			o.mu.Lock()
-			o.posted = append(o.posted, p)
-			o.mu.Unlock()
+			o.addPosted(p)
 			log.Info("group offer sent; waiting for a private reply", "group", p.GroupName, "offer_id", p.ID)
 			if onPosted != nil {
 				onPosted(p)
@@ -509,11 +522,92 @@ func (o *groupOffer) waitPosted() error {
 	return fmt.Errorf("group offer send failed or is uncertain: %w", o.postErr)
 }
 
+// addPosted notes a copy WhatsApp acknowledged.
+func (o *groupOffer) addPosted(p postedOffer) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.posted = append(o.posted, p)
+}
+
+// keepInView starts r reposting the offer once the first round of copies
+// is done. It stops with stop or close, or when ctx ends. Call it at most
+// once.
+func (o *groupOffer) keepInView(ctx context.Context, r *reposter) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.stopped || !r.rules.On {
+		return
+	}
+	ctx, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	o.stopReposting, o.doneReposting = stop, done
+	posting := o.donePosting
+	go func() {
+		defer close(done)
+		select {
+		case <-posting:
+		case <-ctx.Done():
+			return
+		}
+		r.run(ctx, o)
+	}()
+}
+
+// memoryCopies lists every copy this offer sent, by group, numbered in
+// order. A copy WhatsApp didn't acknowledge counts as failed. deliver-qr
+// reposts from this; a task reads its copies from the store instead.
+func (o *groupOffer) memoryCopies(context.Context) ([]repost.Copy, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	acked := map[string]bool{}
+	for _, p := range o.posted {
+		acked[p.ID] = true
+	}
+	seqs := map[types.JID]int{}
+	var out []repost.Copy
+	for _, p := range o.copies {
+		state := repost.Failed
+		if acked[p.ID] {
+			state = repost.Posted
+		}
+		out = append(out, repost.Copy{Group: p.Chat.String(), Seq: seqs[p.Chat], ID: p.ID, At: p.At, State: state})
+		seqs[p.Chat]++
+	}
+	return out, nil
+}
+
+// repostsDone is closed once no more copies will go out: posting and
+// reposting have both finished.
+func (o *groupOffer) repostsDone() <-chan struct{} {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.doneReposting
+}
+
+// lastPosted is when the newest acknowledged copy went out, or zero.
+func (o *groupOffer) lastPosted() time.Time {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	var last time.Time
+	for _, p := range o.posted {
+		if p.At.After(last) {
+			last = p.At
+		}
+	}
+	return last
+}
+
 // stop posts no further copies, waits for a send in flight, and returns
 // every copy WhatsApp acknowledged.
 func (o *groupOffer) stop() []postedOffer {
+	o.mu.Lock()
+	o.stopped = true
+	stopReposting, doneReposting := o.stopReposting, o.doneReposting
+	o.mu.Unlock()
 	o.stopPosting()
+	stopReposting()
 	<-o.donePosting
+	<-doneReposting
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return append([]postedOffer(nil), o.posted...)

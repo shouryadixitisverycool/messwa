@@ -309,7 +309,8 @@ extras.
 ```
 
 The first buyer must reply privately to the quoted post within ten minutes
-(or DM about it, with [plain DMs](#offer-settings) on).
+(or DM about it, with [plain DMs](#offer-settings) on). With
+[reposts](#offer-settings) on, the ten minutes run from the last copy.
 Later buyers who quote the same offer join the queue in arrival order. Only
 the current buyer gets payment instructions. That buyer has up to two minutes
 to pay or can reply `not interested` to give up their turn. The bot finishes checking
@@ -348,6 +349,11 @@ included, no extras.
 | `handoff` | `-handoff` | `never` | When to hand the buyer's chat to you, see below |
 | `accept_plain_dms` | `-accept-plain-dms` | `false` | Let DMs that ask about the offer without quoting it join the queue, see below |
 | `buyers` | `-buyers` | `anyone` | Who may buy. `unsaved_only` skips saved contacts, see below |
+| `repost` | `-repost` | `true` | Post a fresh copy in a group once the last one has dropped out of view, see below |
+| `repost_after` | `-repost-after` | `10m` | Repost once a copy is this old. `0s` turns it off |
+| `repost_messages` | `-repost-messages` | `10` | Repost once this many messages came in after a copy. 0 turns it off |
+| `repost_listings` | `-repost-listings` | `3` | Repost once this many other sellers listed the same meal at the same mess after a copy. 0 turns it off |
+| `max_reposts` | `-max-reposts` | `6` | Most fresh copies per group for one offer, 0 to 12 |
 | `accept_payment_images` | `-accept-payment-images` | `false` | Count an image from the paying buyer as their payment, unverified, see below |
 
 With `groups` or `group_count` set, `deliver-qr` without `-peer` posts to
@@ -385,6 +391,48 @@ and member count from both the list and the fresh query. If posts to a
 group keep failing, rerun with `MESSWA_WA_LOG=debug` (see
 [whatsmeow's log](#whatsmeows-log)).
 
+**Reposts.** In these groups a post scrolls out of view within minutes at
+lunch and dinner. While the meal is unsold, messwa puts a fresh copy in a
+group when the first of these happens there:
+
+- the latest copy is `repost_after` old (10 minutes);
+- `repost_messages` posts (10) came in after it, about a phone screen of
+  short posts;
+- `repost_listings` other people (3) listed the same meal at the same mess
+  after it. A listing tagged with a different diet doesn't count, an
+  untagged one does, and one person counts once however often they post.
+
+The counts come from the group log, the same posts the board is built
+from, tagged by the same mess and meal rules. messwa writes its own posts
+into the log when it sends them, so "after ours" means after that row:
+later by timestamp, or the same second and logged later. History that
+syncs late still lands in timestamp order. A group that isn't one of the
+top-level `groups` has no log, so only the time trigger works there.
+
+The defaults come from 11 days of the four IIITH groups. In the busiest
+two, a sell post in the last four hours before a meal ends is followed by
+a median of 8 to 11 messages and 2 to 3 same-mess listings within 10
+minutes, so those groups often repost after 6 to 9 minutes. The quietest
+gets about 2 messages in 10 minutes and reposts on the timer.
+
+Limits that hold whatever the settings say:
+
+- A group gets no copy sooner than 5 minutes after the last one there, and
+  at most `max_reposts` fresh copies per offer.
+- No reposts in the meal's last 15 minutes. About 2.5% of these groups'
+  sales happen in the last 10 minutes, too late to haggle and pay.
+- A group whose copy failed to send gets no more copies from that offer, so
+  a group that always refuses (WhatsApp error 479, say) costs one send.
+- Reposting stops when the meal sells, is handed off, the task is
+  cancelled or the meal ends.
+
+Copies stay up. A reply to any copy, old or new, joins the same buyer
+queue, and after a sale every copy gets the ✅. Reposting doesn't delete
+the copy before it.
+
+With `repost` on, `deliver-qr -group` waits for a first reply until ten
+minutes after its last copy, once no group can get another, instead of ten
+minutes after the first.
 **Plain DMs.** By default only a private reply that quotes a copy of the
 offer counts. Plenty of buyers just DM "price?" or "is the kadamba lunch
 available" instead. With `accept_plain_dms = true` (or `-accept-plain-dms`)
@@ -510,7 +558,7 @@ earnings. If the portal shows you ate it, the page shows ATE.
 ### Marking the meal sold
 
 `deliver-qr -group` records each offer post's group and message ID in the
-data database, one row per copy as it posts. Once a QR reaches the `sent` state, the command reacts ✅ to
+data database, one row per copy as it posts, reposts included. Once a QR reaches the `sent` state, the command reacts ✅ to
 every offer post recorded for that date and meal, in any group and from any
 earlier `deliver-qr -group` run. This also happens after a `-peer` delivery
 for a meal that was offered in a group first. A reaction that fails is logged
@@ -686,11 +734,13 @@ sell_tasks = true
 What a task does:
 
 1. Checks your portal registration for that meal with your saved mess API key, the same way `deliver-qr -portal-qr` does.
-2. Posts the offer using the `[sell]` settings, like `deliver-qr` does with no flags (see [Offer settings](#offer-settings)): `groups` or `group_count`, `post_gap` between copies, `show_price`, `mention_extras` and `accept_plain_dms`. With `show_price` the post shows `max_price`, e.g. `sell bakul non-veg lunch ₹60`. If `[sell]` names no groups, the task posts in the first group in `groups`. A group that can't be found is skipped; the task fails only if no copy posts.
+2. Posts the offer using the `[sell]` settings, like `deliver-qr` does with no flags (see [Offer settings](#offer-settings)): `groups` or `group_count`, `post_gap` between copies, `show_price`, `mention_extras` and `accept_plain_dms`. With `show_price` the post shows `max_price`, e.g. `sell bakul non-veg lunch ₹60`. If `[sell]` names no groups, the task posts in the first group in `groups`. A group that can't be found is skipped; the task fails only if no copy posts. Until the meal sells, it reposts in each group under the `repost` settings (see [Reposts](#offer-settings)).
 3. Takes everyone who replies privately to any copy, in reply order. A plain DM that doesn't quote a post counts only with `[sell] accept_plain_dms = true`, under the rules in [Offer settings](#offer-settings). With `[sell] buyers = "unsaved_only"`, saved contacts are skipped and get nothing (see [Saved contacts](#offer-settings)).
 4. With `max_price` above `min_price`, negotiates with each of them at once (see [Negotiation](#negotiation)). Buyers who agree a price queue to pay in the order they agreed. With the two prices equal, every buyer queues to pay that price.
 5. Asks the first buyer in the pay queue to pay their price within two minutes. They can reply `not interested`. Then the next buyer gets a turn, as in `deliver-qr -group`.
 6. Sends the QR after a matching WhatsApp Pay payment (or, with `[sell] accept_payment_images = true`, an unverified image from that buyer after the prompt; see [Payment images](#offer-settings)), stops posting copies, tells everyone else who replied `sorry sold`, reacts ✅ to the meal's offer posts, and ends as `sold`.
+
+`sell_task_status` lists every copy with its copy number (0 for the first in a group, then one per repost), marks each group's current copy, and under `reposts` says per group how many messages and same-mess listings came in after the current copy, when the next copy goes out and why, or why that group gets no more.
 
 `[sell] handoff` doesn't apply to tasks. Instead `start_sell_task` takes `handoff`, `never` by default:
 
@@ -710,10 +760,10 @@ A task also ends when you cancel it (`cancelled`), when the meal ends (`expired`
 - Besides one claimed post per group, a task messages only people its posts queued: those who replied privately to one, or with `accept_plain_dms`, DMed about it. After the QR goes out it may also react ✅ to the meal's recorded offer posts, and to nothing else.
 - With `[sell] buyers = "unsaved_only"`, a task never queues or messages a saved contact. If you switch to it while a task is running, the restart skips saved contacts still waiting in the queue. A buyer already asked to pay keeps their turn, and gets the QR if they pay.
 - No buyer is quoted, agreed with or asked for less than `min_price`. The store checks this itself on every quote, agreement, reservation and sale, whatever the negotiation decided. A payment must match exactly the price agreed with that buyer, or a higher one the bot quoted them.
-- A task sends at most 12 messages a minute and 80 in total. All tasks together send at most 15 a minute. One buyer gets at most 6 negotiation messages. The ✅ reactions after a sale skip the per-minute wait, so they don't time out behind the sale's own sends.
+- A task sends at most 12 messages a minute and 80 in total. Reposts count toward both, and a task stops reposting when it has 20 sends left, keeping those for buyers. All tasks together send at most 15 a minute. One buyer gets at most 6 negotiation messages. The ✅ reactions after a sale skip the per-minute wait, so they don't time out behind the sale's own sends.
 - A task stops at the meal's end time.
 
-Each send is written to the database before it goes out: each group post, each negotiation message, each payment prompt, each `sorry sold`. The QR goes through the existing delivery ledger. When `run` restarts, it resumes active tasks before reconnecting and never repeats a claimed send. Replies to copies from before the restart still count, and groups that had no copy yet get one, `post_gap` apart. A buyer whose turn was under way keeps it, with at least 30 seconds after the restart, so a payment sent while `run` was down still counts. Buyers who were negotiating carry on from the bot's last price, and buyers who had agreed keep their place in the pay queue. A post or QR send that was claimed but never confirmed is not retried. A task with an unconfirmed QR send ends as `failed`; check the buyer's chat. Turning `sell_tasks` off cancels active tasks on the next start.
+Each send is written to the database before it goes out: each group post, each negotiation message, each payment prompt, each `sorry sold`. The QR goes through the existing delivery ledger. When `run` restarts, it resumes active tasks before reconnecting and never repeats a claimed send. Replies to copies from before the restart still count, and groups that had no copy yet get one, `post_gap` apart. Each repost is claimed with its copy number before it goes out, so a restart never posts the same repost twice, and the next one is due from the last copy's time, not from the restart. A buyer whose turn was under way keeps it, with at least 30 seconds after the restart, so a payment sent while `run` was down still counts. Buyers who were negotiating carry on from the bot's last price, and buyers who had agreed keep their place in the pay queue. A post or QR send that was claimed but never confirmed is not retried. A task with an unconfirmed QR send ends as `failed`; check the buyer's chat. Turning `sell_tasks` off cancels active tasks on the next start.
 
 #### Negotiation
 
