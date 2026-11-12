@@ -38,7 +38,6 @@ const (
 	sessionSilence = 2 * time.Minute  // buyer quiet after the bot's last message
 	sessionLimit   = 6 * time.Minute  // one negotiation, start to agreement
 	paidGrace      = 60 * time.Second // "paid" with no WhatsApp Pay payment yet
-	timePressure   = 3 * time.Hour    // from here to the meal's end, prices soften
 	maxOfferFactor = 3                // an "offer" above 3x max_price is not a price
 )
 
@@ -56,12 +55,9 @@ type haggle struct {
 }
 
 func newHaggle(minRupees, maxRupees int, median float64, haveMedian bool, end time.Time, label string) haggle {
-	h := haggle{min: minRupees, max: maxRupees, target: maxRupees, unit: 5, end: end, label: label}
+	h := haggle{min: minRupees, max: maxRupees, target: maxRupees, unit: market.PriceUnit(maxRupees), end: end, label: label}
 	if haveMedian {
 		h.target = min(max(int(math.Round(median)), minRupees), maxRupees)
-	}
-	if maxRupees < 20 {
-		h.unit = 1
 	}
 	return h
 }
@@ -70,16 +66,9 @@ func (h haggle) round(x float64) int {
 	return int(math.Round(x/float64(h.unit))) * h.unit
 }
 
-// walk is the lowest price the bot accepts at now: target until the last
-// timePressure before the meal ends, then falling to min. While several
-// buyers are interested it stays at target.
+// walk is the lowest price the bot accepts at now; see market.Walk.
 func (h haggle) walk(now time.Time, competing bool) int {
-	if competing {
-		return h.target
-	}
-	frac := min(max(float64(h.end.Sub(now))/float64(timePressure), 0), 1)
-	w := h.min + int(math.Ceil(frac*float64(h.target-h.min)/float64(h.unit)))*h.unit
-	return min(max(w, h.min), h.target)
+	return market.Walk(h.min, h.target, h.unit, h.end, now, competing)
 }
 
 // haggleState is one buyer's side of the negotiation, in rupees.
@@ -299,6 +288,9 @@ func newNegotiation(ctx context.Context, m *sellManager, t store.SellTask, s *sa
 	n.ctx, n.cancel = context.WithCancelCause(ctx)
 	n.talk, n.hush = context.WithCancel(n.ctx)
 	n.log.Info("negotiating", "min", n.h.min, "max", n.h.max, "target", n.h.target, "median_known", have)
+	if err := m.st.SetSellTaskTarget(ctx, t.ID, int64(n.h.target)*100); err != nil {
+		n.log.Warn("could not record the target price", "err", err)
+	}
 	return n
 }
 
@@ -599,6 +591,8 @@ func (n *negotiation) payment(peer types.JID, e *events.Message) {
 			fmt.Sprintf("paid INR %s while the meal was reserved for someone else; refund them", amount)); rerr != nil {
 			n.log.Error("could not record the payment to refund", "err", rerr)
 		}
+		n.m.event(ctx, store.SellEvent{TaskID: n.t.ID, Peer: peer.String(), Kind: store.EventParked, N: paise(amount),
+			Text: fmt.Sprintf("paid INR %s while the meal was reserved for someone else; refund them", amount)})
 		n.mu.Lock()
 		ss.state = sessionEnded
 		n.mu.Unlock()
@@ -608,12 +602,16 @@ func (n *negotiation) payment(peer types.JID, e *events.Message) {
 	n.sold, n.directBuyer = true, peer
 	n.mu.Unlock()
 	n.log.Info("buyer paid before their turn; sending the QR", "buyer", peer, "amount", amount)
+	n.m.event(ctx, store.SellEvent{TaskID: n.t.ID, Peer: peer.String(), Kind: store.EventPayment, N: paise(amount)})
 	n.cancel(errSoldDirect)
 	sendCtx, stop := context.WithTimeout(ctx, time.Minute)
 	defer stop()
 	err = n.s.sendQR(sendCtx, e.Info.Chat, msgID, d, true)
 	if err == nil {
 		err = n.m.st.FinishDelivery(sendCtx, d, msgID)
+	}
+	if err == nil {
+		n.m.event(ctx, store.SellEvent{TaskID: n.t.ID, Peer: peer.String(), Kind: store.EventQRSent, N: paise(amount)})
 	}
 	n.direct <- err
 }
@@ -623,6 +621,11 @@ func (n *negotiation) directSale() (types.JID, bool) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.directBuyer, !n.directBuyer.IsEmpty()
+}
+
+// event records one step of a buyer's negotiation for the dashboard.
+func (n *negotiation) event(buyer types.JID, kind string, rupees int, text string) {
+	n.m.event(n.ctx, store.SellEvent{TaskID: n.t.ID, Peer: buyer.String(), Kind: kind, N: int64(rupees) * 100, Text: text})
 }
 
 // park stops the bot talking to a buyer and records why they need you.
@@ -637,6 +640,7 @@ func (n *negotiation) park(ctx context.Context, ss *session, note string) {
 	if err := n.m.st.ParkSellTaskBuyer(ctx, n.t.ID, ss.buyer.String(), note); err != nil {
 		n.log.Error("could not park buyer", "buyer", ss.buyer, "err", err)
 	}
+	n.event(ss.buyer, store.EventParked, 0, note)
 }
 
 func (n *negotiation) send(ctx context.Context, to types.JID, text string) error {
@@ -758,6 +762,11 @@ func (ss *session) handle(texts []string) handled {
 	n.mu.Lock()
 	state, hs := ss.state, ss.hs
 	n.mu.Unlock()
+	// A picture or sticker has no text to read; the payment turn records
+	// pictures on its own.
+	if (state == sessionNegotiating || state == sessionAgreed) && strings.TrimSpace(strings.Join(texts, "")) != "" {
+		n.event(ss.buyer, store.EventRead, in.offer, in.name())
+	}
 
 	if state == sessionAgreed {
 		// The price is settled. Only a payment claim, another way to pay or
@@ -773,6 +782,7 @@ func (ss *session) handle(texts []string) handled {
 				n.mu.Lock()
 				ss.state = sessionEnded
 				n.mu.Unlock()
+				n.event(ss.buyer, store.EventPassed, 0, "")
 				return handledEnded
 			}
 		}
@@ -790,6 +800,7 @@ func (ss *session) handle(texts []string) handled {
 		ss.state = sessionEnded
 		n.mu.Unlock()
 		n.log.Info("buyer passed", "buyer", ss.buyer)
+		n.event(ss.buyer, store.EventPassed, 0, "")
 		return handledEnded
 	case st.park != "":
 		n.park(context.WithoutCancel(ctx), ss, st.park)
@@ -837,6 +848,7 @@ func (ss *session) say(next haggleState, text string) bool {
 		return false
 	}
 	n.log.Info("negotiation message sent", "buyer", ss.buyer, "ask", next.ask, "round", next.rounds)
+	n.event(ss.buyer, store.EventBotSaid, next.ask, text)
 	return true
 }
 
@@ -866,6 +878,7 @@ func (ss *session) agree(st step) handled {
 	busy := !n.holder.IsEmpty() || n.pay.waiting() > 0
 	n.mu.Unlock()
 	n.log.Info("buyer agreed", "buyer", ss.buyer, "amount", amount)
+	n.event(ss.buyer, store.EventAgreed, st.agree, "")
 	if busy && n.t.Handoff != string(config.HandoffOnAgreement) {
 		ss.sayAgreed(fmt.Sprintf("ok ₹%d. someone's paying for it right now, if they don't in 2 min it's yours", st.agree))
 	}
@@ -893,7 +906,9 @@ func (ss *session) sayAgreed(text string) {
 	n.mu.Unlock()
 	if err := n.send(n.talk, ss.buyer, text); err != nil {
 		n.log.Warn("negotiation message failed or is uncertain", "buyer", ss.buyer, "err", err)
+		return
 	}
+	n.event(ss.buyer, store.EventBotSaid, next.ask, text)
 }
 
 func (ss *session) timeOut(why string) {
@@ -902,7 +917,9 @@ func (ss *session) timeOut(why string) {
 	ss.state = sessionEnded
 	n.mu.Unlock()
 	n.log.Info("negotiation ended", "buyer", ss.buyer, "why", why)
-	n.m.st.MoveSellTaskBuyerFrom(n.talk, n.t.ID, ss.buyer.String(), []string{store.BuyerQueued, store.BuyerNegotiating}, store.BuyerTimedOut)
+	if ok, _ := n.m.st.MoveSellTaskBuyerFrom(n.talk, n.t.ID, ss.buyer.String(), []string{store.BuyerQueued, store.BuyerNegotiating}, store.BuyerTimedOut); ok {
+		n.event(ss.buyer, store.EventTimedOut, 0, why)
+	}
 }
 
 // negotiatedJournal is the pay queue's journal for a negotiating task: a

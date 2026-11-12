@@ -101,11 +101,15 @@ type SellTask struct {
 	CreatedAt time.Time
 	EndsAt    time.Time
 	EndedAt   time.Time // zero while active
+	// TargetPaise is the price a negotiation aims for, from the market's
+	// median ask; 0 until the task first negotiates.
+	TargetPaise int64
 }
 
 type SellOffer struct {
 	Group, ID, State string
 	PostedAt         time.Time
+	Error            string // why a failed post failed
 }
 
 type SellBuyer struct {
@@ -164,12 +168,12 @@ func (s *Store) CreateSellTask(ctx context.Context, t SellTask) (int64, error) {
 	return id, tx.Commit()
 }
 
-const sellTaskCols = `id,date,meal,min_paise,max_paise,user_id,account_hash,mess,diet,handoff,state,detail,created_at,ends_at,coalesce(ended_at,0)`
+const sellTaskCols = `id,date,meal,min_paise,max_paise,user_id,account_hash,mess,diet,handoff,state,detail,created_at,ends_at,coalesce(ended_at,0),target_paise`
 
 func scanSellTask(row interface{ Scan(...any) error }) (SellTask, error) {
 	var t SellTask
 	var created, ends, ended int64
-	err := row.Scan(&t.ID, &t.Date, &t.Meal, &t.MinPaise, &t.MaxPaise, &t.UserID, &t.AccountHash, &t.Mess, &t.Diet, &t.Handoff, &t.State, &t.Detail, &created, &ends, &ended)
+	err := row.Scan(&t.ID, &t.Date, &t.Meal, &t.MinPaise, &t.MaxPaise, &t.UserID, &t.AccountHash, &t.Mess, &t.Diet, &t.Handoff, &t.State, &t.Detail, &created, &ends, &ended, &t.TargetPaise)
 	t.CreatedAt, t.EndsAt = time.Unix(created, 0), time.Unix(ends, 0)
 	if ended != 0 {
 		t.EndedAt = time.Unix(ended, 0)
@@ -250,7 +254,7 @@ func (s *Store) OfferClaimed(ctx context.Context, id int64, group, offerID strin
 }
 
 func (s *Store) SellTaskOffers(ctx context.Context, id int64) ([]SellOffer, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT group_jid,offer_id,state,posted_at FROM sell_task_offers WHERE task_id=? ORDER BY rowid`, id)
+	rows, err := s.db.QueryContext(ctx, `SELECT group_jid,offer_id,state,posted_at,error FROM sell_task_offers WHERE task_id=? ORDER BY rowid`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +263,7 @@ func (s *Store) SellTaskOffers(ctx context.Context, id int64) ([]SellOffer, erro
 	for rows.Next() {
 		var o SellOffer
 		var at int64
-		if err := rows.Scan(&o.Group, &o.ID, &o.State, &at); err != nil {
+		if err := rows.Scan(&o.Group, &o.ID, &o.State, &at, &o.Error); err != nil {
 			return nil, err
 		}
 		o.PostedAt = time.Unix(at, 0)

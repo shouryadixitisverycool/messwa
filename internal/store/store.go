@@ -95,7 +95,7 @@ func Open(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	os.Chmod(path, 0o600)
-	if _, err := db.Exec(schema + logSchema + deliverySchema + priceSchema + accountSchema + factSchema + sellTaskSchema); err != nil {
+	if _, err := db.Exec(schema + logSchema + deliverySchema + priceSchema + accountSchema + factSchema + sellTaskSchema + sellEventSchema); err != nil {
 		return nil, fmt.Errorf("schema: %w", err)
 	}
 	// Columns added after the first release. Listings are derived data, so
@@ -116,6 +116,14 @@ func Open(path string) (*Store, error) {
 	}
 	for _, col := range sellBuyerColumns {
 		if _, err := db.Exec("ALTER TABLE sell_task_buyers ADD COLUMN " + col); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return nil, fmt.Errorf("migrate: %w", err)
+		}
+	}
+	for _, c := range []struct{ table, col string }{
+		{"sell_tasks", "target_paise INTEGER NOT NULL DEFAULT 0"},
+		{"sell_task_offers", "error TEXT NOT NULL DEFAULT ''"},
+	} {
+		if _, err := db.Exec("ALTER TABLE " + c.table + " ADD COLUMN " + c.col); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return nil, fmt.Errorf("migrate: %w", err)
 		}
 	}

@@ -109,3 +109,33 @@ func TestEvents(t *testing.T) {
 	}
 	t.Fatalf("no change event: %v", lines.Err())
 }
+
+// Your sell tasks reach the board for admins only, like the rest of the
+// linked WhatsApp account.
+func TestStateSalesAdminOnly(t *testing.T) {
+	cfg := config.Default()
+	cfg.Groups = []string{"g1@g.us"}
+	st, err := store.Open(filepath.Join(t.TempDir(), "d.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := time.Date(2026, 11, 12, 13, 0, 0, 0, cfg.Location())
+	if _, err := st.CreateSellTask(context.Background(), store.SellTask{Date: "2026-11-12", Meal: "lunch", MinPaise: 1500, MaxPaise: 3000,
+		CreatedAt: now, EndsAt: now.Add(90 * time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	ms := mcpserver.New(cfg, st, nil)
+	ms.SetClock(func() time.Time { return now.Add(time.Minute) })
+	srv := startDashboard(t, cfg, st, ms, NewHub())
+	for _, c := range []struct {
+		role accounts.Role
+		want int
+	}{{accounts.Member, 0}, {accounts.Admin, 1}} {
+		var s state
+		srv.as(t, c.role).get(t, "/api/state", &s)
+		if len(s.Sales) != c.want {
+			t.Errorf("%s got %d sales, want %d", c.role, len(s.Sales), c.want)
+		}
+	}
+}

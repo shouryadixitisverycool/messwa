@@ -254,6 +254,39 @@ function mealsAllIcon() {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 15 15" aria-hidden="true">${sub}</svg>`;
 }
 
+// face draws a buyer as an 8x8 pixel head. The same buyer always gets the
+// same face, so a regular is recognisable in the ledger before hovering.
+function face(key) {
+  let h = 2166136261;
+  for (const ch of key) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0;
+  const rnd = () => { h = Math.imul(h ^ (h >>> 15), 2246822507) >>> 0; h = Math.imul(h ^ (h >>> 13), 3266489909) >>> 0; return ((h ^= h >>> 16) >>> 0) / 4294967296; };
+  const pick = (xs) => xs[Math.floor(rnd() * xs.length)];
+  const pal = {
+    s: pick(['#c68642', '#8d5524', '#e0ac69', '#a5673f', '#f1c27d']),
+    h: pick(['#2b1a10', '#141414', '#5a3a1a', '#7a4b2a', '#3b2a20', '#6b6b78']),
+    e: pick(['#3a2a1a', '#24486b', '#2f5a2f']),
+    w: '#f4f4f4', m: '#6b3a2a', n: '#00000033',
+  };
+  const style = Math.floor(rnd() * 3);
+  const rows = [];
+  for (let y = 0; y < 8; y++) {
+    let row = '';
+    for (let x = 0; x < 8; x++) {
+      let c = 's';
+      if (y === 0) c = 'h';
+      else if (y === 1) c = style === 0 || (style === 1 && x < 5) || (style === 2 && (x < 2 || x > 5)) ? 'h' : 's';
+      else if (y === 2) c = x === 0 || x === 7 || (style === 1 && x < 2) ? 'h' : 's';
+      if (y === 4 && (x === 1 || x === 5)) c = 'w';
+      if (y === 4 && (x === 2 || x === 6)) c = 'e';
+      if (y === 5 && (x === 3 || x === 4)) c = 'n';
+      if (y === 6 && x >= 2 && x <= 5) c = 'm';
+      row += c;
+    }
+    rows.push(row);
+  }
+  return pix(rows, pal);
+}
+
 // Indian food marks: green dot for veg, brown triangle for non-veg.
 function dietMark(d) {
   const col = { veg: '#34c463', nonveg: '#c9513a', egg: '#f2b51b' }[d];
