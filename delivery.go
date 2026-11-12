@@ -392,6 +392,7 @@ func buyerPassed(message *waE2E.Message) bool {
 }
 
 func portalMealLabel(mess, diet, meal string) string {
+	meal = baseMeal(meal)
 	if diet == "nonveg" {
 		diet = "non-veg"
 	}

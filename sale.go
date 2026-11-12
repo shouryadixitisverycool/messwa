@@ -136,13 +136,21 @@ func paise(amount string) int64 {
 }
 
 // findSlot returns the configured meal's window on date.
+// baseMeal is the configured meal behind a slot name. "dinner#2" sells a
+// second dinner on the same date: it has its own delivery record, task and
+// offer posts, while buyers, the portal and the meal schedule see "dinner".
+func baseMeal(meal string) string {
+	base, _, _ := strings.Cut(meal, "#")
+	return base
+}
+
 func findSlot(cfg *config.Config, date, meal string) (meals.Slot, error) {
 	day, err := time.ParseInLocation("2006-01-02", date, cfg.Location())
 	if err != nil {
 		return meals.Slot{}, errors.New("date must be YYYY-MM-DD")
 	}
 	for _, w := range meals.New(cfg).Windows(day) {
-		if w.Meal == meal {
+		if w.Meal == baseMeal(meal) {
 			return w, nil
 		}
 	}
@@ -187,31 +195,68 @@ func (s *sale) reservation(peer types.JID, amount string) store.Delivery {
 	return store.Delivery{Date: s.date, Meal: s.meal, Peer: peer.String(), Amount: amount, ImageHash: s.imageHash, ArmedAt: time.Now(), Mess: s.mess, Diet: s.diet}
 }
 
-func (s *sale) sendQR(ctx context.Context, recipient types.JID, id string, d store.Delivery, queued bool) error {
+// qrPreparationError means no WhatsApp message was attempted. Fetching the
+// QR and uploading encrypted media can safely be retried under the same
+// payment claim; sending the message cannot.
+type qrPreparationError struct{ error }
+
+func (e *qrPreparationError) Unwrap() error { return e.error }
+
+func (s *sale) sendQR(ctx context.Context, recipient types.JID, id string, d store.Delivery, queued bool) (err error) {
+	defer func() {
+		if err != nil {
+			s.log.Error("paid QR delivery failed", "date", d.Date, "meal", d.Meal, "message_id", id, "err", err)
+		}
+	}()
+	var message *waE2E.Message
+	for attempt := 1; attempt <= 3; attempt++ {
+		message, err = s.prepareQR(ctx, d, queued)
+		if err == nil {
+			break
+		}
+		var preparation *qrPreparationError
+		if !errors.As(err, &preparation) || attempt == 3 || ctx.Err() != nil {
+			return err
+		}
+		s.log.Warn("QR preparation failed; retrying before sending any message", "date", d.Date, "meal", d.Meal, "attempt", attempt, "err", err)
+		timer := time.NewTimer(time.Duration(attempt) * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	if _, err = s.sendPaid(ctx, recipient, message, whatsmeow.SendRequestExtra{ID: id}); err != nil {
+		return fmt.Errorf("send QR message: %w", err)
+	}
+	return nil
+}
+
+func (s *sale) prepareQR(ctx context.Context, d store.Delivery, queued bool) (*waE2E.Message, error) {
 	data := s.image
 	if s.portal != nil {
 		current, err := s.portal.QRForMeal(ctx, d.Date, d.Meal, s.accountHash)
 		if err != nil {
-			return err
+			return nil, &qrPreparationError{fmt.Errorf("fetch current meal QR: %w", err)}
 		}
 		if queued && current.Registration.Mess != s.portalMess {
-			return errors.New("portal registration changed during the sale")
+			return nil, errors.New("portal registration changed during the sale")
 		}
 		data = current.PNG
 	}
 	data, mime, width, height, err := deliveryImageBytes(data)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("prepare QR image: %w", err)
 	}
 	up, err := s.conn.Upload(ctx, data, whatsmeow.MediaImage)
 	if err != nil {
-		return err
+		return nil, &qrPreparationError{fmt.Errorf("upload QR media: %w", err)}
 	}
-	_, err = s.sendPaid(ctx, recipient, &waE2E.Message{ImageMessage: &waE2E.ImageMessage{
-		Caption: proto.String(qrCaption(d.Mess, d.Meal)), Mimetype: proto.String(mime), Width: proto.Uint32(uint32(width)), Height: proto.Uint32(uint32(height)),
+	return &waE2E.Message{ImageMessage: &waE2E.ImageMessage{
+		Caption: proto.String(qrCaption(d.Mess, baseMeal(d.Meal))), Mimetype: proto.String(mime), Width: proto.Uint32(uint32(width)), Height: proto.Uint32(uint32(height)),
 		URL: &up.URL, DirectPath: &up.DirectPath, MediaKey: up.MediaKey, FileEncSHA256: up.FileEncSHA256, FileSHA256: up.FileSHA256, FileLength: &up.FileLength,
-	}}, whatsmeow.SendRequestExtra{ID: id})
-	return err
+	}}, nil
 }
 
 // turn is one buyer's chance to pay.

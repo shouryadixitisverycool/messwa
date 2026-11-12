@@ -348,7 +348,9 @@ func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	// Sell tasks share this connection. Resume them before connecting so
 	// replies and payments that arrived while run was down reach them.
 	sell := newSellManager(ctx, cfg, log, st, waConn{c.WA}, c.WA.SendMessage, c.WA.WaitForConnection,
-		func(ctx context.Context, userID int64) (mealPortal, error) { return acc.Portal(ctx, userID) },
+		func(ctx context.Context, userID int64) (mealPortal, error) {
+			return proxyPortal{stateDir: cfg.StateDir, real: func(ctx context.Context) (mealPortal, error) { return acc.Portal(ctx, userID) }}, nil
+		},
 		newOwnGroupLog(ctx, cfg, st, c))
 	sell.notify = hub.Notify
 	if err := sell.Resume(ctx, cfg.MCP.SellTasks); err != nil {

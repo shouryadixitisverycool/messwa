@@ -331,7 +331,8 @@ func (m *sellManager) end(t store.SellTask, state, detail string) string {
 				m.log.Error("release sell task reservation", "task", t.ID, "err", err)
 			}
 		case d != nil && dstate == "sending":
-			state, detail = store.TaskFailed, "a payment was claimed but the QR send is uncertain; check the buyer's chat"
+			state = store.TaskFailed
+			detail = "a payment was claimed but the QR send is uncertain; check the buyer's chat: " + detail
 		case d != nil && dstate == "sent":
 			state, detail = store.TaskSold, "QR delivered after a matching payment"
 		}
@@ -426,7 +427,7 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, ga
 	posting := watchGroupOffer(ctx, m.conn, queue)
 	defer posting.close()
 	if settings.AcceptPlainDMs {
-		posting.acceptPlainDMs(newPlainDMs(m.cfg, m.st, m.log.With("task", t.ID), s.mess, t.Meal, ""))
+		posting.acceptPlainDMs(newPlainDMs(m.cfg, m.st, m.log.With("task", t.ID), s.mess, baseMeal(t.Meal), ""))
 	}
 	claimed := map[string]bool{}
 	for _, o := range offers {

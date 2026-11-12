@@ -271,7 +271,7 @@ func newNegotiation(ctx context.Context, m *sellManager, t store.SellTask, s *sa
 		if ps, err := m.prices(ctx, from, t.Date); err != nil {
 			m.log.Warn("could not read market prices; negotiating toward max_price", "task", t.ID, "err", err)
 		} else {
-			median, have = market.MedianAsk(ps, t.Date, t.Meal, s.mess)
+			median, have = market.MedianAsk(ps, t.Date, baseMeal(t.Meal), s.mess)
 		}
 	}
 	n := &negotiation{
@@ -439,6 +439,12 @@ func (n *negotiation) handle(evt any) {
 		go n.payment(peer, e)
 		return
 	}
+	text := messageText(e.Message)
+	// Reactions, protocol updates and media have no negotiation text.
+	// Payment images are handled separately by the payment turn.
+	if strings.TrimSpace(text) == "" {
+		return
+	}
 	n.mu.Lock()
 	ss := n.sessionLocked(peer)
 	ended := ss.state == sessionEnded
@@ -447,7 +453,7 @@ func (n *negotiation) handle(evt any) {
 		return
 	}
 	select {
-	case ss.inbox <- buyerMsg{id: e.Info.ID, text: messageText(e.Message)}:
+	case ss.inbox <- buyerMsg{id: e.Info.ID, text: text}:
 	default:
 		n.log.Warn("buyer is sending faster than the session reads; dropping a message", "buyer", peer)
 	}
@@ -674,6 +680,11 @@ func (ss *session) run(first string, slot bool) {
 	fresh := ss.hs.botMsgs == 0
 	n.mu.Unlock()
 	if state == sessionNegotiating && fresh {
+		// Restored sessions have no in-memory first message. Open with
+		// the price instead of counting the missing text as unreadable.
+		if strings.TrimSpace(first) == "" {
+			first = "price?"
+		}
 		batch = []string{first}
 		debounce = time.After(replyDebounce)
 	}

@@ -478,6 +478,75 @@ func TestNegotiationResumesAfterRestart(t *testing.T) {
 	})
 }
 
+func TestNegotiationIgnoresNonTextEvents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m := f.negotiatingManager(ctx, 40)
+		if _, err := m.Start(ctx, 0, f.date, "lunch", 30, 60, ""); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		f.conn.emit(f.reply(buyerA, "I can buy"))
+		settle()
+		for _, msg := range []*waE2E.Message{
+			{ProtocolMessage: &waE2E.ProtocolMessage{}},
+			{ReactionMessage: &waE2E.ReactionMessage{Text: proto.String("👍")}},
+			{ImageMessage: &waE2E.ImageMessage{}},
+		} {
+			e := dm(buyerA, "")
+			e.Message = msg
+			f.conn.emit(e)
+			settle()
+		}
+		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 1 {
+			t.Fatalf("got extra replies: %q", got)
+		}
+		f.conn.emit(dm(buyerA, "price?"))
+		settle()
+		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 2 {
+			t.Fatalf("text follow-up: %q", got)
+		}
+	})
+}
+
+func TestFreshNegotiationOpensAfterRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		ctx, stop := context.WithCancel(t.Context())
+		m := f.negotiatingManager(ctx, 40)
+		id, err := m.Start(ctx, 0, f.date, "lunch", 30, 60, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		stop()
+		synctest.Wait()
+		if ok, err := f.st.AddSellTaskBuyer(t.Context(), id, buyerA.String(), "", time.Now()); err != nil || !ok {
+			t.Fatalf("add buyer: %v, %v", ok, err)
+		}
+		if _, err := f.st.MoveSellTaskBuyer(t.Context(), id, buyerA.String(), store.BuyerQueued, store.BuyerNegotiating, "", time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+		ctx2, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		if err := f.negotiatingManager(ctx2, 40).Resume(ctx2, true); err != nil {
+			t.Fatal(err)
+		}
+		settle()
+		got := texts(sentTo(f.conn.messages(), buyerA))
+		if len(got) != 1 || got[0] != "60" {
+			t.Fatalf("opening = %q", got)
+		}
+		if b := buyerState(t, f, id, buyerA); b.Unknowns != 0 {
+			t.Fatalf("buyer = %+v", b)
+		}
+	})
+}
+
 func TestNegotiationHandsOffOnAgreement(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data.db")
 	synctest.Test(t, func(t *testing.T) {
