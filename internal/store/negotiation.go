@@ -111,6 +111,13 @@ func (s *Store) AgreeSellTaskBuyer(ctx context.Context, id int64, peer, amount s
 	return c == 1, err
 }
 
+// RecordBuyerOffer sets the buyer's latest offer, in paise, for a step
+// that sends nothing, such as parking them.
+func (s *Store) RecordBuyerOffer(ctx context.Context, id int64, peer string, paise int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE sell_task_buyers SET last_offer=? WHERE task_id=? AND peer=?`, paise, id, peer)
+	return err
+}
+
 // MoveSellTaskBuyerFrom moves a buyer to state from any of from.
 func (s *Store) MoveSellTaskBuyerFrom(ctx context.Context, id int64, peer string, from []string, to string) (bool, error) {
 	if len(from) == 0 {
