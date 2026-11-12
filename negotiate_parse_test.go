@@ -171,6 +171,10 @@ func TestParseBuyer(t *testing.T) {
 		{"Mujhe mil gaya bhai kisi aur se", intentPass, 0, false},
 		{"Nah I got it nvm", intentPass, 0, false},
 		{"not interested", intentPass, 0, false},
+		{"Not intrested", intentPass, 0, false},
+		{"sorry nt interseted anymore", intentPass, 0, false},
+		{"not intrstd bro", intentPass, 0, false},
+		{"interested", intentOpener, 0, false},
 
 		// Which mess, which diet.
 		{"Nv?", intentQuestion, 0, false},

@@ -38,11 +38,36 @@ func TestOfferQueueKeepsReplyOrder(t *testing.T) {
 }
 
 func TestBuyerPassed(t *testing.T) {
-	if !buyerPassed(&waE2E.Message{Conversation: proto.String(" No thanks! ")}) {
-		t.Fatal("decline was ignored")
+	for _, text := range []string{
+		" No thanks! ", "pass", "Cancel.", "not interested",
+		// Typos and padding buyers sent in a live run.
+		"Not intrested", "not intersted", "Not interseted", "nt interested",
+		"sorry not interested anymore", "Not interested bro 🙏", "nvm", "No need",
+	} {
+		if !buyerPassed(&waE2E.Message{Conversation: proto.String(text)}) {
+			t.Errorf("%q was not read as a decline", text)
+		}
 	}
-	if buyerPassed(&waE2E.Message{Conversation: proto.String("Don't cancel, I paid")}) {
-		t.Fatal("ordinary conversation was treated as a decline")
+	for _, text := range []string{
+		"Don't cancel, I paid", "interested", "I'm interested", "not interesting",
+		"How much?", "25?", "not interested in paying 30, 25?", "no", "paid",
+	} {
+		if buyerPassed(&waE2E.Message{Conversation: proto.String(text)}) {
+			t.Errorf("%q was read as a decline", text)
+		}
+	}
+}
+
+func TestInterestedTypo(t *testing.T) {
+	for _, w := range []string{"interested", "intrested", "intersted", "interseted", "intrstd", "intrestd"} {
+		if !interestedTypo(w) {
+			t.Errorf("%q should match interested", w)
+		}
+	}
+	for _, w := range []string{"interesting", "internet", "intend", "intended", "interest", "in"} {
+		if interestedTypo(w) {
+			t.Errorf("%q should not match interested", w)
+		}
 	}
 }
 
