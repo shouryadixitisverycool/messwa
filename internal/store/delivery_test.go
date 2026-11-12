@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -274,5 +275,97 @@ func TestReleaseUnpaid(t *testing.T) {
 	}
 	if state, err := s.ReleaseUnpaid(ctx, td.Date, td.Meal); err != nil || state != "armed" {
 		t.Fatalf("release after the task ended: %q, %v", state, err)
+	}
+}
+
+// TestRecordManualSale covers mark-sold's ledger write: a new row, a
+// handed-off row taken over, and a sent row left alone unless forced.
+func TestRecordManualSale(t *testing.T) {
+	ctx := t.Context()
+	s, err := Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	at := time.Unix(1794471000, 0)
+	sale := ManualSale{Date: "2026-11-12", Meal: "lunch", Peer: "919876543210@s.whatsapp.net", Amount: "20.00",
+		Mess: "kadamba", Diet: "veg", BuyerName: "Daniel", Kind: PaidByImage, At: at}
+
+	// No row yet: one is created, sent.
+	if prev, err := s.RecordManualSale(ctx, sale, false); err != nil || prev != "" {
+		t.Fatalf("new sale: %q, %v", prev, err)
+	}
+	ds, _ := s.Deliveries(ctx)
+	if len(ds) != 1 || ds[0].State != "sent" || ds[0].PaymentKind != PaidByImage || ds[0].Amount != "20.00" || ds[0].BuyerName != "Daniel" ||
+		ds[0].Mess != "kadamba" || !ds[0].SentAt.Equal(at) || !ds[0].PaidAt.Equal(at) {
+		t.Fatalf("ledger = %+v", ds)
+	}
+
+	// A sent row stays unless forced.
+	again := sale
+	again.Amount, again.Kind, again.BuyerName = "25.00", "", ""
+	if _, err := s.RecordManualSale(ctx, again, false); !errors.Is(err, ErrAlreadySold) {
+		t.Fatalf("overwrote a sent sale: %v", err)
+	}
+	if prev, err := s.RecordManualSale(ctx, again, true); err != nil || prev != "sent" {
+		t.Fatalf("forced: %q, %v", prev, err)
+	}
+	ds, _ = s.Deliveries(ctx)
+	if ds[0].Amount != "25.00" || ds[0].PaymentKind != "" || ds[0].BuyerName != "Daniel" {
+		t.Fatalf("after force = %+v; want the new amount and kind, the name kept", ds[0])
+	}
+
+	// A handed-off row becomes sent, keeping its mess and the buyer's
+	// name when none is given.
+	handed := Delivery{Date: "2026-11-12", Meal: "dinner", Peer: sale.Peer, Amount: "30.00", ImageHash: "portal:x", ArmedAt: at, Mess: "palash", Diet: "nonveg"}
+	if err := s.HandOffDelivery(ctx, handed, "Dan"); err != nil {
+		t.Fatal(err)
+	}
+	dinner := ManualSale{Date: "2026-11-12", Meal: "dinner", Peer: sale.Peer, Amount: "28.00", Kind: PaidOther, At: at}
+	if prev, err := s.RecordManualSale(ctx, dinner, false); err != nil || prev != "handed_off" {
+		t.Fatalf("handoff: %q, %v", prev, err)
+	}
+	ds, _ = s.Deliveries(ctx)
+	var d DeliveryRecord
+	for _, r := range ds {
+		if r.Meal == "dinner" {
+			d = r
+		}
+	}
+	if d.State != "sent" || d.Amount != "28.00" || d.Mess != "palash" || d.Diet != "nonveg" || d.BuyerName != "Dan" || d.PaymentKind != PaidOther {
+		t.Fatalf("handed-off row after recording = %+v", d)
+	}
+
+	// An armed row for another buyer becomes this sale, without the old
+	// buyer's name.
+	armed := Delivery{Date: "2026-11-13", Meal: "lunch", Peer: "other@s.whatsapp.net", Amount: "40.00", ImageHash: "portal:x", ArmedAt: at}
+	if _, err := s.ArmNewDelivery(ctx, armed); err != nil {
+		t.Fatal(err)
+	}
+	sale13 := sale
+	sale13.Date, sale13.BuyerName = "2026-11-13", ""
+	if prev, err := s.RecordManualSale(ctx, sale13, false); err != nil || prev != "armed" {
+		t.Fatalf("armed: %q, %v", prev, err)
+	}
+
+	// A meal an active sell task holds is the task's.
+	task := SellTask{Date: "2026-11-14", Meal: "lunch", MinPaise: 2000, MaxPaise: 3000, CreatedAt: time.Now(), EndsAt: time.Now().Add(time.Hour)}
+	id, err := s.CreateSellTask(ctx, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ArmTaskDelivery(ctx, id, Delivery{Date: task.Date, Meal: task.Meal, Peer: "c", Amount: "20.00", ImageHash: "portal:x", ArmedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	sale14 := sale
+	sale14.Date = task.Date
+	if _, err := s.RecordManualSale(ctx, sale14, true); err == nil {
+		t.Fatal("recorded over an active sell task's reservation")
+	}
+
+	bad := sale
+	bad.Date, bad.Kind = "2026-11-15", "cash"
+	if _, err := s.RecordManualSale(ctx, bad, false); err == nil {
+		t.Fatal("accepted an unknown payment kind")
 	}
 }
