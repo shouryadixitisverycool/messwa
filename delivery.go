@@ -220,7 +220,13 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	// Record each copy as it posts, so the ✅ after a sale reaches copies
 	// that went out after the first.
 	record := func(p postedOffer) { recordOffers(ctx, st, own, log, *date, *meal, []postedOffer{p}) }
-	posting.post(ctx, log, targets, 0, sell.PostGap, directCopy(s.conn, s.send, groupPost), record)
+	send := directCopy(s.conn, s.send, groupPost)
+	posting.post(ctx, log, targets, 0, sell.PostGap, send, record)
+	posting.keepInView(ctx, &reposter{
+		log: log, st: st, rules: sell.Repost, end: slot.End, gap: sell.PostGap,
+		groups: func(context.Context) ([]offerTarget, error) { return targets, nil },
+		copies: posting.memoryCopies, send: send, record: record,
+	})
 	if err := posting.waitPosted(); err != nil {
 		return err
 	}
@@ -236,15 +242,60 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 			return handOff(ctx, st, log, os.Stdout, d, posting.queue.name(buyer), resumeFlags(*portalQR, *user, *qr), others)
 		}
 	}
-	err = s.sellToQueue(ctx, commandCtx, posting.queue, memoryJournal{amount: *amount, st: st}, 10*time.Minute, nil)
+	saleCtx, firstWait := ctx, firstReplyWait
+	if sell.Repost.On {
+		// Reposts keep the offer up, so the wait for a first reply runs
+		// from the last copy, once no more will go out.
+		var stopWaiting context.CancelCauseFunc
+		saleCtx, stopWaiting = context.WithCancelCause(ctx)
+		defer stopWaiting(nil)
+		firstWait = 0
+		go waitForFirstReply(saleCtx, posting, firstReplyWait, stopWaiting)
+	}
+	err = s.sellToQueue(saleCtx, commandCtx, posting.queue, memoryJournal{amount: *amount, st: st}, firstWait, nil)
 	switch {
 	case errors.Is(err, errHandedOff):
 		return nil
+	case errors.Is(context.Cause(saleCtx), errNoFirstReply):
+		return fmt.Errorf("%w; %d copies posted", errNoFirstReply, len(posting.stop()))
 	case err != nil:
 		return err
 	}
 	tickOffers()
 	return nil
+}
+
+// firstReplyWait is how long deliver-qr -group waits for a first private
+// reply after the offer goes up, or with reposts after its latest copy.
+const firstReplyWait = 10 * time.Minute
+
+var errNoFirstReply = fmt.Errorf("no private reply within %s of the last copy of the offer", firstReplyWait)
+
+// waitForFirstReply ends a reposting offer with errNoFirstReply when nobody
+// joined the queue by wait after its last copy, once no more copies will go
+// out.
+func waitForFirstReply(ctx context.Context, o *groupOffer, wait time.Duration, stop context.CancelCauseFunc) {
+	tick := time.NewTicker(5 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		if o.queue.joined() {
+			return
+		}
+		select {
+		case <-o.repostsDone():
+		default:
+			continue
+		}
+		if last := o.lastPosted(); !last.IsZero() && time.Since(last) >= wait {
+			stop(errNoFirstReply)
+			return
+		}
+	}
 }
 
 // resumeFlags are the image flags for resuming a handed-off sale with

@@ -9,6 +9,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"messwa/internal/repost"
 	"messwa/internal/store"
 )
 
@@ -27,14 +28,14 @@ func (s *Server) sellEnabled() bool { return s.sell != nil && s.cfg.MCP.SellTask
 
 const sellInstructions = `
 
-Sell tasks (admins only) sell one of your registered meals through WhatsApp. start_sell_task checks the registration and posts an offer in the mess groups set in config.toml. With [sell] accept_plain_dms in config.toml, people who DM about the offer without quoting it count as replies too. When config.toml sets [sell] buyers = "unsaved_only", replies from saved contacts are skipped and they get nothing. With max_price above min_price, the task negotiates with everyone who replies privately to a post, all at once: it opens at max_price, says it's slightly negotiable, and comes down toward the meal's usual price, and toward min_price as the meal's end nears. It never quotes, agrees or accepts less than min_price. Buyers who agree pay one at a time; the first matching WhatsApp Pay payment gets the meal's QR, and the offer posts get a ✅. With max_price equal to min_price it just asks that price. Buyers the bot can't handle (unreadable messages, still too low after its lowest price, wanting to pay another way) are listed in needs_you, along with buyers whose payment it could not honour and the amount to refund. With handoff "on_reply" the task stops at the first private reply and sends that buyer nothing; with "on_agreement" it negotiates and hands over the first buyer who agrees, at the agreed price. sell_task_status shows who to message. A task ends when the meal sells, when it hands off, when it is cancelled, or when the meal ends. Check on it with sell_task_status and stop it with cancel_sell_task. Start a task only when the user asked you to sell that meal, at the prices they gave.`
+Sell tasks (admins only) sell one of your registered meals through WhatsApp. start_sell_task checks the registration and posts an offer in the mess groups set in config.toml. With [sell] accept_plain_dms in config.toml, people who DM about the offer without quoting it count as replies too. When config.toml sets [sell] buyers = "unsaved_only", replies from saved contacts are skipped and they get nothing. With max_price above min_price, the task negotiates with everyone who replies privately to a post, all at once: it opens at max_price, says it's slightly negotiable, and comes down toward the meal's usual price, and toward min_price as the meal's end nears. It never quotes, agrees or accepts less than min_price. Buyers who agree pay one at a time; the first matching WhatsApp Pay payment gets the meal's QR, and the offer posts get a ✅. With max_price equal to min_price it just asks that price. Buyers the bot can't handle (unreadable messages, still too low after its lowest price, wanting to pay another way) are listed in needs_you, along with buyers whose payment it could not honour and the amount to refund. With handoff "on_reply" the task stops at the first private reply and sends that buyer nothing; with "on_agreement" it negotiates and hands over the first buyer who agrees, at the agreed price. sell_task_status shows who to message. While the task is active it reposts the offer in a group once the last copy has dropped out of view (after [sell] repost_after, 10 minutes by default, or sooner once enough messages or other sellers' listings for the same meal and mess came in after it), up to max_reposts per group and never in the meal's last 15 minutes. Replies to any copy count. sell_task_status lists every copy and when each group gets its next one, and why. A task ends when the meal sells, when it hands off, when it is cancelled, or when the meal ends. Check on it with sell_task_status and stop it with cancel_sell_task. Start a task only when the user asked you to sell that meal, at the prices they gave.`
 
 func (s *Server) addSellTools(srv *mcp.Server) {
 	write := &mcp.ToolAnnotations{OpenWorldHint: ptr(true)}
 	mcp.AddTool(srv, &mcp.Tool{Name: "start_sell_task", Annotations: write,
 		Description: "Sell one of your registered meals: post an offer in the mess group, negotiate between min_price and max_price with buyers who reply privately, and send the QR after a matching payment. Prices are whole rupees. Admins only."}, s.startSellTask)
 	mcp.AddTool(srv, &mcp.Tool{Name: "sell_task_status", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
-		Description: "One sell task by id, or every active task plus those started in the last 24 hours: state, offer posts, buyers who replied, and the sale. Admins only."}, s.sellTaskStatus)
+		Description: "One sell task by id, or every active task plus those started in the last 24 hours: state, every copy of the offer posted (reposts included, marking each group's current one), when each group gets its next fresh copy and why, buyers who replied, and the sale. Admins only."}, s.sellTaskStatus)
 	mcp.AddTool(srv, &mcp.Tool{Name: "cancel_sell_task", Annotations: write,
 		Description: "Stop a sell task. A QR already being delivered for a payment still goes out, and the task then shows as sold. Admins only."}, s.cancelSellTask)
 }
@@ -59,8 +60,23 @@ type CancelSellIn struct {
 
 type SellOfferOut struct {
 	Group    string `json:"group"`
+	Copy     int    `json:"copy" jsonschema:"0 for the first copy in this group, then 1, 2... for each repost"`
+	Current  bool   `json:"current,omitempty" jsonschema:"the group's latest copy, the one buyers see"`
 	State    string `json:"state" jsonschema:"posting (sent, not confirmed), posted or failed"`
 	PostedAt string `json:"posted_at"`
+}
+
+// SellRepostOut is when a group gets its next fresh copy of the offer.
+type SellRepostOut struct {
+	Group   string `json:"group"`
+	Reposts int    `json:"reposts" jsonschema:"fresh copies posted in this group so far"`
+	// Counted after the current copy, from the group log.
+	MessagesAfter int    `json:"messages_after,omitempty" jsonschema:"messages that came in after the current copy"`
+	ListingsAfter int    `json:"listings_after,omitempty" jsonschema:"other sellers' listings for this meal at this mess after the current copy"`
+	Due           bool   `json:"due,omitempty" jsonschema:"a fresh copy goes out within the next half minute"`
+	NextAt        string `json:"next_at,omitempty" jsonschema:"when the next copy goes out unless a message or listing count brings it forward"`
+	Why           string `json:"why"`
+	Stopped       bool   `json:"stopped,omitempty" jsonschema:"this group gets no more copies; why says why"`
 }
 
 type SellBuyerOut struct {
@@ -117,8 +133,10 @@ type SellTaskOut struct {
 	Ends     string         `json:"ends"`
 	Ended    string         `json:"ended,omitempty"`
 	Offers   []SellOfferOut `json:"offers"`
-	Buyers   []SellBuyerOut `json:"buyers"`
-	Sale     *SellSaleOut   `json:"sale,omitempty"`
+	// Reposts, per group, while the task is active.
+	Reposts []SellRepostOut `json:"reposts,omitempty"`
+	Buyers  []SellBuyerOut  `json:"buyers"`
+	Sale    *SellSaleOut    `json:"sale,omitempty"`
 	// NeedsYou are buyers the bot handed to the user without ending the
 	// task, and buyers who paid when the bot could not sell to them.
 	NeedsYou []SellNeedsYouOut `json:"needs_you,omitempty"`
@@ -207,6 +225,26 @@ func (s *Server) sellTask(ctx context.Context, id int64) (SellTaskOut, error) {
 	return s.sellTaskOut(ctx, *t)
 }
 
+// nextRepost is the same decision the running task makes about a group's
+// copies, from the same group log.
+func (s *Server) nextRepost(ctx context.Context, rules repost.Rules, group string, copies []repost.Copy, end time.Time) SellRepostOut {
+	current := copies[0]
+	for _, c := range copies {
+		if c.Seq > current.Seq {
+			current = c
+		}
+	}
+	var act repost.Activity
+	if current.State != repost.Failed {
+		if a, known, err := s.st.After(ctx, current.Group, current.ID); err == nil {
+			act = repost.Activity{Known: known, Messages: a.Messages, Listings: a.Listings}
+		}
+	}
+	n := repost.Plan(rules, copies, act, s.now(), end)
+	return SellRepostOut{Group: group, Reposts: n.Reposts, MessagesAfter: n.Messages, ListingsAfter: n.Listings,
+		Due: n.Due, NextAt: s.fmt(n.At), Why: n.Why(rules), Stopped: n.Stopped != ""}
+}
+
 func (s *Server) sellTaskOut(ctx context.Context, t store.SellTask) (SellTaskOut, error) {
 	out := SellTaskOut{
 		ID: t.ID, Date: t.Date, Meal: t.Meal, Mess: t.Mess, Diet: t.Diet, State: t.State, Detail: t.Detail,
@@ -219,8 +257,25 @@ func (s *Server) sellTaskOut(ctx context.Context, t store.SellTask) (SellTaskOut
 		return out, err
 	}
 	names, _ := s.st.GroupNames(ctx)
+	latest := map[string]int{}
+	var order []string
+	byGroup := map[string][]repost.Copy{}
 	for _, o := range offers {
-		out.Offers = append(out.Offers, SellOfferOut{Group: groupName(names, o.Group), State: o.State, PostedAt: s.fmt(o.PostedAt)})
+		if _, ok := latest[o.Group]; !ok {
+			order = append(order, o.Group)
+		}
+		latest[o.Group] = max(latest[o.Group], o.Seq)
+		byGroup[o.Group] = append(byGroup[o.Group], repost.Copy{Group: o.Group, Seq: o.Seq, ID: o.ID, At: o.PostedAt, State: o.State})
+	}
+	for _, o := range offers {
+		out.Offers = append(out.Offers, SellOfferOut{Group: groupName(names, o.Group), Copy: o.Seq, Current: o.Seq == latest[o.Group],
+			State: o.State, PostedAt: s.fmt(o.PostedAt)})
+	}
+	if t.State == store.TaskActive {
+		rules := repost.FromConfig(s.cfg.Sell)
+		for _, g := range order {
+			out.Reposts = append(out.Reposts, s.nextRepost(ctx, rules, groupName(names, g), byGroup[g], t.EndsAt))
+		}
 	}
 	buyers, err := s.st.SellTaskBuyers(ctx, t.ID)
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 
 	"messwa/internal/config"
 	"messwa/internal/portal"
+	"messwa/internal/repost"
 )
 
 // sellSettings is the [sell] section after one run's flags are applied.
@@ -23,6 +24,8 @@ type sellSettings struct {
 	AcceptPlainDMs bool
 	// Buyers is who may buy; with unsaved_only, saved contacts are skipped.
 	Buyers config.Buyers
+	// Repost is when a copy that dropped out of view gets a fresh one.
+	Repost repost.Rules
 }
 
 // sellFlags are the deliver-qr flags that override [sell] for one run. A
@@ -35,6 +38,11 @@ type sellFlags struct {
 	mentionExtras  *bool
 	acceptPlainDMs *bool
 	buyers         *string
+	repost         *bool
+	repostAfter    *time.Duration
+	repostMessages *int
+	repostListings *int
+	maxReposts     *int
 }
 
 // pickGroups reports whether any flag picks offer groups.
@@ -63,6 +71,11 @@ func addSellFlags(fs *flag.FlagSet) func() sellFlags {
 	extras := fs.Bool("mention-extras", false, "list the meal's registered extras in the group post (overrides [sell] mention_extras)")
 	plain := fs.Bool("accept-plain-dms", false, "let DMs that ask about the offer without quoting it join the buyer queue (overrides [sell] accept_plain_dms)")
 	buyers := fs.String("buyers", "", "who may buy from a group offer: anyone or unsaved_only (overrides [sell] buyers)")
+	again := fs.Bool("repost", true, "post a fresh copy in a group once the last one dropped out of view (overrides [sell] repost)")
+	after := fs.Duration("repost-after", 0, "repost once a copy is this old; 0 turns this off (overrides [sell] repost_after)")
+	messages := fs.Int("repost-messages", 0, "repost once this many messages came in after a copy; 0 turns this off (overrides [sell] repost_messages)")
+	listings := fs.Int("repost-listings", 0, "repost once this many other sellers listed the same meal at the same mess after a copy; 0 turns this off (overrides [sell] repost_listings)")
+	maxReposts := fs.Int("max-reposts", 0, "most fresh copies per group (overrides [sell] max_reposts)")
 	return func() sellFlags {
 		f := sellFlags{groups: groups}
 		fs.Visit(func(fl *flag.Flag) {
@@ -79,6 +92,16 @@ func addSellFlags(fs *flag.FlagSet) func() sellFlags {
 				f.acceptPlainDMs = plain
 			case "buyers":
 				f.buyers = buyers
+			case "repost":
+				f.repost = again
+			case "repost-after":
+				f.repostAfter = after
+			case "repost-messages":
+				f.repostMessages = messages
+			case "repost-listings":
+				f.repostListings = listings
+			case "max-reposts":
+				f.maxReposts = maxReposts
 			}
 		})
 		return f
@@ -94,6 +117,7 @@ func resolveSellSettings(cfg *config.Config, f sellFlags) (sellSettings, error) 
 		MentionExtras:  cfg.Sell.MentionExtras,
 		AcceptPlainDMs: cfg.Sell.AcceptPlainDMs,
 		Buyers:         cfg.Sell.Buyers,
+		Repost:         repost.FromConfig(cfg.Sell),
 	}
 	firstN := func(n int, name string) ([]string, error) {
 		if n < 1 || n > len(cfg.Groups) {
@@ -145,6 +169,24 @@ func resolveSellSettings(cfg *config.Config, f sellFlags) (sellSettings, error) 
 		if s.Buyers, err = config.ParseBuyers(*f.buyers); err != nil {
 			return s, fmt.Errorf("-buyers: %w", err)
 		}
+	}
+	set := func(dst *int, v *int) {
+		if v != nil {
+			*dst = *v
+		}
+	}
+	if f.repost != nil {
+		s.Repost.On = *f.repost
+	}
+	if f.repostAfter != nil {
+		s.Repost.After = *f.repostAfter
+	}
+	set(&s.Repost.Messages, f.repostMessages)
+	set(&s.Repost.Listings, f.repostListings)
+	set(&s.Repost.Max, f.maxReposts)
+	r := s.Repost
+	if err := config.ValidateRepost(r.After, r.Messages, r.Listings, r.Max, "-"); err != nil {
+		return s, err
 	}
 	return s, nil
 }

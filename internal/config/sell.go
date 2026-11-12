@@ -32,7 +32,36 @@ type Sell struct {
 	AcceptPlainDMs bool `toml:"accept_plain_dms"`
 	// Buyers is who may buy from an offer. Empty means BuyersAnyone.
 	Buyers Buyers `toml:"buyers"`
+	// Repost puts a fresh copy of the offer in a group once the last one
+	// has dropped out of view, while the sale is still open. The copy goes
+	// out when the first of RepostAfter, RepostMessages or RepostListings
+	// is reached in that group.
+	Repost bool `toml:"repost"`
+	// RepostAfter is the longest a copy stays up before a fresh one goes
+	// out. 0 turns this trigger off.
+	RepostAfter duration `toml:"repost_after"`
+	// RepostMessages reposts once this many messages came in after the
+	// copy, enough to push it off a phone screen. 0 turns it off.
+	RepostMessages int `toml:"repost_messages"`
+	// RepostListings reposts once this many other people listed the same
+	// meal at the same mess after the copy. 0 turns it off.
+	RepostListings int `toml:"repost_listings"`
+	// MaxReposts caps fresh copies per group for one offer.
+	MaxReposts int `toml:"max_reposts"`
 }
+
+// MinRepostGap is the shortest time between two copies in one group,
+// whatever the message and listing counts say. repost_after can't be
+// shorter.
+const MinRepostGap = 5 * time.Minute
+
+// RepostCutoff is how long before the meal ends the last repost may go
+// out. Few meals sell later than this, and a buyer who replies then has
+// little time to haggle and pay.
+const RepostCutoff = 15 * time.Minute
+
+// MaxRepostsLimit is the most max_reposts may be.
+const MaxRepostsLimit = 12
 
 // MinPostGap is the shortest pause allowed between copies of one offer.
 const MinPostGap = 3 * time.Second

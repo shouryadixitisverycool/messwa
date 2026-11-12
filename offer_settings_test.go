@@ -16,6 +16,7 @@ import (
 
 	"messwa/internal/config"
 	"messwa/internal/portal"
+	"messwa/internal/repost"
 )
 
 func TestOfferText(t *testing.T) {
@@ -87,7 +88,8 @@ func parseSellFlags(t *testing.T, args ...string) sellFlags {
 
 func TestSellFlagsOnlyOverrideWhatWasPassed(t *testing.T) {
 	f := parseSellFlags(t)
-	if f.pickGroups() || f.postGap != nil || f.showPrice != nil || f.mentionExtras != nil || f.acceptPlainDMs != nil || f.buyers != nil {
+	if f.pickGroups() || f.postGap != nil || f.showPrice != nil || f.mentionExtras != nil || f.acceptPlainDMs != nil || f.buyers != nil ||
+		f.repost != nil || f.repostAfter != nil || f.repostMessages != nil || f.repostListings != nil || f.maxReposts != nil {
 		t.Fatalf("unset flags overrode config: %+v", f)
 	}
 	f = parseSellFlags(t, "-group", "Mess A", "-group", "2@g.us", "-show-price=false", "-mention-extras", "-post-gap", "5s")
@@ -126,6 +128,25 @@ func TestResolveSellSettings(t *testing.T) {
 		t.Fatalf("one -group = %+v, %v", s, err)
 	}
 
+	// Reposting is on by default, with the thresholds picked from the
+	// groups' message rates; each flag overrides one setting.
+	if want := (repost.Rules{On: true, After: 10 * time.Minute, Messages: 10, Listings: 3, Max: 6}); s.Repost != want {
+		t.Fatalf("repost defaults = %+v", s.Repost)
+	}
+	s, err = resolveSellSettings(testSellConfig(t, nil), parseSellFlags(t, "-repost-after", "15m", "-repost-messages", "0", "-max-reposts", "2"))
+	if want := (repost.Rules{On: true, After: 15 * time.Minute, Messages: 0, Listings: 3, Max: 2}); err != nil || s.Repost != want {
+		t.Fatalf("repost flags = %+v, %v", s.Repost, err)
+	}
+	quiet := func(c *config.Config) { c.Sell.Repost = false; c.Sell.RepostListings = 5 }
+	s, err = resolveSellSettings(testSellConfig(t, quiet), sellFlags{})
+	if err != nil || s.Repost.On || s.Repost.Listings != 5 {
+		t.Fatalf("repost config = %+v, %v", s.Repost, err)
+	}
+	s, err = resolveSellSettings(testSellConfig(t, quiet), parseSellFlags(t, "-repost", "-repost-listings", "2"))
+	if err != nil || !s.Repost.On || s.Repost.Listings != 2 {
+		t.Fatalf("-repost over repost = false: %+v, %v", s.Repost, err)
+	}
+
 	named := func(c *config.Config) {
 		c.Sell.Groups = []string{"Mess A", "Mess B", "Mess A"}
 		c.Sell.ShowPrice = false
@@ -158,6 +179,9 @@ func TestResolveSellSettings(t *testing.T) {
 		"count zero":       {"-group-count", "0"},
 		"gap too short":    {"-group", "Mess A", "-post-gap", "1s"},
 		"unknown buyers":   {"-group", "Mess A", "-buyers", "friends"},
+		"repost too soon":  {"-group", "Mess A", "-repost-after", "2m"},
+		"negative count":   {"-group", "Mess A", "-repost-messages", "-1"},
+		"too many reposts": {"-group", "Mess A", "-max-reposts", "50"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := resolveSellSettings(testSellConfig(t, nil), parseSellFlags(t, args...)); err == nil {

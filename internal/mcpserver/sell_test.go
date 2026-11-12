@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -143,6 +144,47 @@ func TestSellToolsNeedSettingAndAdmin(t *testing.T) {
 	json.Unmarshal(b, &list)
 	if len(list.Tasks) != 1 || list.Tasks[0].ID != task.ID {
 		t.Fatalf("status = %+v", list)
+	}
+	// Each copy shows, the latest per group marked current, with when the
+	// group gets its next one and why.
+	busy, refused := "1@g.us", "2@g.us"
+	st.SetGroupName(ctx, busy, "Mess Buy Sell")
+	posted := time.Now().Add(-16 * time.Minute)
+	for _, c := range []struct {
+		group, id string
+		seq       int
+		at        time.Time
+		state     string
+	}{
+		{busy, "first", 0, posted, store.OfferPosted},
+		{refused, "refused", 0, posted, store.OfferFailed},
+		{busy, "repost", 1, posted.Add(10 * time.Minute), store.OfferPosted},
+	} {
+		if err := st.ClaimOfferPost(ctx, task.ID, c.group, c.id, c.seq, c.at); err != nil {
+			t.Fatal(err)
+		}
+		st.SetOfferState(ctx, task.ID, c.id, c.state)
+	}
+	st.AppendLog(ctx, store.LogEntry{Chat: busy, ID: "repost", Type: "post", Sender: "me@s.whatsapp.net", TS: posted.Add(10 * time.Minute), Text: "sell bakul lunch"})
+	for i := range 4 {
+		st.AppendLog(ctx, store.LogEntry{Chat: busy, ID: fmt.Sprint("chat", i), Type: "post", Sender: "x@s.whatsapp.net", TS: posted.Add(11 * time.Minute), Text: "hi"})
+	}
+	res, err = on.CallTool(ctx, &mcp.CallToolParams{Name: "sell_task_status", Arguments: map[string]any{"id": task.ID}})
+	if err != nil || res.IsError {
+		t.Fatalf("status: %v %+v", err, res)
+	}
+	b, _ = json.Marshal(res.StructuredContent)
+	json.Unmarshal(b, &list)
+	offers, reposts := list.Tasks[0].Offers, list.Tasks[0].Reposts
+	if len(offers) != 3 || offers[0].Current || !offers[1].Current || offers[2].Copy != 1 || !offers[2].Current || offers[2].Group != "Mess Buy Sell" {
+		t.Fatalf("offers = %+v", offers)
+	}
+	if len(reposts) != 2 || reposts[0].Group != "Mess Buy Sell" || reposts[0].Reposts != 1 || reposts[0].MessagesAfter != 4 || reposts[0].Due ||
+		reposts[0].NextAt == "" || !strings.Contains(reposts[0].Why, "10 messages after it (now 4)") {
+		t.Fatalf("busy group = %+v", reposts)
+	}
+	if !reposts[1].Stopped || !strings.Contains(reposts[1].Why, "failed") {
+		t.Fatalf("refused group = %+v", reposts[1])
 	}
 	// A buyer the negotiation parked shows under needs_you with their chat.
 	parked := "913333333333@s.whatsapp.net"
