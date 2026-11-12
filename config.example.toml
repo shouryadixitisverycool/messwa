@@ -73,8 +73,8 @@ post_gap = "15s"
 # Put the price in the group post. The payment request DM always states it.
 show_price = true
 # List the extras you registered for that meal in the post, read from the
-# mess portal (needs -portal-qr). If the read fails, the offer goes out
-# without them.
+# mess portal. Sell tasks always can; deliver-qr needs -portal-qr and no
+# -offer-text. If the read fails, the offer goes out without them.
 mention_extras = false
 # When a group offer hands a buyer's chat to you. "never" runs the whole
 # sale: payment request, then the QR. "on_reply" stops as soon as a buyer
