@@ -157,8 +157,8 @@ To preview without the live service, `messwa dashboard -at "2026-11-02 12:45"` s
 | `read_unsaved_chat` | Message text for one unsaved number. Errors for saved contacts. Admins only |
 | `my_registrations` | Live portal registrations for a date range, including cancellation and usage fields. Uses the caller's own mess API key |
 | `my_qr` | Current portal QR as a PNG image. Sensitive; fetch again after token resets. Uses the caller's own mess API key |
-| `start_sell_task` | Only with `[mcp] sell_tasks = true`. Sells one of your registered meals: date, meal, `min_price`, `max_price` in rupees. Admins only |
-| `sell_task_status` | Only with `sell_tasks` on. One task by id, or the active and last 24 hours' tasks: state, posts, buyers, sale. Admins only |
+| `start_sell_task` | Only with `[mcp] sell_tasks = true`. Sells one of your registered meals: date, meal, `min_price`, `max_price` in rupees, negotiating in between. Admins only |
+| `sell_task_status` | Only with `sell_tasks` on. One task by id, or the active and last 24 hours' tasks: state, posts, buyers and where each stands in the haggle, buyers who need you, sale. Admins only |
 | `cancel_sell_task` | Only with `sell_tasks` on. Stops a task. Admins only |
 
 Every tool except `start_sell_task` and `cancel_sell_task` is read-only, and those two don't exist unless you turn them on.
@@ -560,7 +560,8 @@ connections using the same linked-device session.
 
 This command is not exposed through MCP and does not implement automatic
 registration imports, scheduling, negotiation or refunds. To negotiate,
-use `-handoff on_reply` (see [Taking over the chat yourself](#taking-over-the-chat-yourself)).
+use `-handoff on_reply` (see [Taking over the chat yourself](#taking-over-the-chat-yourself)),
+or a sell task, which negotiates by itself.
 Sell tasks use the same sale code from inside `run`; see below.
 
 ### Payment diagnostic
@@ -599,7 +600,7 @@ wrappers, duplicate note keys and Unicode. No Java objects are deserialized.
 
 ### Sell tasks
 
-Sell tasks are step 1 of the selling plan in `instructions/selling-instructions.md`: you tell your agent "sell my lunch for between 30 and 60" and it calls `start_sell_task`. The task runs inside `run`, on its WhatsApp connection, so the board and the rest of MCP keep working during a sale. It uses the same code as `deliver-qr -group -portal-qr`: the registration check, the group posts, the buyer queue, payment matching, the QR delivery and the ✅ on the posts.
+Sell tasks are steps 1 to 6 of the selling plan in `instructions/selling-instructions.md`: you tell your agent "sell my lunch for between 30 and 60" and it calls `start_sell_task`. The task runs inside `run`, on its WhatsApp connection, so the board and the rest of MCP keep working during a sale. It uses the same code as `deliver-qr -group -portal-qr`: the registration check, the group posts, the buyer queue, payment matching, the QR delivery and the ✅ on the posts.
 
 Turn them on in `config.toml` and restart `run`:
 
@@ -612,11 +613,20 @@ What a task does:
 
 1. Checks your portal registration for that meal with your saved mess API key, the same way `deliver-qr -portal-qr` does.
 2. Posts the offer using the `[sell]` settings, like `deliver-qr` does with no flags (see [Offer settings](#offer-settings)): `groups` or `group_count`, `post_gap` between copies, `show_price`, `mention_extras` and `accept_plain_dms`. With `show_price` the post shows `max_price`, e.g. `sell bakul non-veg lunch ₹60`. If `[sell]` names no groups, the task posts in the first group in `groups`. A group that can't be found is skipped; the task fails only if no copy posts.
-3. Queues everyone who replies privately to any copy, in reply order. A plain DM that doesn't quote a post counts only with `[sell] accept_plain_dms = true`, under the rules in [Offer settings](#offer-settings). With `[sell] buyers = "unsaved_only"`, saved contacts are skipped and get nothing (see [Saved contacts](#offer-settings)).
-4. Asks the first buyer to pay `max_price` within two minutes. They can reply `not interested`. Then the next buyer gets a turn, as in `deliver-qr -group`.
-5. Sends the QR after a matching WhatsApp Pay payment, stops posting copies, tells the rest of the queue `sorry sold`, reacts ✅ to the meal's offer posts, and ends as `sold`.
+3. Takes everyone who replies privately to any copy, in reply order. A plain DM that doesn't quote a post counts only with `[sell] accept_plain_dms = true`, under the rules in [Offer settings](#offer-settings). With `[sell] buyers = "unsaved_only"`, saved contacts are skipped and get nothing (see [Saved contacts](#offer-settings)).
+4. With `max_price` above `min_price`, negotiates with each of them at once (see [Negotiation](#negotiation)). Buyers who agree a price queue to pay in the order they agreed. With the two prices equal, every buyer queues to pay that price.
+5. Asks the first buyer in the pay queue to pay their price within two minutes. They can reply `not interested`. Then the next buyer gets a turn, as in `deliver-qr -group`.
+6. Sends the QR after a matching WhatsApp Pay payment, stops posting copies, tells everyone else who replied `sorry sold`, reacts ✅ to the meal's offer posts, and ends as `sold`.
 
-`[sell] handoff` doesn't apply to tasks. Instead `start_sell_task` takes `handoff`, `never` by default. With `on_reply`, step 4 doesn't happen: the first private reply stops the copies and ends the task as `handed_off`, and the bot sends that buyer nothing. The meal's delivery record is handed off, as with `deliver-qr -handoff on_reply`, so the sales page shows HANDOFF. `sell_task_status` returns the buyer's name, number and `wa.me` link, who else replied, and the `deliver-qr -peer` and `release-handoff` commands to finish or drop the sale.
+`[sell] handoff` doesn't apply to tasks. Instead `start_sell_task` takes `handoff`, `never` by default:
+
+| `handoff` | What the task does |
+| --- | --- |
+| `never` (default) | Negotiates and closes the sale: payment, QR, ✅ |
+| `on_reply` | Steps 4 and 5 don't happen: the first private reply ends the task and the bot sends that buyer nothing |
+| `on_agreement` | Negotiates; the first buyer to agree a price ends the task, and the bot doesn't ask them to pay |
+
+With `on_reply` or `on_agreement` the copies stop and the task ends as `handed_off`. The meal's delivery record is handed off, as with `deliver-qr -handoff on_reply`, so the sales page shows HANDOFF. `sell_task_status` returns the buyer's name, number and `wa.me` link, the price asked (or agreed, with `on_agreement`), who else replied, and the `deliver-qr -peer` and `release-handoff` commands to finish or drop the sale.
 
 A task also ends when you cancel it (`cancelled`), when the meal ends (`expired`), or on an error (`failed`, with the reason in `detail`). Ending without a sale releases the unpaid reservation, so you can start a new task for that meal. One meal can have only one active task, and none once it has a delivery record.
 
@@ -625,10 +635,32 @@ A task also ends when you cancel it (`cancelled`), when the meal ends (`expired`
 - Nothing is sent unless a task is active. The one exception is a QR for a payment that came in while the task was active. It still goes out if you cancel a moment later, and the task then ends as `sold`.
 - Besides one claimed post per group, a task messages only people its posts queued: those who replied privately to one, or with `accept_plain_dms`, DMed about it. After the QR goes out it may also react ✅ to the meal's recorded offer posts, and to nothing else.
 - With `[sell] buyers = "unsaved_only"`, a task never queues or messages a saved contact. If you switch to it while a task is running, the restart skips saved contacts still waiting in the queue. A buyer already asked to pay keeps their turn, and gets the QR if they pay.
-- No buyer is asked for less than `min_price`, and the store refuses to reserve the meal below it. The payment must match the asked price exactly.
-- A task sends at most 6 messages a minute and 40 in total. All tasks together send at most 12 a minute. The ✅ reactions after a sale skip the per-minute wait, so they don't time out behind the sale's own sends.
+- No buyer is quoted, agreed with or asked for less than `min_price`. The store checks this itself on every quote, agreement, reservation and sale, whatever the negotiation decided. A payment must match exactly the price agreed with that buyer, or a higher one the bot quoted them.
+- A task sends at most 12 messages a minute and 80 in total. All tasks together send at most 15 a minute. One buyer gets at most 6 negotiation messages. The ✅ reactions after a sale skip the per-minute wait, so they don't time out behind the sale's own sends.
 - A task stops at the meal's end time.
 
-Each send is written to the database before it goes out: each group post, each payment prompt, each `sorry sold`. The QR goes through the existing delivery ledger. When `run` restarts, it resumes active tasks before reconnecting and never repeats a claimed send. Replies to copies from before the restart still count, and groups that had no copy yet get one, `post_gap` apart. A buyer whose turn was under way keeps it, with at least 30 seconds after the restart, so a payment sent while `run` was down still counts. A post or QR send that was claimed but never confirmed is not retried. A task with an unconfirmed QR send ends as `failed`; check the buyer's chat. Turning `sell_tasks` off cancels active tasks on the next start.
+Each send is written to the database before it goes out: each group post, each negotiation message, each payment prompt, each `sorry sold`. The QR goes through the existing delivery ledger. When `run` restarts, it resumes active tasks before reconnecting and never repeats a claimed send. Replies to copies from before the restart still count, and groups that had no copy yet get one, `post_gap` apart. A buyer whose turn was under way keeps it, with at least 30 seconds after the restart, so a payment sent while `run` was down still counts. Buyers who were negotiating carry on from the bot's last price, and buyers who had agreed keep their place in the pay queue. A post or QR send that was claimed but never confirmed is not retried. A task with an unconfirmed QR send ends as `failed`; check the buyer's chat. Turning `sell_tasks` off cancels active tasks on the next start.
 
-For now the task asks `max_price` and takes that as the deal. Negotiation will plug in where the task picks a buyer's price (`negotiator` in `sell_task.go`). Whatever it returns, the floor check above still applies.
+#### Negotiation
+
+Buyers message several sellers at once and leave within a minute, so the bot answers everyone who replies straight away, from fixed templates. It reads each reply with fixed rules (`negotiate_parse.go`), built from a study of a few hundred real mess trades in DMs. Buyer text can only pick one of a few meanings and, for an offer, one number; there is no LLM in the loop. Only the numbers are stored, never the text.
+
+**Prices.** The bot opens at `max_price`: `₹60 for the bakul non-veg lunch, slightly negotiable`. It doesn't invite payment yet, because two buyers paying at once means a refund. It aims for the meal's usual price: the median ask for that serving at that mess, falling back to the same weekday's meal at that mess over four weeks (Wednesday and Sunday lunches go for more), then every mess, then the meal over four weeks. With no asks it aims for `max_price`. The lowest it accepts starts at that target, and over the last three hours before the meal ends it slides down to `min_price`. While two or more buyers are negotiating or waiting to pay, it stays at the target.
+
+| The buyer says | The bot |
+| --- | --- |
+| `available?`, `price?`, `buy`, `interested`, `?` | Quotes the opening price |
+| `40?`, `buy @50`, `rs 25`, `20-25` (the higher end), `sixty` | At or above its price: agrees to its price. At or above its lowest: agrees to theirs. Below: counters halfway, in ₹5 steps |
+| `45 final`, `max 45`, `last 45` below its lowest | Says `₹50 is the lowest I can do` |
+| `too much`, `negotiable?`, `pls`, `people are selling at 70` | Comes down one step |
+| `ok`, `fine`, `done` (after a price), `same number?`, `gpay?`, `paying` | Agrees to its current price |
+| `nv?`, `kadamba?` | `it's the bakul non-veg lunch, ₹50` |
+| `nvm`, `sorry bought`, `got from other`, `no thanks` | Stops talking to them |
+
+After two counters the next one is its lowest. A buyer still below that after the bot says so is handed to you.
+
+**Agreeing and paying.** A buyer who agrees joins the pay queue. If nobody is paying, they get the usual payment prompt at once, at the agreed price. If someone is, they hear `ok ₹50. someone's paying for it right now, if they don't in 2 min it's yours`, and get the prompt when their turn comes. A buyer who pays a price the bot quoted them before their turn gets the meal if nobody holds it. If someone does, that payment isn't honoured, and the buyer shows in `needs_you` with the amount to send back.
+
+**Buyers who need you.** The bot stops talking to a buyer, without ending the task, when they send two messages it can't read in a row (it restates its price once first), stay below its lowest, ask to pay some other way (a UPI ID, a QR), say they paid but no WhatsApp Pay payment arrives within a minute, or reach the 6-message limit. `sell_task_status` lists them under `needs_you` with why, a `wa.me` link, the bot's last price and their last offer. To sell to one of them yourself, cancel the task and use `deliver-qr -peer`.
+
+A negotiation ends when the buyer has been quiet for two minutes after the bot's last message, or after six minutes in all. At most 10 buyers negotiate at once; the rest wait their turn.

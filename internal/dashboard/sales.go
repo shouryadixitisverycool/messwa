@@ -3,7 +3,6 @@ package dashboard
 import (
 	"context"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -11,6 +10,7 @@ import (
 
 	"messwa/internal/accounts"
 	"messwa/internal/config"
+	marketask "messwa/internal/market"
 	"messwa/internal/mcpserver"
 	"messwa/internal/meals"
 	"messwa/internal/portal"
@@ -22,7 +22,7 @@ import (
 const salesDays = 28
 
 // A median from fewer asks than this falls back to a wider pool.
-const minAsks = 3
+const minAsks = marketask.MinAsks
 
 type salesState struct {
 	Now     int64        `json:"now"`
@@ -455,13 +455,4 @@ func (a *asks) market(meal string) (mealMarket, bool) {
 }
 
 // quantile interpolates between the closest ranks.
-func quantile(xs []int, q float64) float64 {
-	v := append([]int(nil), xs...)
-	sort.Ints(v)
-	pos := q * float64(len(v)-1)
-	lo := int(pos)
-	if lo+1 >= len(v) {
-		return float64(v[lo])
-	}
-	return float64(v[lo]) + (pos-float64(lo))*float64(v[lo+1]-v[lo])
-}
+func quantile(xs []int, q float64) float64 { return marketask.Quantile(xs, q) }

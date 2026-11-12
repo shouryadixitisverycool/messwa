@@ -57,6 +57,21 @@ func TestHandoffOverride(t *testing.T) {
 	}
 }
 
+func TestTaskHandoff(t *testing.T) {
+	for in, want := range map[string]Handoff{"": HandoffNever, "never": HandoffNever, "on_reply": HandoffOnReply, "on_agreement": HandoffOnAgreement} {
+		if got, err := ParseTaskHandoff(in); err != nil || got != want {
+			t.Errorf("ParseTaskHandoff(%q) = %q, %v", in, got, err)
+		}
+	}
+	if _, err := ParseTaskHandoff("sometimes"); err == nil {
+		t.Fatal("unknown task handoff accepted")
+	}
+	// Only sell tasks negotiate, so [sell] and deliver-qr don't take it.
+	if _, err := ParseHandoff("on_agreement"); err == nil {
+		t.Fatal("deliver-qr handoff accepted on_agreement")
+	}
+}
+
 func TestBuyersSetting(t *testing.T) {
 	c := Default()
 	if c.Sell.Buyers.UnsavedOnly() {
