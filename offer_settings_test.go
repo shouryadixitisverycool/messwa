@@ -87,7 +87,7 @@ func parseSellFlags(t *testing.T, args ...string) sellFlags {
 
 func TestSellFlagsOnlyOverrideWhatWasPassed(t *testing.T) {
 	f := parseSellFlags(t)
-	if f.pickGroups() || f.postGap != nil || f.showPrice != nil || f.mentionExtras != nil || f.buyers != nil {
+	if f.pickGroups() || f.postGap != nil || f.showPrice != nil || f.mentionExtras != nil || f.acceptPlainDMs != nil || f.buyers != nil {
 		t.Fatalf("unset flags overrode config: %+v", f)
 	}
 	f = parseSellFlags(t, "-group", "Mess A", "-group", "2@g.us", "-show-price=false", "-mention-extras", "-post-gap", "5s")
@@ -105,8 +105,21 @@ func TestResolveSellSettings(t *testing.T) {
 	// Defaults keep today's behaviour: no groups without -group, price shown,
 	// no extras.
 	s, err := resolveSellSettings(testSellConfig(t, nil), sellFlags{})
-	if err != nil || len(s.Groups) != 0 || !s.ShowPrice || s.MentionExtras || s.PostGap != 15*time.Second || s.Buyers.UnsavedOnly() {
+	if err != nil || len(s.Groups) != 0 || !s.ShowPrice || s.MentionExtras || s.AcceptPlainDMs || s.PostGap != 15*time.Second || s.Buyers.UnsavedOnly() {
 		t.Fatalf("defaults = %+v, %v", s, err)
+	}
+	s, err = resolveSellSettings(testSellConfig(t, nil), parseSellFlags(t, "-accept-plain-dms"))
+	if err != nil || !s.AcceptPlainDMs {
+		t.Fatalf("-accept-plain-dms = %+v, %v", s, err)
+	}
+	plain := func(c *config.Config) { c.Sell.AcceptPlainDMs = true }
+	s, err = resolveSellSettings(testSellConfig(t, plain), sellFlags{})
+	if err != nil || !s.AcceptPlainDMs {
+		t.Fatalf("accept_plain_dms = %+v, %v", s, err)
+	}
+	s, err = resolveSellSettings(testSellConfig(t, plain), parseSellFlags(t, "-accept-plain-dms=false"))
+	if err != nil || s.AcceptPlainDMs {
+		t.Fatalf("-accept-plain-dms=false over the setting = %+v, %v", s, err)
 	}
 	s, err = resolveSellSettings(testSellConfig(t, nil), parseSellFlags(t, "-group", "Mess A"))
 	if err != nil || !reflect.DeepEqual(s.Groups, []string{"Mess A"}) {

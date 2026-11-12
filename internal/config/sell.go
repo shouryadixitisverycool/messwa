@@ -25,6 +25,11 @@ type Sell struct {
 	// Handoff is the point where the bot stops and you take over the
 	// buyer's chat. Empty means HandoffNever.
 	Handoff Handoff `toml:"handoff"`
+	// AcceptPlainDMs lets a DM that doesn't quote the offer post join the
+	// buyer queue, if it asks about the offer and you weren't already
+	// chatting with the sender. Off by default: with it on, the bot answers
+	// people who never saw the post.
+	AcceptPlainDMs bool `toml:"accept_plain_dms"`
 	// Buyers is who may buy from an offer. Empty means BuyersAnyone.
 	Buyers Buyers `toml:"buyers"`
 }
