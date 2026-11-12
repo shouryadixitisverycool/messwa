@@ -544,6 +544,11 @@ Normal text, screenshots, other buyers, expired messages, mismatched payment
 details and known incomplete transactions do not qualify. The WhatsApp event
 does not independently verify that funds arrived.
 
+When the buyer's WhatsApp Pay payment doesn't qualify, the log says so at
+info level with the payment's message ID and which check failed, such as
+`payment amount or currency does not match`. It never logs the payment's
+contents. `-diagnostics` adds the same line for the buyer's other messages.
+
 The data database stores the buyer, amount, image hash or portal-account binding, arming time, payment
 message ID, outgoing image ID and state for each date/meal, plus the group
 and message ID of each offer post and when messwa reacted to it. It never stores
