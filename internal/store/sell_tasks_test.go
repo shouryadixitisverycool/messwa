@@ -225,3 +225,48 @@ func TestAfterPost(t *testing.T) {
 		t.Fatalf("After = %+v, want 6 messages and 1 listing", got)
 	}
 }
+
+func TestClaimBuyerLine(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "data.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	id, err := s.CreateSellTask(ctx, SellTask{Date: "2026-11-12", Meal: "lunch", MinPaise: 2000, MaxPaise: 3000, CreatedAt: now, EndsAt: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const buyer = "1@s.whatsapp.net"
+	if ok, _ := s.ClaimBuyerLine(ctx, id, buyer, "pay_other"); ok {
+		t.Fatal("line claimed for someone who isn't a buyer")
+	}
+	s.AddSellTaskBuyer(ctx, id, buyer, "", now)
+	// A buyer mid-turn can still hear a line.
+	s.MoveSellTaskBuyer(ctx, id, buyer, BuyerQueued, BuyerOffered, "30.00", now)
+	for _, kind := range []string{"pay_other", "screenshot"} {
+		if ok, err := s.ClaimBuyerLine(ctx, id, buyer, kind); !ok || err != nil {
+			t.Fatalf("%s not claimed: %v", kind, err)
+		}
+	}
+	// Each is said once, also after a restart.
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if s, err = Open(path); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for _, kind := range []string{"pay_other", "screenshot"} {
+		if ok, _ := s.ClaimBuyerLine(ctx, id, buyer, kind); ok {
+			t.Fatalf("%s claimed twice", kind)
+		}
+	}
+	if ok, _ := s.ClaimBuyerLine(ctx, id, buyer, "pay"); !ok {
+		t.Fatal("a kind that prefixes a claimed one counted as claimed")
+	}
+	if _, err := s.ClaimBuyerLine(ctx, id, buyer, "a,b"); err == nil {
+		t.Fatal("kind with a comma accepted")
+	}
+}

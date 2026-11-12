@@ -60,7 +60,7 @@ func TestSellTaskSkipsSavedContacts(t *testing.T) {
 		if err != nil || len(buyers) != 1 || buyers[0].Peer != buyerB.String() {
 			t.Fatalf("queued buyers = %+v, %v; want only the unsaved number", buyers, err)
 		}
-		if toB := sentTo(f.conn.messages(), buyerB); len(toB) != 1 {
+		if toB := sentTo(f.conn.messages(), buyerB); len(toB) != 2 {
 			t.Fatalf("unsaved buyer got %+v, want the payment prompt", toB)
 		}
 
@@ -81,7 +81,7 @@ func TestSellTaskSkipsSavedContacts(t *testing.T) {
 		time.Sleep(time.Second)
 		f.conn.emit(payment(buyerB, "pay-b"))
 		synctest.Wait()
-		if toB := sentTo(f.conn.messages(), buyerB); len(toB) != 2 || !toB[1].qr {
+		if toB := sentTo(f.conn.messages(), buyerB); len(toB) != 3 || !toB[2].qr {
 			t.Fatalf("buyer B got %+v, want the prompt then the QR", toB)
 		}
 		for _, saved := range []types.JID{buyerA, friendPN, friendLID, lidFriendPN, lidFriendLID} {
@@ -108,7 +108,7 @@ func TestSellTaskSellsToSavedContactsByDefault(t *testing.T) {
 		synctest.Wait()
 		f.conn.emit(f.reply(buyerA, "interested"))
 		synctest.Wait()
-		if toA := sentTo(f.conn.messages(), buyerA); len(toA) != 1 {
+		if toA := sentTo(f.conn.messages(), buyerA); len(toA) != 2 {
 			t.Fatalf("saved contact got %+v, want the payment prompt with buyers = anyone", toA)
 		}
 	})
@@ -154,14 +154,14 @@ func TestResumedTaskSkipsSavedContactsStillQueued(t *testing.T) {
 		time.Sleep(time.Second)
 		f.conn.emit(payment(buyerA, "pay-a"))
 		synctest.Wait()
-		if toA := sentTo(f.conn.messages(), buyerA); len(toA) != 2 || !toA[1].qr {
+		if toA := sentTo(f.conn.messages(), buyerA); len(toA) != 3 || !toA[2].qr {
 			t.Fatalf("buyer A got %+v, want the prompt then the QR", toA)
 		}
 		if got := sentTo(f.conn.messages(), friendPN); len(got) != 0 {
 			t.Fatalf("skipped saved contact was messaged: %+v", got)
 		}
-		if toB := sentTo(f.conn.messages(), buyerB); len(toB) != 1 || toB[0].text != "sorry sold" {
-			t.Fatalf("buyer B got %+v, want sorry sold", toB)
+		if toB := sentTo(f.conn.messages(), buyerB); len(toB) != 1 || toB[0].text != "sold sorry" {
+			t.Fatalf("buyer B got %+v, want sold sorry", toB)
 		}
 	})
 }

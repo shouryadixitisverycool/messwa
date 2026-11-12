@@ -15,7 +15,6 @@ import (
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
-	"google.golang.org/protobuf/proto"
 
 	"messwa/internal/config"
 	"messwa/internal/market"
@@ -33,7 +32,7 @@ import (
 const (
 	maxSessions    = 10               // buyers negotiating at once
 	maxCounters    = 2                // counter-offers before "the lowest I can do"
-	maxBotMsgs     = 6                // messages a session sends one buyer
+	maxBotMsgs     = 6                // replies a session sends one buyer; a two-message reply counts once
 	replyDebounce  = 2 * time.Second  // a burst of messages gets one reply
 	sessionSilence = 2 * time.Minute  // buyer quiet after the bot's last message
 	sessionLimit   = 6 * time.Minute  // one negotiation, start to agreement
@@ -51,11 +50,12 @@ type haggle struct {
 	target int
 	unit   int // concessions round to this: ₹5, or ₹1 for tiny prices
 	end    time.Time
-	label  string // "kadamba non-veg lunch"
+	what   string // the mess and diet, "kadamba non-veg"
+	day    string // "" for today's meal, else "tmrw" or "13 nov"
 }
 
-func newHaggle(minRupees, maxRupees int, median float64, haveMedian bool, end time.Time, label string) haggle {
-	h := haggle{min: minRupees, max: maxRupees, target: maxRupees, unit: market.PriceUnit(maxRupees), end: end, label: label}
+func newHaggle(minRupees, maxRupees int, median float64, haveMedian bool, end time.Time, what, day string) haggle {
+	h := haggle{min: minRupees, max: maxRupees, target: maxRupees, unit: market.PriceUnit(maxRupees), end: end, what: what, day: day}
 	if haveMedian {
 		h.target = min(max(int(math.Round(median)), minRupees), maxRupees)
 	}
@@ -102,7 +102,7 @@ func haggleFromStore(n store.Negotiation, maxRupees int) haggleState {
 // step is what one burst of buyer messages leads to.
 type step struct {
 	next      haggleState
-	reply     string // to send; empty sends nothing
+	reply     reply  // to send; empty sends nothing
 	agree     int    // > 0: agreed at this price
 	pass      bool   // the buyer is out
 	park      string // non-empty: stop and hand the buyer to you, saying why
@@ -117,7 +117,11 @@ func (h haggle) decide(st haggleState, in intent, now time.Time, competing bool)
 	w := min(h.walk(now, competing), a)
 	next := st
 	next.quoted = slices.Clone(st.quoted)
-	say := func(price int, text string) step {
+	say := func(price int, text reply) step {
+		if !priced && h.day != "" && in.kind == intentOffer {
+			// A counter as the first price: still say which day.
+			text = append(text[:len(text)-1:len(text)-1], text[len(text)-1]+", its for "+h.day)
+		}
 		next.ask = price
 		if !slices.Contains(next.quoted, price) {
 			next.quoted = append(next.quoted, price)
@@ -125,24 +129,18 @@ func (h haggle) decide(st haggleState, in intent, now time.Time, competing bool)
 		return step{next: next, reply: text}
 	}
 	opening := func() step {
-		return say(a, fmt.Sprintf("₹%d for the %s, slightly negotiable", a, h.label))
+		return say(a, sayOpening(a, h.day))
 	}
 	lowest := func() step {
 		next.saidLowest = true
-		if !priced {
-			return say(w, fmt.Sprintf("₹%d for the %s is the lowest I can do", w, h.label))
-		}
-		return say(w, fmt.Sprintf("₹%d is the lowest I can do", w))
+		return say(w, sayLowest(w))
 	}
 	counter := func(k int) step {
 		if k <= w {
 			return lowest()
 		}
 		next.rounds++
-		if !priced {
-			return say(k, fmt.Sprintf("can do ₹%d for the %s", k, h.label))
-		}
-		return say(k, fmt.Sprintf("can do ₹%d", k))
+		return say(k, sayCounter(k, next.rounds))
 	}
 	agree := func(price int) step {
 		next.ask = price
@@ -194,7 +192,7 @@ func (h haggle) decide(st haggleState, in intent, now time.Time, competing bool)
 		if !priced {
 			return opening()
 		}
-		return say(a, fmt.Sprintf("it's the %s, ₹%d", h.label, a))
+		return say(a, sayWhich(h.what, a))
 	}
 	if !priced {
 		return opening()
@@ -203,7 +201,7 @@ func (h haggle) decide(st haggleState, in intent, now time.Time, competing bool)
 		return step{next: next, park: "sent messages the bot couldn't read"}
 	}
 	next.unknowns++
-	return say(a, fmt.Sprintf("₹%d for the %s, ok?", a, h.label))
+	return say(a, sayRestate(a))
 }
 
 // Session states, in memory. The store keeps the same story in
@@ -266,10 +264,6 @@ type negotiation struct {
 }
 
 func newNegotiation(ctx context.Context, m *sellManager, t store.SellTask, s *sale, gate *taskGate, join *offerQueue) *negotiation {
-	label := portalMealLabel(s.mess, s.diet, t.Meal)
-	if day := offerDay(m.cfg, t.Date); day != "" {
-		label += " on " + day
-	}
 	var median float64
 	var have bool
 	if day, err := time.ParseInLocation("2006-01-02", t.Date, m.cfg.Location()); err == nil {
@@ -282,7 +276,7 @@ func newNegotiation(ctx context.Context, m *sellManager, t store.SellTask, s *sa
 	}
 	n := &negotiation{
 		m: m, t: t, s: s, gate: gate, log: m.log.With("task", t.ID), join: join, pay: newOfferQueue(),
-		h:     newHaggle(int(t.MinPaise/100), int(t.MaxPaise/100), median, have, t.EndsAt, label),
+		h:     newHaggle(int(t.MinPaise/100), int(t.MaxPaise/100), median, have, t.EndsAt, portalMealLabel(s.mess, s.diet, ""), offerDay(m.cfg, t.Date)),
 		slots: make(chan struct{}, maxSessions), sessions: map[types.JID]*session{}, direct: make(chan error, 1),
 	}
 	n.ctx, n.cancel = context.WithCancelCause(ctx)
@@ -643,9 +637,8 @@ func (n *negotiation) park(ctx context.Context, ss *session, note string) {
 	n.event(ss.buyer, store.EventParked, 0, note)
 }
 
-func (n *negotiation) send(ctx context.Context, to types.JID, text string) error {
-	_, err := n.gate.send(ctx, to, &waE2E.Message{Conversation: proto.String(text)})
-	return err
+func (n *negotiation) send(ctx context.Context, to types.JID, r reply) error {
+	return sendReply(ctx, n.gate.send, to, r)
 }
 
 // run is one buyer's negotiation. first is the reply that queued them;
@@ -775,7 +768,9 @@ func (ss *session) handle(texts []string) handled {
 		case in.kind == intentPaid || in.kind == intentOK && in.done:
 			return handledPaidClaim
 		case in.kind == intentPayOther:
-			n.park(context.WithoutCancel(ctx), ss, "wants to pay some way other than WhatsApp Pay")
+			if !ss.sayPayOther() {
+				n.park(context.WithoutCancel(ctx), ss, "wants to pay some way other than WhatsApp Pay")
+			}
 			return handledNothing
 		case in.kind == intentPass:
 			if ok, _ := n.m.st.MoveSellTaskBuyerFrom(ctx, n.t.ID, ss.buyer.String(), []string{store.BuyerAgreed}, store.BuyerPassed); ok {
@@ -792,6 +787,9 @@ func (ss *session) handle(texts []string) handled {
 		return handledEnded
 	}
 
+	if in.kind == intentPayOther && ss.sayPayOther() {
+		return handledReplied
+	}
 	st := n.h.decide(hs, in, time.Now(), n.competing())
 	switch {
 	case st.pass:
@@ -810,7 +808,7 @@ func (ss *session) handle(texts []string) handled {
 		return handledPaidClaim
 	case st.agree > 0:
 		return ss.agree(st)
-	case st.reply != "":
+	case len(st.reply) > 0:
 		if !ss.say(st.next, st.reply) {
 			return handledEnded
 		}
@@ -837,8 +835,8 @@ func (ss *session) keepOffer(prev, next haggleState) {
 	n.mu.Unlock()
 }
 
-// say claims and sends one message, recording next as the buyer's state.
-func (ss *session) say(next haggleState, text string) bool {
+// say claims and sends one reply, recording next as the buyer's state.
+func (ss *session) say(next haggleState, text reply) bool {
 	n := ss.n
 	ctx := n.talk
 	n.mu.Lock()
@@ -849,7 +847,7 @@ func (ss *session) say(next haggleState, text string) bool {
 	started := ss.started
 	n.mu.Unlock()
 	if sent >= maxBotMsgs {
-		n.park(context.WithoutCancel(ctx), ss, fmt.Sprintf("reached the limit of %d messages the bot sends one buyer", maxBotMsgs))
+		n.park(context.WithoutCancel(ctx), ss, fmt.Sprintf("reached the limit of %d replies the bot sends one buyer", maxBotMsgs))
 		return false
 	}
 	next.botMsgs = sent + 1
@@ -867,7 +865,7 @@ func (ss *session) say(next haggleState, text string) bool {
 		return false
 	}
 	n.log.Info("negotiation message sent", "buyer", ss.buyer, "ask", next.ask, "round", next.rounds)
-	n.event(ss.buyer, store.EventBotSaid, next.ask, text)
+	n.event(ss.buyer, store.EventBotSaid, next.ask, strings.Join(text, "\n"))
 	return true
 }
 
@@ -899,14 +897,14 @@ func (ss *session) agree(st step) handled {
 	n.log.Info("buyer agreed", "buyer", ss.buyer, "amount", amount)
 	n.event(ss.buyer, store.EventAgreed, st.agree, "")
 	if busy && n.t.Handoff != string(config.HandoffOnAgreement) {
-		ss.sayAgreed(fmt.Sprintf("ok ₹%d. someone's paying for it right now, if they don't in 2 min it's yours", st.agree))
+		ss.sayAgreed(sayQueued(st.agree))
 	}
 	n.pay.add(ss.buyer)
 	return handledAgreed
 }
 
-// sayAgreed sends an agreed buyer one message, within the message limit.
-func (ss *session) sayAgreed(text string) {
+// sayAgreed sends an agreed buyer one reply, within the message limit.
+func (ss *session) sayAgreed(text reply) {
 	n := ss.n
 	n.mu.Lock()
 	next := ss.hs
@@ -927,7 +925,21 @@ func (ss *session) sayAgreed(text string) {
 		n.log.Warn("negotiation message failed or is uncertain", "buyer", ss.buyer, "err", err)
 		return
 	}
-	n.event(ss.buyer, store.EventBotSaid, next.ask, text)
+	n.event(ss.buyer, store.EventBotSaid, next.ask, strings.Join(text, "\n"))
+}
+
+// sayPayOther tells a buyer who wants to pay another way that it's
+// WhatsApp Pay only. It reports false if they already heard it, so asking
+// again hands them to you.
+func (ss *session) sayPayOther() bool {
+	n := ss.n
+	if ok, err := n.m.st.ClaimBuyerLine(n.talk, n.t.ID, ss.buyer.String(), linePayOther); err != nil || !ok {
+		return false
+	}
+	if err := n.send(n.talk, ss.buyer, sayPayOther()); err != nil {
+		n.log.Warn("negotiation message failed or is uncertain", "buyer", ss.buyer, "err", err)
+	}
+	return true
 }
 
 func (ss *session) timeOut(why string) {

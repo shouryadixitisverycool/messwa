@@ -287,7 +287,7 @@ func recordSale(ctx context.Context, cfg *config.Config, st *store.Store, log *s
 		return "", err
 	}
 	how := map[string]string{"": "WhatsApp Pay", store.PaidByImage: "image, unverified", store.PaidOther: "another way"}[m.Kind]
-	msg := fmt.Sprintf("Recorded %s %s as sold to %s for %s (paid by %s) at %s.", m.Date, m.Meal, m.Peer, rupees(m.Amount), how, m.At.In(cfg.Location()).Format("15:04"))
+	msg := fmt.Sprintf("Recorded %s %s as sold to %s for %s (paid by %s) at %s.", m.Date, m.Meal, m.Peer, "₹"+rupees(m.Amount), how, m.At.In(cfg.Location()).Format("15:04"))
 	if prev != "" {
 		msg += fmt.Sprintf(" It was %s before.", prev)
 	}

@@ -722,6 +722,10 @@ func (j *taskJournal) turnEnded(ctx context.Context, buyer types.JID, state stri
 	return err
 }
 
+func (j *taskJournal) claimLine(ctx context.Context, buyer types.JID, kind string) (bool, error) {
+	return j.st.ClaimBuyerLine(ctx, j.t.ID, buyer.String(), kind)
+}
+
 func (j *taskJournal) tellingSold(ctx context.Context, buyer types.JID) (bool, error) {
 	return j.st.MoveSellTaskBuyerFrom(ctx, j.t.ID, buyer.String(),
 		[]string{store.BuyerQueued, store.BuyerNegotiating, store.BuyerAgreed, store.BuyerParked}, store.BuyerToldSold)

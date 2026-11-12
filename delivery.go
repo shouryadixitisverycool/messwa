@@ -173,7 +173,7 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	if *peer != "" {
 		err := s.takeTurn(ctx, jid, s.reservation(jid, *amount), turn{
 			arm:    st.ArmDelivery,
-			prompt: *offer,
+			prompt: offerPrompt(*offer),
 			listening: func() error {
 				if err := c.WA.Connect(); err != nil {
 					return err
@@ -337,19 +337,38 @@ func readExtras(ctx context.Context, p extrasPortal, log *slog.Logger, date, mea
 	return offerExtras(rows, mess)
 }
 
-// rupees is an amount as a group post shows it: "₹60", or "₹60.50".
-func rupees(amount string) string { return "₹" + strings.TrimSuffix(amount, ".00") }
+// offerPrompt is deliver-qr -peer's -offer-text as a reply; empty sends
+// nothing.
+func offerPrompt(text string) reply {
+	if text == "" {
+		return nil
+	}
+	return reply{text}
+}
 
-// offerDay labels a meal that isn't today's, e.g. "5 Nov 2026".
+// rupees is an amount as a group post shows it: "60", or "60.50", with
+// no ₹ sign, the way people in the groups write it.
+func rupees(amount string) string { return strings.TrimSuffix(amount, ".00") }
+
+// offerDay labels a meal that isn't today's: "tmrw" or "5 nov".
 func offerDay(cfg *config.Config, date string) string {
-	if date == time.Now().In(cfg.Location()).Format("2006-01-02") {
+	return dayLabel(time.Now().In(cfg.Location()), date)
+}
+
+// dayLabel names date the way a buyer would, seen from now: "" for today,
+// "tmrw", or "13 nov".
+func dayLabel(now time.Time, date string) string {
+	if date == now.Format("2006-01-02") {
 		return ""
 	}
-	day, err := time.ParseInLocation("2006-01-02", date, cfg.Location())
+	if date == now.AddDate(0, 0, 1).Format("2006-01-02") {
+		return "tmrw"
+	}
+	day, err := time.ParseInLocation("2006-01-02", date, now.Location())
 	if err != nil {
 		return ""
 	}
-	return day.Format("2 Jan 2006")
+	return strings.ToLower(day.Format("2 Jan"))
 }
 
 // normalizeAmount checks an INR amount with two decimal places and drops

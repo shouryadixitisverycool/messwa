@@ -208,7 +208,7 @@ func (s *sale) sendQR(ctx context.Context, recipient types.JID, id string, d sto
 		return err
 	}
 	_, err = s.sendPaid(ctx, recipient, &waE2E.Message{ImageMessage: &waE2E.ImageMessage{
-		Caption: proto.String(fmt.Sprintf("%s %s", d.Date, d.Meal)), Mimetype: proto.String(mime), Width: proto.Uint32(uint32(width)), Height: proto.Uint32(uint32(height)),
+		Caption: proto.String(qrCaption(d.Mess, d.Meal)), Mimetype: proto.String(mime), Width: proto.Uint32(uint32(width)), Height: proto.Uint32(uint32(height)),
 		URL: &up.URL, DirectPath: &up.DirectPath, MediaKey: up.MediaKey, FileEncSHA256: up.FileEncSHA256, FileSHA256: up.FileSHA256, FileLength: &up.FileLength,
 	}}, whatsmeow.SendRequestExtra{ID: id})
 	return err
@@ -224,7 +224,7 @@ type turn struct {
 	// was offline is not missed.
 	listening func() error
 	// prompt is sent to the buyer after arming. Empty sends nothing.
-	prompt string
+	prompt reply
 	// prompting claims the prompt before it is sent. Returning false skips
 	// the send: it already went out before a restart.
 	prompting func(context.Context) (bool, error)
@@ -236,6 +236,9 @@ type turn struct {
 	// before it is claimed, so the ledger records it.
 	amounts []string
 	reprice func(context.Context, store.Delivery, string) (store.Delivery, error)
+	// claimLine claims a once-per-buyer line such as the screenshot reply
+	// before it is sent. Nil keeps the claim for this turn only.
+	claimLine func(ctx context.Context, kind string) (bool, error)
 }
 
 // takeTurn arms the meal for buyer and delivers the QR after a matching
@@ -271,7 +274,8 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 	// prompted is set once the buyer has the payment prompt. A turn
 	// without one (deliver-qr -peer without -offer-text, or one resumed
 	// after a restart) had its price settled before it started.
-	prompted := t.prompt == ""
+	prompted := len(t.prompt) == 0
+	nudged := false
 	requestedPayments := map[string]context.CancelFunc{}
 	// finish runs with mu held. The delivery itself runs in a goroutine so
 	// the event handler doesn't hold up the rest of run's ingest.
@@ -375,6 +379,17 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 			finish(e, false, "", true)
 			return
 		}
+		if !s.acceptImages && e.Message.GetImageMessage() != nil {
+			if !e.Info.Timestamp.Before(armedAt) {
+				s.note(buyer, store.EventImage, 0, "")
+			}
+			// Likely a GPay or UPI screenshot, which the bot can't check.
+			if prompted && !nudged && !e.Info.Timestamp.Before(armedAt) {
+				nudged = true
+				go s.sayOnce(ctx, buyer, t.claimLine, lineNoScreenshots, sayNoScreenshots())
+			}
+			return
+		}
 		paidAmount, reason := paymentMatch(e, append([]string{d.Amount}, t.amounts...), armedAt, s.end, time.Now())
 		if !errors.Is(reason, errTruncatedPayment) && stopRecovery != nil {
 			stopRecovery()
@@ -453,7 +468,7 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 			return err
 		}
 	}
-	if t.prompt != "" {
+	if len(t.prompt) > 0 {
 		send := true
 		if t.prompting != nil {
 			if send, err = t.prompting(ctx); err != nil {
@@ -467,18 +482,14 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 			mu.Unlock()
 		}
 		if send {
-			prompt := t.prompt
-			if queued {
-				prompt += fmt.Sprintf(". Please pay before %s. If you don't want the meal anymore, reply \"not interested\".", payUntil.In(s.loc).Format("15:04:05"))
-			}
-			if _, err := s.send(ctx, buyer, &waE2E.Message{Conversation: proto.String(prompt)}); err != nil {
+			if err := sendReply(ctx, s.send, buyer, t.prompt); err != nil {
 				return fmt.Errorf("offer send failed or is uncertain; inspect chat before retrying: %w", err)
 			}
 			mu.Lock()
 			prompted = true
 			mu.Unlock()
 			s.log.Info("offer sent to selected buyer")
-			s.note(buyer, store.EventPrompt, paise(d.Amount), prompt)
+			s.note(buyer, store.EventPrompt, paise(d.Amount), strings.Join(t.prompt, "\n"))
 			if err := s.st.MarkOfferSent(ctx, d, time.Now()); err != nil {
 				s.log.Warn("could not record the offer time", "err", err)
 			}
@@ -627,6 +638,10 @@ func (s *sale) sellToQueue(ctx, notifyCtx context.Context, q *offerQueue, j sale
 				t.amounts, t.reprice = qj.accepts(buyer, amount), qj.reprice
 			}
 		}
+		if lj, ok := j.(lineJournal); ok {
+			who := buyer
+			t.claimLine = func(ctx context.Context, kind string) (bool, error) { return lj.claimLine(ctx, who, kind) }
+		}
 		err := s.takeTurn(ctx, buyer, d, t)
 		if err == nil {
 			if s.sold != nil {
@@ -660,7 +675,7 @@ func (s *sale) sellToQueue(ctx, notifyCtx context.Context, q *offerQueue, j sale
 	}
 }
 
-// tellSold says "sorry sold" to each buyer the journal lets it claim.
+// tellSold says the meal sold to each buyer the journal lets it claim.
 func (s *sale) tellSold(notifyCtx context.Context, j saleJournal, buyers []types.JID) {
 	told := map[types.JID]bool{}
 	for _, waiting := range buyers {
@@ -672,7 +687,7 @@ func (s *sale) tellSold(notifyCtx context.Context, j saleJournal, buyers []types
 			continue
 		}
 		sendCtx, stop := context.WithTimeout(notifyCtx, time.Minute)
-		_, notifyErr := s.send(sendCtx, waiting, &waE2E.Message{Conversation: proto.String("sorry sold")})
+		notifyErr := sendReply(sendCtx, s.send, waiting, saySold())
 		stop()
 		if notifyErr != nil {
 			s.log.Warn("could not notify queued buyer that meal sold", "err", notifyErr)
@@ -682,14 +697,27 @@ func (s *sale) tellSold(notifyCtx context.Context, j saleJournal, buyers []types
 	}
 }
 
-// paymentPrompt asks a buyer to pay amount. testImage says the QR is the
-// embedded placeholder.
-func paymentPrompt(amount string, testImage bool) string {
-	price := "₹" + strings.TrimSuffix(amount, ".00")
-	if testImage {
-		return fmt.Sprintf("pay %s here via WhatsApp Pay for the test QR", price)
+// Lines a buyer hears at most once per task.
+const (
+	lineNoScreenshots = "screenshot"
+	linePayOther      = "pay_other"
+)
+
+// lineJournal claims once-per-buyer lines across restarts.
+type lineJournal interface {
+	claimLine(ctx context.Context, buyer types.JID, kind string) (bool, error)
+}
+
+// sayOnce sends r to buyer unless claim says it already went out.
+func (s *sale) sayOnce(ctx context.Context, buyer types.JID, claim func(context.Context, string) (bool, error), kind string, r reply) {
+	if claim != nil {
+		if ok, err := claim(ctx, kind); err != nil || !ok {
+			return
+		}
 	}
-	return fmt.Sprintf("pay %s here via WhatsApp Pay, I'll send the QR", price)
+	if err := sendReply(ctx, s.send, buyer, r); err != nil {
+		s.log.Warn("buyer line failed or is uncertain", "kind", kind, "err", err)
+	}
 }
 
 // memoryJournal is deliver-qr's journal: one fixed price, nothing saved
