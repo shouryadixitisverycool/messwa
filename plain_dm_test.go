@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
-	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -241,7 +240,7 @@ func TestSellTaskAcceptsPlainDMs(t *testing.T) {
 		f.conn.emit(plainDM(buyerA, "is the bakul lunch still available", time.Now()))
 		synctest.Wait()
 		toA := sentTo(f.conn.messages(), buyerA)
-		if len(toA) != 2 || toA[0].text != "ok 1" || !strings.HasPrefix(toA[1].text, "pay on whatsapp pay in this chat") {
+		if len(toA) != 3 || toA[0].text != "ok 1" || toA[1].text != "pay using whatsapp pay pls, not gpay/upi" || toA[2].text != "ill send the qr right after" {
 			t.Fatalf("plain-DM buyer got %+v, want the usual payment prompt", toA)
 		}
 		if got := len(sentTo(f.conn.messages(), stranger)) + len(sentTo(f.conn.messages(), friend)); got != 0 {
@@ -277,13 +276,13 @@ func TestSellTaskAcceptsPlainDMs(t *testing.T) {
 		// A's two minutes run out; B gets the same prompt and pays.
 		time.Sleep(2 * time.Minute)
 		synctest.Wait()
-		if got := sentTo(f.conn.messages(), buyerB); len(got) != 2 || got[0].text != "ok 1" {
+		if got := sentTo(f.conn.messages(), buyerB); len(got) != 3 || got[0].text != "ok 1" {
 			t.Fatalf("B's turn didn't start: %+v", got)
 		}
 		time.Sleep(time.Second)
 		f.conn.emit(payment(buyerB, "pay-b"))
 		synctest.Wait()
-		if toB := sentTo(f.conn.messages(), buyerB); len(toB) != 3 || !toB[2].qr {
+		if toB := sentTo(f.conn.messages(), buyerB); len(toB) != 4 || !toB[3].qr {
 			t.Fatalf("buyer B got %+v, want the prompt then the QR", toB)
 		}
 		if task := f.task(id); task.State != store.TaskSold {

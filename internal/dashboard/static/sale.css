@@ -166,3 +166,8 @@ svg.chart { display: block; width: 100%; }
 @media (prefers-reduced-motion: reduce) {
   .mysale.hot, .ms-b.need .bd { animation: none; }
 }
+
+.sale-action-form { display: grid; gap: 12px; margin-top: 16px; }
+.sale-action-form label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
+.sale-action-form input, .sale-action-form select { width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--slot); color: var(--text); font: inherit; }
+.sb-act:disabled { opacity: .45; cursor: wait; }

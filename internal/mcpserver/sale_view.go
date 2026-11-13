@@ -76,6 +76,7 @@ type SaleBuyer struct {
 	BotMsgs  int         `json:"bot_msgs"`
 	Note     string      `json:"note,omitempty"`
 	Refund   float64     `json:"refund,omitempty"`
+	Muted    bool        `json:"muted,omitempty"` // the bot sends them nothing
 	Events   []SaleEvent `json:"events"`
 }
 
@@ -177,13 +178,13 @@ func (s *Server) saleView(ctx context.Context, t store.SellTask, now time.Time) 
 	active := 0
 	keys := map[string]string{}
 	for _, b := range buyers {
-		p := s.person(ctx, b.Peer, b.Alt, "")
+		p := s.person(ctx, b.Peer, b.Alt, b.Name)
 		if p.Name == "" {
 			p.Name = s.st.PeerName(ctx, b.Peer, b.Alt)
 		}
 		sb := SaleBuyer{Key: firstOf(p.Phone, b.Peer), Name: p.Name, Phone: p.Phone, Saved: p.Saved, State: b.State,
 			Joined: b.JoinedAt.Unix(), Offer: rupeesOf(b.LastOffer), Agreed: rupeesStr(b.Agreed), Asked: rupeesStr(b.Amount),
-			PayUntil: unix(b.PayUntil), BotMsgs: b.BotMsgs, Note: b.Note, Refund: rupeesStr(b.Refund), Events: []SaleEvent{}}
+			PayUntil: unix(b.PayUntil), BotMsgs: b.BotMsgs, Note: b.Note, Refund: rupeesStr(b.Refund), Muted: b.Muted, Events: []SaleEvent{}}
 		if b.BotMsgs > 0 {
 			sb.Ask = rupeesOf(b.Ask)
 		}

@@ -101,14 +101,14 @@ func (q *offerQueue) add(peer types.JID) { q.addFrom(peer, peer, "") }
 
 // addFrom queues peer, who replied from chat (their LID chat, say), and
 // remembers the push name from their first reply.
-func (q *offerQueue) addFrom(peer, chat types.JID, name string) {
+func (q *offerQueue) addFrom(peer, chat types.JID, name string) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.closed || q.seen[peer] {
-		return
+		return false
 	}
 	if q.join != nil && !q.join(peer, chat) {
-		return
+		return false
 	}
 	q.seen[peer] = true
 	q.buyers = append(q.buyers, peer)
@@ -122,6 +122,7 @@ func (q *offerQueue) addFrom(peer, chat types.JID, name string) {
 	case q.ready <- struct{}{}:
 	default:
 	}
+	return true
 }
 
 // noteFirst remembers peer's first reply, unless one is already noted.

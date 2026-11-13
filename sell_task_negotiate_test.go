@@ -141,7 +141,7 @@ func TestNegotiationCountersAgreesAndSells(t *testing.T) {
 		f.conn.emit(dm(buyerA, "40?"))
 		settle()
 		toA := texts(sentTo(f.conn.messages(), buyerA))
-		if len(toA) != 3 || toA[1] != "ok 40" || toA[2] != "pay on whatsapp pay in this chat, not gpay/upi. qr right after" {
+		if len(toA) != 4 || toA[1] != "ok 40" || toA[2] != "pay using whatsapp pay pls, not gpay/upi" || toA[3] != "ill send the qr right after" {
 			t.Fatalf("A got %q", toA)
 		}
 		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerOffered || b.Amount != "40.00" {
@@ -250,7 +250,7 @@ func TestNegotiationParkKeepsLastOffer(t *testing.T) {
 		synctest.Wait()
 		f.conn.emit(f.reply(buyerA, "hi i want for 10"))
 		settle()
-		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 2 || got[0] != "30 only" || got[1] != "thats the least" {
+		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 2 || got[0] != "30" || got[1] != "final offer" {
 			t.Fatalf("A got %q", got)
 		}
 		if b := buyerState(t, f, id, buyerA); b.LastOffer != 1000 {
@@ -287,7 +287,7 @@ func TestNegotiationParksUnreadableBuyer(t *testing.T) {
 		f.conn.emit(dm(buyerA, "the weather is nice"))
 		settle()
 		got := texts(sentTo(f.conn.messages(), buyerA))
-		want := []string{"60", "60 bro, want it?"}
+		want := []string{"60", "60, want it?"}
 		if strings.Join(got, "|") != strings.Join(want, "|") {
 			t.Fatalf("A got %q, want %q", got, want)
 		}
@@ -405,7 +405,7 @@ func TestNegotiationMessageCap(t *testing.T) {
 		f.conn.emit(dm(buyerB, "25?"))
 		f.conn.emit(dm(buyerB, "pls"))
 		settle()
-		if got := texts(sentTo(f.conn.messages(), buyerB)); strings.Join(got, "|") != "50 only|thats the least" {
+		if got := texts(sentTo(f.conn.messages(), buyerB)); strings.Join(got, "|") != "50|final offer" {
 			t.Fatalf("B got %q", got)
 		}
 	})
@@ -517,7 +517,7 @@ func TestNegotiationRevivesLateReply(t *testing.T) {
 		f.conn.emit(dm(buyerA, "35?"))
 		settle()
 		toA := texts(sentTo(f.conn.messages(), buyerA))
-		if strings.Join(toA, "|") != "how about 45|40 only|thats the least" {
+		if strings.Join(toA, "|") != "how about 45|40|final offer" {
 			t.Fatalf("A got %q", toA)
 		}
 		b := buyerState(t, f, id, buyerA)
@@ -547,7 +547,7 @@ func TestNegotiationRevivedBuyerAgreesAtLastAsk(t *testing.T) {
 		f.conn.emit(dm(buyerA, "ok"))
 		settle()
 		toA := texts(sentTo(f.conn.messages(), buyerA))
-		if len(toA) != 3 || toA[1] != "ok 45" {
+		if len(toA) != 4 || toA[1] != "ok 45" {
 			t.Fatalf("A got %q", toA)
 		}
 		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerOffered || b.Amount != "45.00" {
@@ -682,7 +682,7 @@ func TestNegotiationRevivesAfterRestart(t *testing.T) {
 		f.conn.emit(dm(buyerA, "ok"))
 		settle()
 		toA := texts(sentTo(f.conn.messages(), buyerA))
-		if len(toA) != 3 || toA[1] != "ok 45" {
+		if len(toA) != 4 || toA[1] != "ok 45" {
 			t.Fatalf("A got %q", toA)
 		}
 		if b := buyerState(t, f, id, buyerA); b.Agreed != "45.00" {
@@ -722,7 +722,7 @@ func TestNegotiationResumesAfterRestart(t *testing.T) {
 		f.conn.emit(dm(buyerA, "ok"))
 		settle()
 		toA := texts(sentTo(f.conn.messages(), buyerA))
-		if len(toA) != 3 || toA[1] != "ok 45" {
+		if len(toA) != 4 || toA[1] != "ok 45" {
 			t.Fatalf("A got %q", toA)
 		}
 		if b := buyerState(t, f, id, buyerA); b.Agreed != "45.00" {
@@ -882,7 +882,7 @@ func TestNegotiationPayOtherWay(t *testing.T) {
 		settle()
 		f.conn.emit(dm(buyerB, "can i pay in other ways *wink wink*"))
 		settle()
-		want := []string{"60", "ok 60", "pay on whatsapp pay in this chat, not gpay/upi. qr right after", "only whatsapp pay sorry"}
+		want := []string{"60", "ok 60", "pay using whatsapp pay pls, not gpay/upi", "ill send the qr right after", "only whatsapp pay sorry"}
 		if got := texts(sentTo(f.conn.messages(), buyerB)); strings.Join(got, "|") != strings.Join(want, "|") {
 			t.Fatalf("B got %q, want %q", got, want)
 		}
@@ -952,7 +952,7 @@ func TestNegotiationCountersAPassOnce(t *testing.T) {
 		settle()
 		f.conn.emit(dm(buyerB, "nvm"))
 		settle()
-		if got := texts(sentTo(f.conn.messages(), buyerB)); strings.Join(got, "|") != "60|40 only|thats the least" {
+		if got := texts(sentTo(f.conn.messages(), buyerB)); strings.Join(got, "|") != "60|40|final offer" {
 			t.Fatalf("B got %q", got)
 		}
 		if b := buyerState(t, f, id, buyerB); b.State != store.BuyerPassed || b.PassCountered {

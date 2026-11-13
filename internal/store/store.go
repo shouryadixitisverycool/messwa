@@ -114,7 +114,7 @@ func Open(path string) (*Store, error) {
 			return nil, fmt.Errorf("migrate: %w", err)
 		}
 	}
-	for _, col := range sellBuyerColumns {
+	for _, col := range append(sellBuyerColumns, sellActionColumns...) {
 		if _, err := db.Exec("ALTER TABLE sell_task_buyers ADD COLUMN " + col); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return nil, fmt.Errorf("migrate: %w", err)
 		}

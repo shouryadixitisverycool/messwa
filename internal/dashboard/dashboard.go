@@ -6,8 +6,8 @@
 // shows admins only their own sell tasks' buyers: names, numbers, and what
 // the bot read from their messages, never the messages themselves. People
 // sign in with a messwa account; the only write endpoints are for their own
-// account (password, mess API key, MCP tokens) and, for admins, the settings
-// page.
+// account (password, mess API key, MCP tokens) and, for admins, settings
+// and sell task operator actions.
 package dashboard
 
 import (
@@ -106,6 +106,7 @@ func Handler(cfg *config.Config, srv *mcpserver.Server, hub *Hub, acc *accounts.
 	regs := newRegCache(acc)
 	authRoutes(mux, acc, regs, "http://"+cfg.MCP.Listen+"/mcp")
 	settingsRoutes(mux, cfg, srv)
+	sellActionRoutes(mux, srv)
 
 	mux.Handle("GET /api/events", member(hub.events))
 

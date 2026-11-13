@@ -33,15 +33,15 @@ func TestDayLabel(t *testing.T) {
 // a real seller wouldn't type.
 func TestBuyerTextStyle(t *testing.T) {
 	defer func(p func(int) int) { pick = p }(pick)
-	for v := 0; v < 3; v++ {
+	for v := 0; v < 4; v++ {
 		pick = func(n int) int { return min(v, n-1) }
 		for _, r := range []reply{
 			sayOpening(60, ""), sayOpening(60, "tmrw"), sayCounter(50, 1), sayCounter(45, 2), sayLowest(40),
 			sayWhich("kadamba non-veg", 60), sayRestate(60), sayQueued(50), sayPayOther(), sayNoScreenshots(),
 			saySold(), paymentPrompt("30.00", false), paymentPrompt("1.00", true),
 		} {
-			if len(r) == 0 || len(r) > 2 {
-				t.Errorf("%q: want one or two messages", r)
+			if len(r) == 0 || len(r) > 3 {
+				t.Errorf("%q: want one to three messages", r)
 			}
 			for _, part := range r {
 				for _, bad := range []string{"₹", "negotiable", "Please", "WhatsApp", "QR", ":"} {

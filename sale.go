@@ -86,6 +86,8 @@ type sale struct {
 	// a payment was claimed, which must go out even if the task was
 	// cancelled a moment later.
 	send, sendPaid sendFunc
+	// muted suppresses inbound handling for a task buyer the operator muted.
+	muted func(context.Context, types.JID) bool
 
 	date, meal string
 	end        time.Time
@@ -401,7 +403,7 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		if attempted || ctx.Err() != nil || !matchesBuyer(e.Info) {
+		if attempted || ctx.Err() != nil || !matchesBuyer(e.Info) || (s.muted != nil && s.muted(ctx, buyer)) {
 			return
 		}
 		stopRecovery := requestedPayments[e.Info.ID]

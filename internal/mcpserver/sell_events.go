@@ -63,7 +63,7 @@ type SellEventsOut struct {
 }
 
 // priceKinds are the event kinds whose N is paise.
-var priceKinds = []string{store.EventRead, store.EventBotSaid, store.EventAgreed, store.EventPrompt, store.EventPayment, store.EventPayMismatch, store.EventPassCounter, store.EventRevived, store.EventPrices}
+var priceKinds = []string{store.EventRead, store.EventBotSaid, store.EventAgreed, store.EventPrompt, store.EventPayment, store.EventPayMismatch, store.EventPassCounter, store.EventRevived, store.EventPrices, store.EventSoldByYou}
 
 func (s *Server) sellTaskEvents(ctx context.Context, req *mcp.CallToolRequest, in SellEventsIn) (*mcp.CallToolResult, SellEventsOut, error) {
 	if _, err := s.sellAdmin(ctx, req); err != nil {

@@ -115,6 +115,10 @@ type runningTask struct {
 	gate   *taskGate
 	// revoke is set by a cancel that deletes the task's posts once it ends.
 	revoke atomic.Bool
+	// Guarded by sellManager.mu. add queues a buyer you added, once the
+	// task listens for replies; manual is a sale you recorded by hand.
+	add    func(ctx context.Context, peer types.JID, name string) error
+	manual *manualSale
 	// neg is the task's negotiation once it runs, so a range edit reaches
 	// it; nil for a task that doesn't negotiate.
 	neg atomic.Pointer[negotiation]
@@ -470,6 +474,9 @@ func (m *sellManager) launch(t store.SellTask, s *sale, ready chan struct{}) {
 			m.mu.Unlock()
 		}()
 		err := m.runTask(ctx, t, s, rt, signal)
+		if errors.Is(context.Cause(ctx), errSoldByYou) {
+			err = m.finishManualSale(ctx, t, gate)
+		}
 		gate.active.Store(false)
 		state, detail := m.outcome(ctx, err)
 		if state == store.TaskSold {
@@ -501,9 +508,12 @@ func (m *sellManager) launch(t store.SellTask, s *sale, ready chan struct{}) {
 // means run is shutting down and the task resumes on the next start.
 func (m *sellManager) outcome(ctx context.Context, err error) (string, string) {
 	var handedOff handedOffError
+	var manual manualSoldError
 	switch cause := context.Cause(ctx); {
 	case err == nil:
 		return store.TaskSold, "QR delivered after a matching payment"
+	case errors.As(err, &manual):
+		return store.TaskSold, manual.detail
 	case errors.As(err, &handedOff):
 		return store.TaskHandedOff, handedOff.detail
 	case errors.Is(cause, errCancelledByUser):
@@ -592,6 +602,7 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, rt
 		}
 	}
 	s.send, s.sendPaid = gate.send, gate.sendPaid
+	s.muted = gate.muted
 	s.event = m.saleEvents(t.ID)
 	j := &taskJournal{st: m.st, t: t}
 	settings, err := taskSellSettings(m.cfg)
@@ -624,6 +635,7 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, rt
 			return err
 		}
 	}
+	m.acceptAdded(t, gate, queue)
 	resume, err := m.restore(ctx, t, queue, gate, n)
 	if err != nil {
 		return err
@@ -916,7 +928,10 @@ type taskJournal struct {
 // price is the task's max price as it is now, after any range edit: a task
 // that doesn't negotiate asks it of every buyer. A negotiating task uses
 // negotiatedJournal instead.
-func (j *taskJournal) price(ctx context.Context, _ types.JID) (string, error) {
+func (j *taskJournal) price(ctx context.Context, buyer types.JID) (string, error) {
+	if j.muted(ctx, buyer) {
+		return "", errBuyerMuted
+	}
 	t, err := j.st.GetSellTask(ctx, j.t.ID)
 	if err != nil || t == nil {
 		return "", errors.Join(err, errors.New("sell task is gone"))
@@ -952,9 +967,10 @@ func (j *taskJournal) claimLine(ctx context.Context, buyer types.JID, kind strin
 	return j.st.ClaimBuyerLine(ctx, j.t.ID, buyer.String(), kind)
 }
 
+// tellingSold claims "sorry sold" for a buyer still in the running. A
+// muted buyer is never claimed.
 func (j *taskJournal) tellingSold(ctx context.Context, buyer types.JID) (bool, error) {
-	return j.st.MoveSellTaskBuyerFrom(ctx, j.t.ID, buyer.String(),
-		[]string{store.BuyerQueued, store.BuyerNegotiating, store.BuyerAgreed, store.BuyerParked}, store.BuyerToldSold)
+	return j.st.ClaimSoldNotice(ctx, j.t.ID, buyer.String())
 }
 
 // taskGate is the only way a task sends. It checks the rules on every
@@ -1062,6 +1078,10 @@ func (g *taskGate) deliver(ctx context.Context, paid bool, to types.JID, msg *wa
 	if !paid && to.Server != types.GroupServer && g.turnsAway(ctx, to) {
 		return whatsmeow.SendResponse{}, errSavedContact
 	}
+	// A muted buyer receives no task messages.
+	if to.Server != types.GroupServer && g.muted(ctx, to) {
+		return whatsmeow.SendResponse{}, errBuyerMuted
+	}
 	if err := g.m.limits.wait(ctx, g.id); err != nil {
 		return whatsmeow.SendResponse{}, err
 	}
@@ -1076,6 +1096,9 @@ func (g *taskGate) deliver(ctx context.Context, paid bool, to types.JID, msg *wa
 		sendCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), groupPostTimeout)
 		defer stop()
 		return g.m.send(sendCtx, to, msg, extra...)
+	}
+	if to.Server != types.GroupServer && g.muted(ctx, to) {
+		return whatsmeow.SendResponse{}, errBuyerMuted
 	}
 	return g.m.send(ctx, to, msg, extra...)
 }

@@ -64,7 +64,7 @@ func TestSetPricesLowersFloorMidNegotiation(t *testing.T) {
 		f.conn.emit(dm(buyerA, "50"))
 		settle()
 		toA := texts(sentTo(f.conn.messages(), buyerA))
-		if len(toA) != 3 || toA[1] != "ok 50" {
+		if len(toA) != 4 || toA[1] != "ok 50" {
 			t.Fatalf("A got %q", toA)
 		}
 		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerOffered || b.Amount != "50.00" {

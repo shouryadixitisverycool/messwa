@@ -118,13 +118,13 @@ func TestSellTaskEventsWindow(t *testing.T) {
 	}
 
 	// New price-bearing events report rupees rather than counts.
-	for _, kind := range []string{store.EventPrices, store.EventPassCounter, store.EventRevived} {
+	for _, kind := range []string{store.EventPrices, store.EventPassCounter, store.EventRevived, store.EventSoldByYou} {
 		if err := st.AddSellTaskEvent(ctx, store.SellEvent{TaskID: second, At: at("20:20:00"), Kind: kind, N: 4500, Text: "price detail"}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	out, res = call(map[string]any{"id": second, "since": "20:20"})
-	if res.IsError || len(out.Events) != 3 {
+	if res.IsError || len(out.Events) != 4 {
 		t.Fatalf("price events = %+v, result = %+v", out, res)
 	}
 	for _, event := range out.Events {
