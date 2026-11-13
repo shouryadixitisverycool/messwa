@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"messwa/internal/portal"
+	"messwa/internal/store"
 	"os"
 	"path/filepath"
 	"testing"
@@ -73,5 +74,36 @@ func TestProxyPortalSlots(t *testing.T) {
 	}
 	if _, _, _, _, err := deliveryImageBytes(qr.PNG); err == nil {
 		t.Fatal("an imageless proxy must not produce a sendable QR")
+	}
+}
+
+func TestProxyPortalFriends(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "d.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	slot, err := st.AddFriendMeal(ctx, store.FriendMeal{Date: "2026-11-13", Slot: "dinner", Mess: "kadamba-nonveg", Extras: []string{"lassi"}, QR: []byte("img")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := proxyPortal{stateDir: t.TempDir(), friends: st.FriendMeal,
+		real: func(context.Context) (mealPortal, error) { return nil, errors.New("read the portal") }}
+	qr, err := p.QRForMeal(ctx, "2026-11-13", slot, "")
+	if err != nil || string(qr.PNG) != "img" || qr.Registration.Meal != "dinner" {
+		t.Fatalf("friend qr %+v %v", qr, err)
+	}
+	if mess, diet := qr.Registration.MessDiet(); mess != "kadamba" || diet != "nonveg" {
+		t.Fatalf("mess %s diet %s", mess, diet)
+	}
+	rows, err := p.ExtraRegistrations(ctx, "2026-11-13", slot)
+	if got := offerExtras(rows, "kadamba"); err != nil || len(got) != 1 || got[0] != "lassi" {
+		t.Fatalf("extras %v %v", got, err)
+	}
+	// A friend slot with nothing saved fails rather than reading your own
+	// registration.
+	if _, err := p.QRForMeal(ctx, "2026-11-13", "dinner#f9", ""); err == nil || err.Error() == "read the portal" {
+		t.Fatalf("missing friend meal: %v", err)
 	}
 }

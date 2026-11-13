@@ -140,3 +140,132 @@
   .pleg { display: none; }
   .price { font-size: 16px; }
 }
+
+/* ---------- selling from the ledger ---------- */
+
+.sw.l { border-color: color-mix(in srgb, var(--gold) 70%, transparent); box-shadow: 0 0 6px rgba(255, 197, 61, .35); }
+.cell.sellable { cursor: pointer; }
+.cell.is-open.sellable { border-color: color-mix(in srgb, var(--gold) 45%, transparent); }
+.cell.is-open.sellable:hover, .cell.is-open.sellable:focus-visible { border-style: solid; }
+.cell.is-open.sellable:hover .ghost { opacity: .55; }
+.sell-tag {
+  position: absolute; left: 50%; bottom: 4px; transform: translateX(-50%);
+  font: 700 7px Pixel; letter-spacing: .4px; color: var(--gold); white-space: nowrap;
+}
+.cell.is-open .sell-tag { opacity: 0; transition: opacity .12s; }
+.cell.is-open.sellable:hover .sell-tag, .cell.is-open.sellable:focus-visible .sell-tag { opacity: 1; }
+.cell.is-selling { border-color: color-mix(in srgb, var(--gold) 55%, transparent); animation: ring 2.4s ease-out infinite; }
+.cell.is-selling .price.range { font-size: 8px; padding-bottom: 6px; }
+.cell.is-selling .price.range .r { font-size: 9px; }
+
+.sell-sheet { width: min(460px, 100%); }
+.sell-head h2 { margin: 0; font: 700 15px Pixel, var(--sans); letter-spacing: .3px; }
+.sell-head .sub { margin-top: 4px; color: var(--muted); font-size: 13px; }
+.sell-vals { display: flex; justify-content: space-between; margin: 20px 2px 10px; }
+.sell-vals .sv { display: grid; gap: 4px; }
+.sell-vals .sv:last-child { text-align: right; }
+.sell-vals span { font: 700 8px Pixel; letter-spacing: .5px; color: var(--muted); }
+.sell-vals b { font: 400 24px/1 Pixel; color: var(--gold); text-shadow: 2px 2px 0 rgba(0, 0, 0, .5); }
+
+/* Two range inputs stacked on one track. Only the thumbs take the pointer. */
+.dual { position: relative; height: 28px; }
+.dual .track { position: absolute; left: 9px; right: 9px; top: 11px; height: 6px; border-radius: 3px; background: #0c0f14; box-shadow: 0 0 0 1px var(--line); }
+.dual .fill { position: absolute; top: 0; bottom: 0; background: linear-gradient(90deg, #ff9f3d, var(--gold)); border-radius: 3px; }
+.dual .med { position: absolute; top: -5px; bottom: -5px; width: 2px; margin-left: -1px; background: var(--text); opacity: .7; border-radius: 1px; }
+.dual input {
+  position: absolute; inset: 0; width: 100%; margin: 0; background: none; pointer-events: none;
+  -webkit-appearance: none; appearance: none; z-index: 2;
+}
+.dual input::-webkit-slider-runnable-track { background: none; height: 28px; }
+.dual input::-moz-range-track { background: none; }
+.dual input::-webkit-slider-thumb {
+  -webkit-appearance: none; pointer-events: auto; cursor: grab; width: 18px; height: 18px; margin-top: 5px;
+  border-radius: 4px; background: var(--gold); border: 2px solid #141923; box-shadow: 0 0 0 1px var(--gold), 0 4px 10px rgba(0, 0, 0, .5);
+}
+.dual input::-moz-range-thumb {
+  pointer-events: auto; cursor: grab; width: 14px; height: 14px;
+  border-radius: 4px; background: var(--gold); border: 2px solid #141923; box-shadow: 0 0 0 1px var(--gold), 0 4px 10px rgba(0, 0, 0, .5);
+}
+.dual input:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(255, 197, 61, .5); }
+.dual input:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(255, 197, 61, .5); }
+.sell-axis { display: flex; justify-content: space-between; margin: 4px 2px 0; font-size: 11px; color: var(--dim); }
+.sell-axis .med-l { color: var(--muted); }
+.sell-note { margin: 16px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.sell-err { margin: 8px 0 0; color: #ff6b5b; font-size: 12.5px; min-height: 1em; }
+.sell-err:empty { display: none; }
+.sell-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+.sell-btn {
+  padding: 10px 14px; border-radius: 10px; background: var(--slot); border: 1px solid var(--line);
+  color: var(--text); font: 700 9px Pixel; letter-spacing: .4px; cursor: pointer;
+}
+.sell-btn:hover { background: var(--slot-hi); }
+.sell-btn.gold { color: #141923; background: var(--gold); border-color: var(--gold); }
+.sell-btn.gold:hover { filter: brightness(1.08); }
+.sell-btn.red { color: #ff6b5b; border-color: color-mix(in srgb, #ff6b5b 55%, transparent); }
+.sell-btn:disabled { opacity: .45; cursor: default; filter: none; }
+
+.sell-sum { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 16px; }
+.sell-sum .st { display: grid; gap: 4px; padding: 9px 10px; border-radius: 10px; background: var(--slot); border: 1px solid var(--line); }
+.sell-sum span { font: 700 7px Pixel; letter-spacing: .5px; color: var(--muted); }
+.sell-sum b { font: 600 14px var(--sans); }
+.sell-sum b.gold { color: var(--gold); }
+.sell-buyers { list-style: none; margin: 12px 0 0; padding: 0; max-height: 150px; overflow: auto; font-size: 12.5px; }
+.sell-buyers li { display: grid; grid-template-columns: minmax(0, 1fr) auto 52px; gap: 10px; padding: 5px 2px; border-bottom: 1px dashed var(--line); }
+.sell-buyers li.none { display: block; color: var(--dim); border: 0; }
+.sell-buyers .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sell-buyers .what { color: var(--muted); }
+.sell-buyers .amt { color: var(--gold); text-align: right; }
+.sell-tools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 16px; }
+.sell-btn.sell-tool { display: grid; gap: 5px; justify-items: center; padding: 14px 6px 12px; text-align: center; }
+.sell-tool b { font: 700 16px/1 Pixel; }
+.sell-tool small { font: 400 11px var(--sans); color: var(--dim); letter-spacing: 0; }
+.sell-tool.grn { border-color: color-mix(in srgb, var(--veg) 60%, transparent); } .sell-tool.grn b { color: var(--veg); }
+.sell-tool.gold-o { border-color: color-mix(in srgb, var(--gold) 60%, transparent); } .sell-tool.gold-o b { color: var(--gold); }
+.sell-tool.red b, .sell-tool.red span { color: #ff6b5b; }
+.sell-btn:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.sell-form { display: grid; gap: 12px; margin-top: 16px; }
+.sell-form label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
+.sell-form input, .sell-form select { width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--slot); color: var(--text); font: inherit; }
+.sell-form input:focus-visible, .sell-form select:focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; }
+.sell-form .sell-note, .sell-form .sell-err, .sell-form .sell-acts { margin-top: 0; }
+@media (max-width: 420px) { .sell-tools { grid-template-columns: 1fr; } }
+
+/* ---------- friends' meals ---------- */
+
+.fr-add { margin-left: auto; padding: 8px 12px; }
+.friends { display: grid; gap: 6px; }
+.friend {
+  display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 12px; align-items: center; width: 100%;
+  padding: 8px 12px; border-radius: 11px; background: var(--slot); border: 1px solid #1e2431; color: var(--text); font: inherit; text-align: left;
+}
+button.friend { cursor: pointer; }
+.friend.live { border-color: color-mix(in srgb, var(--gold) 45%, transparent); }
+.friend.live:hover, .friend.live:focus-visible { background: var(--slot-hi); border-color: color-mix(in srgb, var(--m) 65%, transparent); outline: none; }
+.fr-ic svg { width: 28px; height: 28px; display: block; }
+.fr-what { display: grid; gap: 2px; min-width: 0; }
+.fr-what b { font-size: 13.5px; }
+.fr-what span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fr-right { display: grid; justify-items: end; gap: 3px; }
+.fr-right .pill { margin: 0; font-size: 8px; }
+.fr-amt { color: var(--gold); font-size: 13px; font-weight: 600; }
+.fr-buyer { color: var(--dim); font-size: 11px; }
+
+.sell-form fieldset.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; border: 0; }
+.chips legend { width: 100%; margin-bottom: 6px; padding: 0; color: var(--muted); font-size: 12px; }
+.sell-form label.chip { display: inline-flex; gap: 0; }
+.chip input { position: absolute; opacity: 0; pointer-events: none; }
+.chip span { padding: 7px 12px; border-radius: 99px; border: 1px solid var(--line); background: var(--slot); color: var(--text); font-size: 12.5px; cursor: pointer; }
+.chip input:checked + span { border-color: var(--m, var(--gold)); color: var(--m, var(--gold)); background: var(--slot-hi); }
+.chip input:focus-visible + span { outline: 2px solid var(--gold); outline-offset: 2px; }
+.chip input:disabled + span { opacity: .35; cursor: default; }
+.fr-price .sell-vals { margin-top: 4px; }
+.fr-k { color: var(--muted); font-size: 12px; }
+.sell-form .qr-drop {
+  position: relative; display: flex; gap: 12px; align-items: center; padding: 14px; border-radius: 10px;
+  border: 1px dashed #3a4357; background: #10141c; cursor: pointer; color: var(--muted); font-size: 12.5px;
+}
+.qr-drop.over, .qr-drop:hover { border-color: var(--gold); }
+.qr-drop:focus-within { outline: 2px solid var(--gold); outline-offset: 2px; }
+.qr-drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.qr-drop img { width: 64px; height: 64px; object-fit: contain; border-radius: 6px; background: #fff; flex: none; }
+@media (max-width: 560px) { .fr-add { margin-left: 0; } }
