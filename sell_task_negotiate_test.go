@@ -641,6 +641,12 @@ func TestNegotiationNoReviveAfterPass(t *testing.T) {
 		settle()
 		f.conn.emit(dm(buyerA, "not interested"))
 		settle()
+		// The first pass gets one counter; only the second ends negotiation.
+		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerNegotiating || !b.PassCountered || b.Ask != 4000 {
+			t.Fatalf("A = %+v after the first pass", b)
+		}
+		f.conn.emit(dm(buyerA, "no thanks"))
+		settle()
 		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerPassed {
 			t.Fatalf("A = %+v", b)
 		}
