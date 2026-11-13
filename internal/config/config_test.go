@@ -64,6 +64,8 @@ func TestSellSettings(t *testing.T) {
 		"repost soon":   "[sell]\nrepost_after = \"1m\"\n",
 		"bad count":     "[sell]\nrepost_listings = -1\n",
 		"many reposts":  "[sell]\nmax_reposts = 13\n",
+		"silence short": "[sell]\nnegotiation_silence = \"30s\"\n",
+		"silence long":  "[sell]\nnegotiation_silence = \"31m\"\n",
 	} {
 		if _, err := load(body); err == nil {
 			t.Errorf("%s: accepted", name)

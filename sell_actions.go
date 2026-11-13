@@ -24,7 +24,7 @@ import (
 //   - AddBuyer: queue someone as if they had replied privately to the
 //     offer. The bot quotes them like any other buyer.
 //   - MuteBuyer: the bot sends a buyer nothing more for the task, not even
-//     "sorry sold", and ignores what they write. Their record stays. A
+//     "sorry sold", and ignores what they write. Their record stays;
 //     payments while muted do not trigger an automatic QR.
 //
 // Each one writes an event to the task's log.
