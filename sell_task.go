@@ -103,6 +103,10 @@ type runningTask struct {
 	cancel context.CancelCauseFunc
 	done   chan struct{}
 	gate   *taskGate
+	// Guarded by sellManager.mu. add queues a buyer you added, once the
+	// task listens for replies; manual is a sale you recorded by hand.
+	add    func(ctx context.Context, peer types.JID, name string) error
+	manual *manualSale
 }
 
 func newSellManager(ctx context.Context, cfg *config.Config, log *slog.Logger, st *store.Store, conn saleConn, send sendFunc,
@@ -279,6 +283,9 @@ func (m *sellManager) launch(t store.SellTask, s *sale, ready chan struct{}) {
 			m.mu.Unlock()
 		}()
 		err := m.runTask(ctx, t, s, gate, signal)
+		if errors.Is(context.Cause(ctx), errSoldByYou) {
+			err = m.finishManualSale(ctx, t, gate)
+		}
 		gate.active.Store(false)
 		state, detail := m.outcome(ctx, err)
 		if state == store.TaskSold {
@@ -300,9 +307,12 @@ func (m *sellManager) launch(t store.SellTask, s *sale, ready chan struct{}) {
 // means run is shutting down and the task resumes on the next start.
 func (m *sellManager) outcome(ctx context.Context, err error) (string, string) {
 	var handedOff handedOffError
+	var manual manualSoldError
 	switch cause := context.Cause(ctx); {
 	case err == nil:
 		return store.TaskSold, "QR delivered after a matching payment"
+	case errors.As(err, &manual):
+		return store.TaskSold, manual.detail
 	case errors.As(err, &handedOff):
 		return store.TaskHandedOff, handedOff.detail
 	case errors.Is(cause, errCancelledByUser):
@@ -390,6 +400,7 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, ga
 		}
 	}
 	s.send, s.sendPaid = gate.send, gate.sendPaid
+	s.muted = gate.muted
 	s.event = m.saleEvents(t.ID)
 	j := &taskJournal{st: m.st, t: t}
 	settings, err := taskSellSettings(m.cfg)
@@ -416,6 +427,7 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, ga
 	if negotiates(t) {
 		n = newNegotiation(ctx, m, t, s, gate, queue)
 	}
+	m.acceptAdded(t, gate, queue)
 	resume, err := m.restore(ctx, t, queue, gate, n)
 	if err != nil {
 		return err
@@ -695,7 +707,10 @@ type taskJournal struct {
 
 // price is the task's max price: a task that doesn't negotiate asks it of
 // every buyer. A negotiating task uses negotiatedJournal instead.
-func (j *taskJournal) price(context.Context, types.JID) (string, error) {
+func (j *taskJournal) price(ctx context.Context, buyer types.JID) (string, error) {
+	if j.muted(ctx, buyer) {
+		return "", errBuyerMuted
+	}
 	if j.t.MaxPaise < j.t.MinPaise {
 		return "", fmt.Errorf("INR %s is below the floor of INR %s", store.FormatPaise(j.t.MaxPaise), store.FormatPaise(j.t.MinPaise))
 	}
@@ -727,9 +742,10 @@ func (j *taskJournal) claimLine(ctx context.Context, buyer types.JID, kind strin
 	return j.st.ClaimBuyerLine(ctx, j.t.ID, buyer.String(), kind)
 }
 
+// tellingSold claims "sorry sold" for a buyer still in the running. A
+// muted buyer is never claimed.
 func (j *taskJournal) tellingSold(ctx context.Context, buyer types.JID) (bool, error) {
-	return j.st.MoveSellTaskBuyerFrom(ctx, j.t.ID, buyer.String(),
-		[]string{store.BuyerQueued, store.BuyerNegotiating, store.BuyerAgreed, store.BuyerParked}, store.BuyerToldSold)
+	return j.st.ClaimSoldNotice(ctx, j.t.ID, buyer.String())
 }
 
 // taskGate is the only way a task sends. It checks the rules on every
@@ -807,11 +823,18 @@ func (g *taskGate) deliver(ctx context.Context, paid bool, to types.JID, msg *wa
 	if !paid && to.Server != types.GroupServer && g.turnsAway(ctx, to) {
 		return whatsmeow.SendResponse{}, errSavedContact
 	}
+	// A muted buyer receives no task messages.
+	if to.Server != types.GroupServer && g.muted(ctx, to) {
+		return whatsmeow.SendResponse{}, errBuyerMuted
+	}
 	if err := g.m.limits.wait(ctx, g.id); err != nil {
 		return whatsmeow.SendResponse{}, err
 	}
 	if !paid && !g.active.Load() {
 		return whatsmeow.SendResponse{}, errTaskInactive
+	}
+	if to.Server != types.GroupServer && g.muted(ctx, to) {
+		return whatsmeow.SendResponse{}, errBuyerMuted
 	}
 	return g.m.send(ctx, to, msg, extra...)
 }

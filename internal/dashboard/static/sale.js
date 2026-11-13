@@ -58,6 +58,7 @@ const STATE_WORD = {
 
 // look is how a buyer tile reads: border class, badge, the chip under it.
 function look(b, v) {
+  if (b.muted) return { cls: 'gone', badge: '🔇', chip: 'MUTED', tone: C.dim };
   const price = b.agreed || b.offer || b.ask;
   if (b.state === 'bought') return { cls: 'won', badge: '✓', chip: rup(b.asked || b.agreed || price), tone: C.veg };
   // Once the task is over a parked buyer no longer needs you, unless they
@@ -95,7 +96,7 @@ function renderSales() {
   box.hidden = !list.length;
   box.replaceChildren(...list.map(chest));
   tickSales();
-  if (saleSheet && !modal.hidden) {
+  if (saleSheet && !saleSheet.editing && !modal.hidden) {
     const v = list.find((x) => x.id === saleSheet.id);
     if (v) (saleSheet.meal ? openMealSheet : openBuyerSheet)(v, saleSheet.key, true);
   }
@@ -134,6 +135,7 @@ function chest(v) {
   for (const b of v.buyers) row.append(buyerTile(b, v));
   for (let i = v.buyers.length; i < 5; i++) row.append(el('span', 'ms-b empty'));
   c.append(row);
+  if (v.state === 'active') c.append(saleTaskActions(v));
 
   const mk = marketRow(v);
   if (mk) c.append(mk);
@@ -411,16 +413,9 @@ function openBuyerSheet(v, key, keep) {
     copy.addEventListener('click', () => navigator.clipboard?.writeText(b.phone).then(() => toast('Number copied'), () => toast(b.phone)));
     acts.append(copy);
   }
-  if (l.cls === 'need' && b.phone && v.state === 'active') {
-    // The bot can't sell to a parked buyer; deliver-qr -peer can, once the
-    // task is cancelled and run stopped.
-    const amount = Math.max(v.min, b.offer || v.lowest);
-    const cmd = `messwa deliver-qr -date ${v.date} -meal ${v.meal} -peer '${digits(b.phone)}@s.whatsapp.net' -amount ${amount.toFixed(2)} -portal-qr`;
-    const sell = el('button', 'sb-act gold');
-    sell.append(el('b', '', `✓${amount}`), el('span', '', 'COPY SELL'));
-    sell.title = 'Copies the deliver-qr command. Cancel the task and stop run first.';
-    sell.addEventListener('click', () => navigator.clipboard?.writeText(cmd).then(() => toast('Command copied. Cancel the task and stop run first.'), () => toast(cmd)));
-    acts.append(sell);
+  if (v.state === 'active') {
+    acts.append(saleActionButton('✓', 'MARK SOLD', () => saleActionForm(v, 'sold', b)));
+    acts.append(saleActionButton(b.muted ? '🔈' : '🔇', b.muted ? 'UNMUTE' : 'MUTE', () => saleActionForm(v, b.muted ? 'unmute' : 'mute', b)));
   }
   const close = el('button', 'sb-act');
   close.append(el('b', '', '✕'), el('span', '', 'CLOSE'));
@@ -548,6 +543,7 @@ function openMealSheet(v, _key, keep) {
   }
   sheet.append(top);
   sheet.append(priceChart(v));
+  if (v.state === 'active') sheet.append(saleTaskActions(v));
 
   sheet.append(el('div', 'sec', 'POSTS'));
   const posts = el('div', 'mp-posts');
@@ -626,4 +622,89 @@ function priceChart(v) {
   s.append(sv('text', { x: X0, y: H - 4, fill: C.dim, class: 'tug-i' }, hm(t0)));
   s.append(sv('text', { x: X1, y: H - 4, 'text-anchor': 'end', fill: C.dim, class: 'tug-i' }, hm(t1)));
   return s;
+}
+
+
+// Operator forms stay open across live updates, preserving entered values.
+function saleActionButton(glyph, label, action) {
+  const b = el('button', 'sb-act');
+  b.type = 'button';
+  b.append(el('b', '', glyph), el('span', '', label));
+  b.addEventListener('click', action);
+  return b;
+}
+function saleTaskActions(v) {
+  const acts = el('div', 'sb-acts');
+  acts.append(saleActionButton('✓', 'MARK SOLD', () => saleActionForm(v, 'sold')),
+    saleActionButton('+', 'ADD BUYER', () => saleActionForm(v, 'add')));
+  return acts;
+}
+function saleActionForm(v, action, buyer) {
+  saleSheet = { id: v.id, editing: true };
+  sheetFor(v, false);
+  const titles = { sold: 'MARK SOLD MANUALLY', add: 'ADD BUYER', mute: 'MUTE BUYER', unmute: 'UNMUTE BUYER' };
+  sheet.append(el('div', 'sb-name', titles[action]));
+  const form = el('form', 'sale-action-form');
+  const fields = {};
+  const field = (key, label, value = '', type = 'text') => {
+    const wrap = el('label', '', label), input = el('input');
+    input.type = type;
+    input.value = value;
+    input.name = key;
+    fields[key] = input;
+    wrap.append(input);
+    form.append(wrap);
+    return input;
+  };
+  let pick;
+  if (action === 'sold') {
+    const wrap = el('label', '', 'Buyer');
+    pick = el('select');
+    pick.append(new Option('Other buyer (phone or name below)', ''));
+    for (const b of v.buyers) pick.append(new Option(b.name || b.phone || b.key, b.key));
+    pick.value = buyer ? buyer.key : '';
+    wrap.append(pick);
+    form.append(wrap);
+  }
+  if (action === 'sold' || action === 'add') {
+    field('buyer', 'Phone with country code or JID').required = action === 'add';
+    field('name', 'Name (optional with phone)');
+  }
+  if (action === 'sold') {
+    const price = field('price', 'Sale price (₹)', buyer ? buyer.agreed || buyer.asked || buyer.offer || '' : '', 'number');
+    price.min = '1'; price.max = '10000'; price.step = '1'; price.required = true;
+    field('note', 'Note (optional)');
+    form.append(el('p', 'sb-note', 'Confirm only after you sold the meal. This stops negotiation and records it as paid and sent. The buyer receives no message. Other buyers get the usual sold notice.'));
+  } else if (action === 'add') {
+    form.append(el('p', 'sb-note', 'The bot will send this buyer its opening quote.'));
+  } else {
+    form.append(el('p', 'sb-note', `${buyer.name || buyer.phone || buyer.key}: ${action === 'mute' ? 'stop all bot messages for this task, including sold notices?' : 'allow bot messages for this task again?'}`));
+  }
+  const error = el('p', 'sb-note');
+  error.setAttribute('role', 'alert');
+  const acts = el('div', 'sb-acts');
+  const submit = saleActionButton('✓', action === 'sold' || action === 'mute' ? 'CONFIRM' : titles[action], () => {});
+  submit.type = 'submit';
+  acts.append(submit, saleActionButton('✕', 'CANCEL', () => buyer ? openBuyerSheet(v, buyer.key) : openMealSheet(v)));
+  form.append(error, acts);
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const data = { action, id: v.id };
+    for (const [k, input] of Object.entries(fields)) data[k] = input.value.trim();
+    if (pick && pick.value) { data.buyer = pick.value; data.name = ''; }
+    if (buyer && (action === 'mute' || action === 'unmute')) data.buyer = buyer.key;
+    if (action === 'sold') {
+      data.price = Number(data.price);
+      if (!data.buyer && !data.name) { error.textContent = 'Enter a buyer phone or name.'; return; }
+    }
+    submit.disabled = true;
+    error.textContent = '';
+    try {
+      await send('POST', 'api/sell-action', data);
+      closeModal();
+      toast('Action saved');
+      await load();
+    } catch (err) { error.textContent = err.message; submit.disabled = false; }
+  });
+  sheet.append(form);
 }

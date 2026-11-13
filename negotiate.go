@@ -435,6 +435,9 @@ func (n *negotiation) handle(evt any) {
 	if !n.join.has(peer) {
 		return
 	}
+	if n.gate.muted(n.ctx, peer) {
+		return
+	}
 	if e.Message.GetSendPaymentMessage() != nil {
 		go n.payment(peer, e)
 		return
@@ -762,6 +765,9 @@ const (
 func (ss *session) handle(texts []string) handled {
 	n := ss.n
 	ctx := n.talk
+	if n.gate.muted(ctx, ss.buyer) {
+		return handledNothing
+	}
 	in := combineIntents(texts)
 	n.mu.Lock()
 	state, hs := ss.state, ss.hs
@@ -973,7 +979,10 @@ type negotiatedJournal struct {
 
 var errNotAgreed = errors.New("buyer is no longer waiting to pay")
 
-func (j negotiatedJournal) price(_ context.Context, buyer types.JID) (string, error) {
+func (j negotiatedJournal) price(ctx context.Context, buyer types.JID) (string, error) {
+	if j.muted(ctx, buyer) {
+		return "", errBuyerMuted
+	}
 	amount, ok := j.n.agreedPrice(buyer)
 	if !ok {
 		return "", errNotAgreed

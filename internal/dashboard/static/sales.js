@@ -294,7 +294,7 @@ function cellLines(date, c) {
     if (s.phone && s.name) lines.push([{ t: 'Phone ', c: 'c7' }, { t: fmtPhone(s.phone), c: 'c8' }]);
     lines.push([{ t: 'Paid ', c: 'c7' }, { t: rupees(s.amount), c: 'c6' }, s.paid_at ? { t: ` at ${hm(s.paid_at)}`, c: 'c8' } : null]);
     if (s.paid_by === 'image') lines.push([{ t: 'By image, not verified. ', c: 'c6' }, { t: 'Check your UPI app.', c: 'c8' }]);
-    if (s.paid_by === 'other') lines.push([{ t: 'Paid outside WhatsApp, recorded by hand.', c: 'c8' }]);
+    if (['other', 'manual'].includes(s.paid_by)) lines.push([{ t: 'Paid outside WhatsApp, recorded by hand.', c: 'c8' }]);
     if (s.sent_at && s.paid_at) lines.push([{ t: 'Delivered ', c: 'c7' }, { t: `${dur(s.sent_at - s.paid_at)} after payment`, c: 'ca' }]);
     if (s.ask != null) lines.push([{ t: 'Median ask ', c: 'c7' }, { t: rupees(Math.round(s.ask)), c: 'cf' }, { t: ` (you ${signed(s.amount - s.ask)})`, c: 'c8' }]);
     if (c.state === 'sending') {

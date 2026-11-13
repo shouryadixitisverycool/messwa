@@ -101,7 +101,7 @@ func TestSellToolsNeedSettingAndAdmin(t *testing.T) {
 	cfg := config.Default()
 	cfg.MCP.SellTasks = true
 	on := connect(cfg, sell, adminTok)
-	for _, want := range []string{"start_sell_task", "sell_task_status", "cancel_sell_task"} {
+	for _, want := range []string{"start_sell_task", "sell_task_status", "cancel_sell_task", "mark_sell_task_sold", "add_sell_task_buyer", "mute_sell_task_buyer", "unmute_sell_task_buyer"} {
 		if !slices.Contains(tools(on), want) {
 			t.Fatalf("%s missing with the setting on", want)
 		}
@@ -112,7 +112,7 @@ func TestSellToolsNeedSettingAndAdmin(t *testing.T) {
 	start := map[string]any{"date": "2026-11-11", "meal": "lunch", "min_price": 30, "max_price": 60}
 
 	member1 := connect(cfg, sell, memberTok)
-	for _, name := range []string{"start_sell_task", "sell_task_status", "cancel_sell_task"} {
+	for _, name := range []string{"start_sell_task", "sell_task_status", "cancel_sell_task", "mark_sell_task_sold", "add_sell_task_buyer", "mute_sell_task_buyer", "unmute_sell_task_buyer"} {
 		res, err := member1.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: map[string]any{"id": 1, "date": "2026-11-11", "meal": "lunch", "min_price": 30, "max_price": 60}})
 		if err != nil {
 			t.Fatal(err)
