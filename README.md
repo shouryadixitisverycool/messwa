@@ -194,6 +194,7 @@ To preview without the live service, `messwa dashboard -at "2026-11-02 12:45"` s
 | `my_qr` | Current portal QR as a PNG image. Sensitive; fetch again after token resets. Uses the caller's own mess API key |
 | `start_sell_task` | Only with `[mcp] sell_tasks = true`. Sells one of your registered meals: date, meal, `min_price`, `max_price` in rupees, negotiating in between. Admins only |
 | `sell_task_status` | Only with `sell_tasks` on. One task by id, or the active and last 24 hours' tasks: state, posts, buyers and where each stands in the haggle, buyers who need you, sale. Admins only |
+| `sell_task_events` | Only with `sell_tasks` on. Sell task events in a time window (`since`, `until`) or for one task (`id`), to the second: copies posted or failed, buyers joining, what the bot read and said, prices, payments, QRs, the end. Also each task in the window and its current state. For reviewing a sale or a test run afterwards. Admins only |
 | `cancel_sell_task` | Only with `sell_tasks` on. Stops a task and deletes its group posts, unless `keep_posts` is set. Admins only |
 | `set_sell_task_prices` | Only with `sell_tasks` on. Changes an active task's `min_price` and `max_price` in place, without reposting (see [Changing prices](#changing-prices)). Admins only |
 
@@ -297,6 +298,20 @@ To serve MCP beyond loopback, set `[mcp] listen` to that address. Every request 
 The old systemd unit (`~/.config/systemd/user/messwa.service`) is disabled. Don't run both: WhatsApp allows one connection per linked device.
 
 `/healthz` returns 503 when the WhatsApp connection is down.
+
+### Log files
+
+Besides stderr (`docker compose logs`), messwa writes the same lines to
+`<state_dir>/logs/messwa-YYYY-MM-DD.log`, one file per UTC day, matching the
+UTC timestamps on each line. A restart appends to that day's file, so a test
+run's log survives container and agent restarts with nothing tailing
+`docker logs`. messwa keeps the newest 14 files and deletes older ones when
+it starts a new day's file. Every command writes there, not only `run`. If
+the directory can't be opened, messwa logs to stderr only and says so.
+
+For what a sell task did, `sell_task_events` (MCP) returns its events in a
+time window to the second, from the database, so it has every run's events
+even when the log was rotated away.
 
 ### whatsmeow's log
 
@@ -425,7 +440,10 @@ subgroup, with no name, and every post to it failed with `server returned
 error 479` (invalid stanza). A partial cache entry is the suspected cause,
 not a confirmed one. Each failed copy is logged as it fails, with the
 group's name (or its JID when WhatsApp gives none) and the addressing mode
-and member count from both the list and the fresh query. If posts to a
+and member count from both the list and the fresh query. The list gives
+IIITH - 2 no addressing mode and no members every time it's asked, so the
+"described this group differently" line shows at info once per group, and
+again only if the fresh details change; later posts log it at debug. If posts to a
 group keep failing, rerun with `MESSWA_WA_LOG=debug` (see
 [whatsmeow's log](#whatsmeows-log)).
 

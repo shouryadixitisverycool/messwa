@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS sell_task_events (
  n INTEGER NOT NULL DEFAULT 0,
  text TEXT NOT NULL DEFAULT ''
 );
-CREATE INDEX IF NOT EXISTS sell_task_events_task ON sell_task_events(task_id, at);`
+CREATE INDEX IF NOT EXISTS sell_task_events_task ON sell_task_events(task_id, at);
+CREATE INDEX IF NOT EXISTS sell_task_events_at ON sell_task_events(at);`
 
 // Event kinds. Peer is the buyer, or the group for posts.
 const (
@@ -95,6 +96,51 @@ func (s *Store) SellTaskEvents(ctx context.Context, taskID int64) ([]SellEvent, 
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// SellEventsBetween returns events at or after from and before to, oldest
+// first, for one task or, with taskID 0, every task. A zero from or to
+// leaves that end open. It returns at most limit events, the earliest
+// ones, and whether more matched.
+func (s *Store) SellEventsBetween(ctx context.Context, taskID int64, from, to time.Time, limit int) ([]SellEvent, bool, error) {
+	q := `SELECT task_id,at,peer,kind,n,text FROM sell_task_events WHERE 1=1`
+	var args []any
+	if taskID != 0 {
+		q += ` AND task_id=?`
+		args = append(args, taskID)
+	}
+	if !from.IsZero() {
+		q += ` AND at>=?`
+		args = append(args, from.UnixNano())
+	}
+	if !to.IsZero() {
+		q += ` AND at<?`
+		args = append(args, to.UnixNano())
+	}
+	q += ` ORDER BY at, rowid LIMIT ?`
+	args = append(args, limit+1)
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	var out []SellEvent
+	for rows.Next() {
+		var e SellEvent
+		var at int64
+		if err := rows.Scan(&e.TaskID, &at, &e.Peer, &e.Kind, &e.N, &e.Text); err != nil {
+			return nil, false, err
+		}
+		e.At = time.Unix(0, at)
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	if len(out) > limit {
+		return out[:limit], true, nil
+	}
+	return out, false, nil
 }
 
 // SellTasksForMeal returns every task for one meal, oldest first, so a
