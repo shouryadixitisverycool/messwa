@@ -52,6 +52,18 @@ func sayCounter(price, round int) reply {
 	return oneOf(msg(fmt.Sprintf("%d?", price)), msg(fmt.Sprintf("%d then?", price)), msg(fmt.Sprintf("ok %d?", price)), msg(fmt.Sprintf("would %d work?", price)))
 }
 
+// sayNudge follows up once on a buyer who said nothing after the bot's
+// first message.
+func sayNudge() reply {
+	return oneOf(msg("yes or no?"), msg("are you buying?"), msg("interested?"))
+}
+
+// sayQuietDrop is the lower price a buyer gets when they stay quiet after
+// the nudge too. The bot stops waiting on them after it.
+func sayQuietDrop(price int) reply {
+	return oneOf(msg(fmt.Sprintf("can do %d if you want it", price)), msg(fmt.Sprintf("ok %d for you", price)), msg(fmt.Sprintf("%d if you take it now", price)))
+}
+
 // sayLowest is the floor.
 func sayLowest(price int) reply {
 	return oneOf(
