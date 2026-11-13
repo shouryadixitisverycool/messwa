@@ -117,6 +117,22 @@ func TestSellTaskEventsWindow(t *testing.T) {
 		t.Fatalf("default window = %+v", out)
 	}
 
+	// New price-bearing events report rupees rather than counts.
+	for _, kind := range []string{store.EventPrices, store.EventPassCounter, store.EventRevived} {
+		if err := st.AddSellTaskEvent(ctx, store.SellEvent{TaskID: second, At: at("20:20:00"), Kind: kind, N: 4500, Text: "price detail"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, res = call(map[string]any{"id": second, "since": "20:20"})
+	if res.IsError || len(out.Events) != 3 {
+		t.Fatalf("price events = %+v, result = %+v", out, res)
+	}
+	for _, event := range out.Events {
+		if event.Amount != "45.00" || event.Count != 0 || event.Text != "price detail" {
+			t.Fatalf("price event = %+v", event)
+		}
+	}
+
 	if _, res = call(map[string]any{"since": "dinner"}); !res.IsError {
 		t.Fatal("an unreadable time was accepted")
 	}
