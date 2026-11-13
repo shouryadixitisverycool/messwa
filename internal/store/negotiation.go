@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strconv"
@@ -75,11 +76,33 @@ func splitPaise(s string) []int64 {
 
 const activeTask = `EXISTS(SELECT 1 FROM sell_tasks WHERE id=? AND state='active')`
 
+// honoured is a condition that holds when a price is at or above the
+// task's floor, or the bot already quoted or agreed that price with the
+// buyer. A range edit that raises the floor never takes back a price the
+// bot has said, so those stay allowed; before any edit every quoted price
+// was at or above the floor anyway. honouredArgs gives its arguments.
+const honoured = `(? >= (SELECT min_paise FROM sell_tasks WHERE id=?) OR EXISTS(SELECT 1 FROM sell_task_buyers
+ WHERE task_id=? AND peer=? AND (instr(','||quoted||',', ','||?||',')>0 OR agreed=?)))`
+
+func honouredArgs(id int64, peer string, paise int64) []any {
+	return []any{paise, id, id, peer, paise, FormatPaise(paise)}
+}
+
+// priceHonoured reports whether peer may be asked or charged paise on task
+// id; see honoured.
+func priceHonoured(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, id int64, peer string, paise int64) (bool, error) {
+	var ok bool
+	err := q.QueryRowContext(ctx, `SELECT `+honoured, honouredArgs(id, peer, paise)...).Scan(&ok)
+	return ok, err
+}
+
 // ClaimNegotiationMessage records n and claims the bot's next message to
 // peer, which may then be sent once. A queued buyer becomes negotiating; an
 // agreed one stays agreed (the message tells them someone else is paying). It reports false when the message
 // was already claimed (before a restart), the buyer has moved on, the task
-// ended, or n.Ask is below the task's floor.
+// ended, or n.Ask is below the task's floor and was never quoted to peer.
 func (s *Store) ClaimNegotiationMessage(ctx context.Context, id int64, peer string, sent int, n Negotiation) (bool, error) {
 	if n.BotMsgs != sent+1 {
 		return false, errors.New("a claim adds exactly one message")
@@ -87,9 +110,9 @@ func (s *Store) ClaimNegotiationMessage(ctx context.Context, id int64, peer stri
 	r, err := s.db.ExecContext(ctx, `UPDATE sell_task_buyers SET state=CASE WHEN state='queued' THEN 'negotiating' ELSE state END,
  ask=?,rounds=?,bot_msgs=?,unknowns=?,last_offer=?,quoted=?,said_lowest=?,pass_countered=?,started_at=coalesce(started_at,?)
  WHERE task_id=? AND peer=? AND bot_msgs=? AND state IN ('queued','negotiating','agreed') AND `+activeTask+`
- AND ? >= (SELECT min_paise FROM sell_tasks WHERE id=?)`,
-		n.Ask, n.Rounds, n.BotMsgs, n.Unknowns, n.LastOffer, joinPaise(n.Quoted), n.SaidLowest, n.PassCountered, n.StartedAt.Unix(),
-		id, peer, sent, id, n.Ask, id)
+ AND `+honoured,
+		append([]any{n.Ask, n.Rounds, n.BotMsgs, n.Unknowns, n.LastOffer, joinPaise(n.Quoted), n.SaidLowest, n.PassCountered, n.StartedAt.Unix(),
+			id, peer, sent, id}, honouredArgs(id, peer, n.Ask)...)...)
 	if err != nil {
 		return false, err
 	}
@@ -115,7 +138,8 @@ func (s *Store) ClaimBuyerLine(ctx context.Context, id int64, peer, kind string)
 }
 
 // AgreeSellTaskBuyer records the price agreed with a negotiating (or not yet
-// answered) buyer. The store refuses a price below the task's floor.
+// answered) buyer. The store refuses a price below the task's floor unless
+// the bot already quoted it to them.
 func (s *Store) AgreeSellTaskBuyer(ctx context.Context, id int64, peer, amount string, n Negotiation, at time.Time) (bool, error) {
 	paise, err := ParsePaise(amount)
 	if err != nil {
@@ -123,9 +147,9 @@ func (s *Store) AgreeSellTaskBuyer(ctx context.Context, id int64, peer, amount s
 	}
 	r, err := s.db.ExecContext(ctx, `UPDATE sell_task_buyers SET state='agreed',agreed=?,agreed_at=?,ask=?,rounds=?,bot_msgs=?,unknowns=?,last_offer=?,quoted=?,said_lowest=?,pass_countered=?
  WHERE task_id=? AND peer=? AND state IN ('queued','negotiating') AND `+activeTask+`
- AND ? >= (SELECT min_paise FROM sell_tasks WHERE id=?)`,
-		amount, at.UnixNano(), n.Ask, n.Rounds, n.BotMsgs, n.Unknowns, n.LastOffer, joinPaise(n.Quoted), n.SaidLowest, n.PassCountered,
-		id, peer, id, paise, id)
+ AND `+honoured,
+		append([]any{amount, at.UnixNano(), n.Ask, n.Rounds, n.BotMsgs, n.Unknowns, n.LastOffer, joinPaise(n.Quoted), n.SaidLowest, n.PassCountered,
+			id, peer, id}, honouredArgs(id, peer, paise)...)...)
 	if err != nil {
 		return false, err
 	}
@@ -178,7 +202,7 @@ func (s *Store) RefundSellTaskBuyer(ctx context.Context, id int64, peer, amount,
 
 // RepriceTaskDelivery changes an armed, unpaid reservation to the amount
 // the buyer actually paid, so the ledger records it. The amount must be at
-// least the task's floor.
+// least the task's floor, or a price the bot quoted or agreed with them.
 func (s *Store) RepriceTaskDelivery(ctx context.Context, taskID int64, d Delivery, amount string) (Delivery, error) {
 	paise, err := ParsePaise(amount)
 	if err != nil {
@@ -186,8 +210,8 @@ func (s *Store) RepriceTaskDelivery(ctx context.Context, taskID int64, d Deliver
 	}
 	r, err := s.db.ExecContext(ctx, `UPDATE qr_deliveries SET amount=?
  WHERE task_id=? AND date=? AND meal=? AND peer=? AND amount=? AND image_hash=? AND state='armed' AND payment_id IS NULL
- AND `+activeTask+` AND ? >= (SELECT min_paise FROM sell_tasks WHERE id=?)`,
-		amount, taskID, d.Date, d.Meal, d.Peer, d.Amount, d.ImageHash, taskID, paise, taskID)
+ AND `+activeTask+` AND `+honoured,
+		append([]any{amount, taskID, d.Date, d.Meal, d.Peer, d.Amount, d.ImageHash, taskID}, honouredArgs(taskID, d.Peer, paise)...)...)
 	if err != nil {
 		return d, err
 	}
@@ -201,7 +225,8 @@ func (s *Store) RepriceTaskDelivery(ctx context.Context, taskID int64, d Deliver
 // ClaimTaskSale records a payment that arrived before the buyer was given
 // the reservation: it arms and claims the meal in one step, so the QR can
 // go out. It reports false when the meal already has a delivery record,
-// for this buyer or anyone else. The amount must be at least the floor.
+// for this buyer or anyone else. The amount must be at least the floor, or
+// a price the bot quoted or agreed with the buyer.
 func (s *Store) ClaimTaskSale(ctx context.Context, taskID int64, d Delivery, p Payment, messageID string) (bool, error) {
 	if p.ID == "" || messageID == "" {
 		return false, errors.New("missing payment or outgoing message ID")
@@ -226,7 +251,9 @@ func (s *Store) ClaimTaskSale(ctx context.Context, taskID int64, d Delivery, p P
 	case date != d.Date || meal != d.Meal:
 		return false, errors.New("delivery is for a different meal than the task")
 	case paise < minPaise:
-		return false, fmt.Errorf("INR %s is below the task's floor of INR %s", d.Amount, FormatPaise(minPaise))
+		if ok, err := priceHonoured(ctx, tx, taskID, d.Peer, paise); err != nil || !ok {
+			return false, errors.Join(err, fmt.Errorf("INR %s is below the task's floor of INR %s", d.Amount, FormatPaise(minPaise)))
+		}
 	}
 	var paidAt any
 	if !p.At.IsZero() {
@@ -249,9 +276,11 @@ func (s *Store) ClaimTaskSale(ctx context.Context, taskID int64, d Delivery, p P
 // message count) stays as it was, so the bot picks up where it stopped.
 // It reports false when the buyer isn't timed out (they passed, were
 // parked or skipped, or someone already revived them), the task isn't
-// active, or a payment for the meal was already claimed.
+// active, or a payment for the meal was already claimed. The bot is talking
+// to them again, so a note from a lowered floor (see SetPrices) is
+// cleared; a payment to refund keeps its note.
 func (s *Store) ReviveSellTaskBuyer(ctx context.Context, id int64, peer string) (bool, error) {
-	r, err := s.db.ExecContext(ctx, `UPDATE sell_task_buyers SET state='negotiating'
+	r, err := s.db.ExecContext(ctx, `UPDATE sell_task_buyers SET state='negotiating',note=CASE WHEN refund='' THEN '' ELSE note END
  WHERE task_id=? AND peer=? AND state='timed_out' AND `+activeTask+`
  AND NOT EXISTS(SELECT 1 FROM qr_deliveries WHERE task_id=? AND state IN ('sending','sent'))`, id, peer, id, id)
 	if err != nil {

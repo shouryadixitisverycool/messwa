@@ -45,6 +45,9 @@ const (
 	EventToldSold      = "told_sold"
 	EventTicked        = "ticked" // N: posts ticked ✅
 	EventEnded         = "ended"  // Text: the task's final state
+	// EventPrices is a range edit on a running task. N: the new floor,
+	// paise; Text: "min-max was min-max", INR.
+	EventPrices = "prices"
 )
 
 type SellEvent struct {
