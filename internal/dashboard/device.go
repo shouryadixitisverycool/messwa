@@ -79,7 +79,9 @@ func deviceRoutes(mux *http.ServeMux, srv *mcpserver.Server) {
 		w.WriteHeader(204)
 	})))
 
-	member := func(h http.HandlerFunc) http.Handler { return requireRole(accounts.Member, h) }
+	// New accounts link WhatsApp before an admin approves them, so these
+	// take any signed-in user.
+	member := signedIn
 	mux.Handle("GET /api/whatsapp", member(func(w http.ResponseWriter, r *http.Request) {
 		if srv.Device == nil {
 			jsonError(w, "WhatsApp linking requires the run service", 503)

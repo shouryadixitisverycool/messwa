@@ -86,7 +86,7 @@ const ownerID = "owner"
 // caller is the user an MCP call acts as.
 func (s *Server) caller(ctx context.Context, req *mcp.CallToolRequest) (*accounts.User, error) {
 	if s.acc == nil {
-		return &accounts.User{Name: "local", Role: accounts.Admin}, nil
+		return &accounts.User{Name: "local", Role: accounts.Admin, Status: accounts.Active}, nil
 	}
 	if req == nil || req.Extra == nil || req.Extra.TokenInfo == nil {
 		return nil, errors.New("not signed in")
@@ -103,8 +103,8 @@ func (s *Server) caller(ctx context.Context, req *mcp.CallToolRequest) (*account
 	if err != nil {
 		return nil, err
 	}
-	if u == nil || u.Disabled {
-		return nil, errors.New("this account no longer exists or is blocked")
+	if !u.IsActive() {
+		return nil, errors.New("this account no longer exists, is blocked, or isn't approved yet")
 	}
 	if err := s.checkAccount(u.ID); err != nil {
 		return nil, err

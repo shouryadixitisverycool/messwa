@@ -16,11 +16,11 @@ func TestAccountsStore(t *testing.T) {
 	}
 	defer st.Close()
 	now := time.Now()
-	id, err := st.AddUser(ctx, "Asha", "member", "h", now)
+	id, err := st.AddUser(ctx, "Asha", "member", "h", "active", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.AddUser(ctx, "asha", "admin", "h", now); !errors.Is(err, ErrNameTaken) {
+	if _, err := st.AddUser(ctx, "asha", "admin", "h", "active", now); !errors.Is(err, ErrNameTaken) {
 		t.Errorf("names must be unique ignoring case: %v", err)
 	}
 	if u, _ := st.UserByName(ctx, "ASHA"); u == nil || u.ID != id {

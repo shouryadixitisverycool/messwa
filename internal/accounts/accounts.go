@@ -44,6 +44,19 @@ func ParseRole(s string) (Role, error) {
 	return "", fmt.Errorf("role must be admin or member, not %q", s)
 }
 
+// Status is where an account is in sign-up. Accounts an admin makes with
+// messwa user add start Active; accounts made on the sign-up page start
+// Pending, become Requested when their owner asks for approval, and then
+// Active or Declined when an admin decides.
+type Status string
+
+const (
+	Pending   Status = "pending"
+	Requested Status = "requested"
+	Active    Status = "active"
+	Declined  Status = "declined"
+)
+
 // Allows reports whether a user with role r may use something that needs
 // role need. Admins may use everything.
 func (r Role) Allows(need Role) bool { return r == Admin || r == need }
@@ -55,9 +68,17 @@ type User struct {
 	HasMessKey bool      `json:"mess_key_set"`
 	MessKeyAt  time.Time `json:"-"`
 	Disabled   bool      `json:"-"`
+	Status     Status    `json:"status"`
+	// StatusAt is when Status last changed: for a Requested account, when
+	// they asked for approval.
+	StatusAt  time.Time `json:"-"`
+	CreatedAt time.Time `json:"-"`
 }
 
-func (u *User) IsAdmin() bool { return u != nil && u.Role == Admin }
+func (u *User) IsAdmin() bool { return u != nil && u.Role == Admin && u.Status == Active }
+
+// IsActive reports whether an admin has let this account in.
+func (u *User) IsActive() bool { return u != nil && u.Status == Active && !u.Disabled }
 
 type ctxKey struct{}
 
@@ -93,6 +114,7 @@ var (
 	ErrLocked      = errors.New("too many failed sign-ins; wait a minute")
 	ErrNoSecret    = errors.New("set " + SecretEnv + " (openssl rand -hex 32) to store mess API keys")
 	ErrBadPassword = fmt.Errorf("passwords must be %d to %d characters", minPassword, maxPassword)
+	ErrSignUpLimit = errors.New("too many sign-ups from here; try again in an hour")
 	validName      = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,31}$`)
 )
 
@@ -101,12 +123,20 @@ type Accounts struct {
 	box *Box // nil without MESSWA_SECRET_KEY
 	now func() time.Time
 
-	mu    sync.Mutex
-	fails map[string]failCount
+	mu      sync.Mutex
+	fails   map[string]failCount
+	signups map[string][]time.Time
 
 	dummyOnce sync.Once
 	dummy     string
+
+	onDecision func(ctx context.Context, id int64)
 }
+
+// OnDecision sets a function that runs after an admin approves or declines
+// an account in this process. run uses it to connect or unlink the user's
+// WhatsApp.
+func (a *Accounts) OnDecision(fn func(ctx context.Context, id int64)) { a.onDecision = fn }
 
 type failCount struct {
 	n     int
@@ -116,7 +146,7 @@ type failCount struct {
 // New makes the account service. An empty secret means mess API keys can't
 // be stored or read; everything else works.
 func New(st *store.Store, secret string) (*Accounts, error) {
-	a := &Accounts{st: st, now: time.Now, fails: map[string]failCount{}}
+	a := &Accounts{st: st, now: time.Now, fails: map[string]failCount{}, signups: map[string][]time.Time{}}
 	if secret != "" {
 		b, err := NewBox(secret)
 		if err != nil {
@@ -134,7 +164,10 @@ func toUser(r *store.UserRecord) *User {
 	if r == nil {
 		return nil
 	}
-	return &User{ID: r.ID, Name: r.Name, Role: Role(r.Role), HasMessKey: len(r.MessKey) > 0, MessKeyAt: r.MessKeyAt, Disabled: r.Disabled}
+	return &User{
+		ID: r.ID, Name: r.Name, Role: Role(r.Role), HasMessKey: len(r.MessKey) > 0, MessKeyAt: r.MessKeyAt, Disabled: r.Disabled,
+		Status: Status(r.Status), StatusAt: r.StatusAt, CreatedAt: r.CreatedAt,
+	}
 }
 
 func checkNewPassword(pw string) error {
@@ -144,8 +177,42 @@ func checkNewPassword(pw string) error {
 	return nil
 }
 
-// Add creates a user.
+// Add creates an active user, for admins on the CLI.
 func (a *Accounts) Add(ctx context.Context, name, password string, role Role) (*User, error) {
+	return a.add(ctx, name, password, role, Active)
+}
+
+const (
+	signUpLimit  = 5
+	signUpWindow = time.Hour
+)
+
+// SignUp creates a pending member from the sign-up page. They can sign in
+// and set up their account, but use nothing else until an admin approves
+// them. from identifies the client (its IP), which gets five sign-ups an
+// hour.
+func (a *Accounts) SignUp(ctx context.Context, name, password, from string) (*User, error) {
+	now := a.now()
+	a.mu.Lock()
+	recent := a.signups[from][:0:0]
+	for _, t := range a.signups[from] {
+		if now.Sub(t) < signUpWindow {
+			recent = append(recent, t)
+		}
+	}
+	if len(recent) >= signUpLimit {
+		a.mu.Unlock()
+		return nil, ErrSignUpLimit
+	}
+	if len(a.signups) > 10000 {
+		a.signups = map[string][]time.Time{}
+	}
+	a.signups[from] = append(recent, now)
+	a.mu.Unlock()
+	return a.add(ctx, name, password, Member, Pending)
+}
+
+func (a *Accounts) add(ctx context.Context, name, password string, role Role, status Status) (*User, error) {
 	if !validName.MatchString(name) {
 		return nil, errors.New("names are 1 to 32 letters, digits, dots, dashes or underscores")
 	}
@@ -159,7 +226,7 @@ func (a *Accounts) Add(ctx context.Context, name, password string, role Role) (*
 	if err != nil {
 		return nil, err
 	}
-	id, err := a.st.AddUser(ctx, name, string(role), h, a.now())
+	id, err := a.st.AddUser(ctx, name, string(role), h, string(status), a.now())
 	if err != nil {
 		return nil, err
 	}
@@ -200,6 +267,81 @@ func (a *Accounts) List(ctx context.Context) ([]User, error) {
 
 func (a *Accounts) SetRole(ctx context.Context, id int64, role Role) error {
 	return a.st.SetRole(ctx, id, string(role))
+}
+
+// RequestApproval asks the admins to let a pending account in. The account
+// needs a mess API key and a linked WhatsApp first; the caller says whether
+// WhatsApp is linked.
+func (a *Accounts) RequestApproval(ctx context.Context, id int64, whatsappLinked bool) error {
+	u, err := a.User(ctx, id)
+	if err != nil {
+		return err
+	}
+	if u == nil {
+		return errors.New("no such user")
+	}
+	switch u.Status {
+	case Requested:
+		return nil
+	case Active:
+		return errors.New("your account is already approved")
+	case Declined:
+		return errors.New("an admin declined this account")
+	}
+	if !u.HasMessKey {
+		return errors.New("save your mess API key first")
+	}
+	if !whatsappLinked {
+		return errors.New("link your WhatsApp first")
+	}
+	ok, err := a.st.SetStatus(ctx, id, string(Requested), []string{string(Pending)}, a.now())
+	if err == nil && !ok {
+		err = errors.New("your account changed meanwhile; reload the page")
+	}
+	return err
+}
+
+// Approve lets a pending or requested account in.
+func (a *Accounts) Approve(ctx context.Context, id int64) error {
+	return a.decide(ctx, id, Active)
+}
+
+// Decline turns down a pending or requested account. Its owner can still
+// sign in to see that, but can't use anything or ask again.
+func (a *Accounts) Decline(ctx context.Context, id int64) error {
+	return a.decide(ctx, id, Declined)
+}
+
+func (a *Accounts) decide(ctx context.Context, id int64, to Status) error {
+	ok, err := a.st.SetStatus(ctx, id, string(to), []string{string(Pending), string(Requested)}, a.now())
+	if err == nil && !ok {
+		err = errors.New("that account isn't waiting for approval")
+	}
+	if err == nil && a.onDecision != nil {
+		a.onDecision(ctx, id)
+	}
+	return err
+}
+
+// Waiting lists accounts that signed up and aren't approved or declined,
+// those that asked for approval first.
+func (a *Accounts) Waiting(ctx context.Context) ([]User, error) {
+	all, err := a.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := []User{}
+	for _, u := range all {
+		if u.Status == Requested && !u.Disabled {
+			out = append(out, u)
+		}
+	}
+	for _, u := range all {
+		if u.Status == Pending && !u.Disabled {
+			out = append(out, u)
+		}
+	}
+	return out, nil
 }
 
 // SetDisabled blocks or unblocks a user. Blocking ends their sessions; their
@@ -365,7 +507,7 @@ func (a *Accounts) Owner(ctx context.Context) (*User, error) {
 	if err != nil || u != nil {
 		return u, err
 	}
-	return &User{Name: "owner", Role: Admin, HasMessKey: os.Getenv(LegacyKeyEnv) != ""}, nil
+	return &User{Name: "owner", Role: Admin, Status: Active, HasMessKey: os.Getenv(LegacyKeyEnv) != ""}, nil
 }
 
 // Portal returns a portal client that reads with user id's own key. ID 0 is
@@ -491,7 +633,7 @@ func (a *Accounts) VerifyToken(ctx context.Context, token string) (*User, error)
 		return nil, err
 	}
 	u, err := a.User(ctx, id)
-	if err != nil || u == nil || u.Disabled {
+	if err != nil || !u.IsActive() {
 		return nil, err
 	}
 	return u, nil

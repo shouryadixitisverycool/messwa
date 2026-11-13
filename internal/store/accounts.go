@@ -55,15 +55,19 @@ type UserRecord struct {
 	MessKeyAt time.Time
 	CreatedAt time.Time
 	Disabled  bool
+	// Status is where the account is in sign-up: pending, requested,
+	// active or declined. See accounts.Status.
+	Status   string
+	StatusAt time.Time
 }
 
-const userCols = `id,name,role,pw_hash,mess_key,mess_key_at,created_at,disabled`
+const userCols = `id,name,role,pw_hash,mess_key,mess_key_at,created_at,disabled,status,status_at`
 
 func scanUser(row interface{ Scan(...any) error }) (*UserRecord, error) {
 	var u UserRecord
-	var keyAt sql.NullInt64
+	var keyAt, statusAt sql.NullInt64
 	var created int64
-	err := row.Scan(&u.ID, &u.Name, &u.Role, &u.PWHash, &u.MessKey, &keyAt, &created, &u.Disabled)
+	err := row.Scan(&u.ID, &u.Name, &u.Role, &u.PWHash, &u.MessKey, &keyAt, &created, &u.Disabled, &u.Status, &statusAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -74,12 +78,15 @@ func scanUser(row interface{ Scan(...any) error }) (*UserRecord, error) {
 	if keyAt.Valid {
 		u.MessKeyAt = time.Unix(keyAt.Int64, 0)
 	}
+	if statusAt.Valid {
+		u.StatusAt = time.Unix(statusAt.Int64, 0)
+	}
 	return &u, nil
 }
 
-// AddUser creates a user and returns its ID.
-func (s *Store) AddUser(ctx context.Context, name, role, pwHash string, now time.Time) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `INSERT INTO users(id,name,role,pw_hash,created_at) VALUES((SELECT coalesce(max(id),0)+1 FROM (SELECT id FROM users UNION ALL SELECT id FROM account_ids)),?,?,?,?)`, name, role, pwHash, now.Unix())
+// AddUser creates a user with a sign-up status and returns its ID.
+func (s *Store) AddUser(ctx context.Context, name, role, pwHash, status string, now time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `INSERT INTO users(id,name,role,pw_hash,created_at,status,status_at) VALUES((SELECT coalesce(max(id),0)+1 FROM (SELECT id FROM users UNION ALL SELECT id FROM account_ids)),?,?,?,?,?,?)`, name, role, pwHash, now.Unix(), status, now.Unix())
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			return 0, ErrNameTaken
@@ -99,9 +106,9 @@ func (s *Store) UserByName(ctx context.Context, name string) (*UserRecord, error
 	return scanUser(s.db.QueryRowContext(ctx, `SELECT `+userCols+` FROM users WHERE name=?`, name))
 }
 
-// FirstAdmin is the oldest enabled admin, or nil when there is none.
+// FirstAdmin is the oldest enabled, active admin, or nil when there is none.
 func (s *Store) FirstAdmin(ctx context.Context) (*UserRecord, error) {
-	return scanUser(s.db.QueryRowContext(ctx, `SELECT `+userCols+` FROM users WHERE role='admin' AND disabled=0 ORDER BY id LIMIT 1`))
+	return scanUser(s.db.QueryRowContext(ctx, `SELECT `+userCols+` FROM users WHERE role='admin' AND disabled=0 AND status='active' ORDER BY id LIMIT 1`))
 }
 
 // Users lists every user, oldest first.
@@ -139,6 +146,22 @@ func (s *Store) SetPassword(ctx context.Context, id int64, pwHash string) error 
 
 func (s *Store) SetRole(ctx context.Context, id int64, role string) error {
 	return s.updateUser(ctx, `UPDATE users SET role=? WHERE id=?`, role, id)
+}
+
+// SetStatus moves a user to status, but only from one of from. It reports
+// whether the user was in one of those states.
+func (s *Store) SetStatus(ctx context.Context, id int64, status string, from []string, now time.Time) (bool, error) {
+	q := `UPDATE users SET status=?, status_at=? WHERE id=? AND status IN (` + strings.Repeat("?,", len(from)-1) + `?)`
+	args := []any{status, now.Unix(), id}
+	for _, f := range from {
+		args = append(args, f)
+	}
+	res, err := s.db.ExecContext(ctx, q, args...)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 func (s *Store) SetDisabled(ctx context.Context, id int64, disabled bool) error {

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0d12">
+<title>Welcome · Mess Auction House</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preload" href="silkscreen-700.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="account.css">
+<script src="common.js" defer></script>
+<script src="welcome.js" defer></script>
+</head>
+<body>
+<div class="app account">
+  <header class="top">
+    <div class="brand">
+      <span class="logo" id="logo"></span>
+      <div>
+        <h1 id="who">Welcome</h1>
+        <p class="sub">Set up your account, then ask an admin to let you in.</p>
+      </div>
+    </div>
+    <button class="nav-link" id="logout" type="button">Sign out</button>
+  </header>
+
+  <p class="notice" id="declined" hidden>An admin declined this account. Talk to them if you think that's a mistake.</p>
+
+  <section class="chest step" id="keyStep" aria-label="Mess API key">
+    <div class="chest-head">
+      <span class="head-icon" id="keyIcon"></span>
+      <span class="head-name">1. Mess API key</span>
+      <span class="head-meta" id="keyMeta"></span>
+    </div>
+    <div class="form">
+      <p class="note">Your key for the IIIT mess portal. messwa uses it to read your own registrations and QR. It's stored encrypted and never shown again. messwa checks it with the portal before saving, so you need to be on the IIIT network.</p>
+      <p class="notice" id="noSecret" hidden>The server has no <code>MESSWA_SECRET_KEY</code>, so it can't store keys yet. Ask an admin to set it.</p>
+      <form id="keyForm" class="row">
+        <label class="grow">Key<input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your mess API key" required></label>
+        <button class="btn primary" type="submit" id="keySave">Save key</button>
+      </form>
+      <p class="err" id="keyErr" role="alert" hidden></p>
+    </div>
+  </section>
+
+  <section class="chest step" id="waStep" aria-label="WhatsApp">
+    <div class="chest-head">
+      <span class="head-icon" id="waIcon"></span>
+      <span class="head-name">2. WhatsApp</span>
+      <span class="head-meta" id="waMeta"></span>
+    </div>
+    <div class="form">
+      <p class="note">Link your WhatsApp as a linked device. messwa reads the mess groups with it, and later sells your meals from it when you ask. Your chats, buyers and sales stay private to you. Linking sends no messages.</p>
+      <p id="waStatus" class="note">Checking…</p>
+      <img id="waQR" alt="QR code to scan in WhatsApp, Linked devices" hidden class="pairing-qr">
+      <div class="actions"><button class="btn primary" id="waLink" type="button">Link WhatsApp</button></div>
+      <p class="err" id="waErr" role="alert" hidden></p>
+    </div>
+  </section>
+
+  <section class="chest step" id="askStep" aria-label="Approval">
+    <div class="chest-head">
+      <span class="head-icon" id="askIcon"></span>
+      <span class="head-name">3. Approval</span>
+      <span class="head-meta" id="askMeta"></span>
+    </div>
+    <div class="form">
+      <p class="note" id="askNote">Once your key is saved and WhatsApp is linked, ask the admins to approve you.</p>
+      <p class="err" id="askErr" role="alert" hidden></p>
+      <div class="actions"><button class="btn primary" type="button" id="ask">Ask for approval</button></div>
+    </div>
+  </section>
+</div>
+<div class="tip" id="tip" hidden></div>
+</body>
+</html>

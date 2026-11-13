@@ -26,6 +26,7 @@ const userUsage = `usage: messwa user <command>
   list                       every account, its role, and whether it has a mess key
   passwd NAME                set a new password and sign that user out everywhere
   role NAME admin|member     change someone's role
+  approve NAME / decline NAME decide on someone who signed up on the dashboard
   disable NAME / enable NAME block or unblock sign-in and MCP tokens
   remove -yes NAME           delete an account with its sessions and tokens
   mess-key [-clear] NAME     save (asks for it) or clear that user's mess API key
@@ -107,9 +108,12 @@ func userCmd(ctx context.Context, cfg *config.Config, args []string) error {
 		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 		fmt.Fprintln(tw, "NAME\tROLE\tMESS KEY\tSTATUS")
 		for _, u := range us {
-			key, status := "no", "active"
+			key, status := "no", string(u.Status)
 			if u.HasMessKey {
 				key = "saved " + u.MessKeyAt.Format("2006-01-02")
+			}
+			if u.Status == accounts.Requested {
+				status = "asked for approval " + u.StatusAt.Format("2006-01-02")
 			}
 			if u.Disabled {
 				status = "disabled"
@@ -146,6 +150,22 @@ func userCmd(ctx context.Context, cfg *config.Config, args []string) error {
 			return err
 		}
 		return acc.SetRole(ctx, u.ID, role)
+
+	case "approve", "decline":
+		u, err := one()
+		if err != nil {
+			return err
+		}
+		if cmd == "approve" {
+			err = acc.Approve(ctx, u.ID)
+		} else {
+			err = acc.Decline(ctx, u.ID)
+		}
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s %sd.\n", u.Name, cmd)
+		return nil
 
 	case "disable", "enable":
 		u, err := one()

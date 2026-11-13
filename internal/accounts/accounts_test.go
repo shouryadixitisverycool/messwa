@@ -294,3 +294,61 @@ func TestTokens(t *testing.T) {
 		t.Error("removing a user kept their tokens")
 	}
 }
+
+func TestSignUp(t *testing.T) {
+	a := open(t, secret)
+	ctx := context.Background()
+	u, err := a.SignUp(ctx, "asha", "asha's password", "10.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Status != Pending || u.Role != Member || u.IsActive() {
+		t.Fatalf("new sign-up: %+v", u)
+	}
+
+	// A pending account signs in, but its MCP tokens don't work.
+	if _, _, err := a.Login(ctx, "asha", "asha's password", "x"); err != nil {
+		t.Fatalf("pending sign-in: %v", err)
+	}
+	tok, _, _ := a.CreateToken(ctx, u.ID, "")
+	if v, _ := a.VerifyToken(ctx, tok); v != nil {
+		t.Error("pending account's token works")
+	}
+
+	if err := a.RequestApproval(ctx, u.ID, true); err == nil {
+		t.Error("asked without a mess key")
+	}
+	a.SetMessKey(ctx, u.ID, "key")
+	if err := a.RequestApproval(ctx, u.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if w, _ := a.Waiting(ctx); len(w) != 1 || w[0].Status != Requested {
+		t.Fatalf("waiting: %+v", w)
+	}
+	if err := a.Approve(ctx, u.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Decline(ctx, u.ID); err == nil {
+		t.Error("declined an approved account")
+	}
+	if v, _ := a.VerifyToken(ctx, tok); v == nil {
+		t.Error("approved account's token doesn't work")
+	}
+
+	// A pending admin made by role change still isn't an owner.
+	p, _ := a.SignUp(ctx, "ravi", "ravi's password", "10.0.0.1")
+	a.SetRole(ctx, p.ID, Admin)
+	if p, _ = a.User(ctx, p.ID); p.IsAdmin() {
+		t.Error("pending admin counts as admin")
+	}
+
+	for i := 0; i < 3; i++ {
+		a.SignUp(ctx, "x"+string(rune('a'+i)), "some password", "10.0.0.1")
+	}
+	if _, err := a.SignUp(ctx, "toomany", "some password", "10.0.0.1"); !errors.Is(err, ErrSignUpLimit) {
+		t.Errorf("sixth sign-up from one address: %v", err)
+	}
+	if _, err := a.SignUp(ctx, "elsewhere", "some password", "10.0.0.2"); err != nil {
+		t.Errorf("other address: %v", err)
+	}
+}
