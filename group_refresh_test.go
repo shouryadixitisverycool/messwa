@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"slices"
+	"strings"
 	"testing"
 
 	"go.mau.fi/whatsmeow/types"
@@ -58,5 +60,52 @@ func TestEveryCopyQueriesItsGroup(t *testing.T) {
 	<-o.donePosting
 	if len(conn.infoAsked) != 2 || conn.infoAsked[0] != a || conn.infoAsked[1] != b || len(order) != 2 {
 		t.Fatalf("queried %v, sent %v", conn.infoAsked, order)
+	}
+}
+
+// TestGroupListGapLoggedOnce covers the IIITH - 2 subgroup in the
+// 12 Nov dinner run: the group list gives it no addressing mode and no
+// members on every call, so each post found the same mismatch. It logs at
+// info the first time and when it changes, at debug in between.
+func TestGroupListGapLoggedOnce(t *testing.T) {
+	jid := types.NewJID("120363416069274999", types.GroupServer)
+	listed := &types.GroupInfo{JID: jid, GroupName: types.GroupName{Name: "IIITH - 2"}}
+	members := make([]types.GroupParticipant, 1025)
+	conn := newFakeConn(types.NewJID("1", types.GroupServer))
+	conn.info = map[types.JID]*types.GroupInfo{jid: {JID: jid, GroupName: listed.GroupName, AddressingMode: types.AddressingModeLID, Participants: members}}
+	var buf strings.Builder
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	g := offerTarget{JID: jid, Name: listed.Name, listed: listed}
+
+	levels := func() []string {
+		var out []string
+		for _, line := range strings.Split(buf.String(), "\n") {
+			if strings.Contains(line, "described this group differently") {
+				lvl, _, _ := strings.Cut(strings.TrimPrefix(line[strings.Index(line, "level="):], "level="), " ")
+				out = append(out, lvl)
+			}
+		}
+		buf.Reset()
+		return out
+	}
+	// Three posts, each after a fresh group list that is partial again.
+	for range 3 {
+		refreshGroup(t.Context(), conn, log, g)
+	}
+	if got := levels(); !slices.Equal(got, []string{"INFO", "DEBUG", "DEBUG"}) {
+		t.Fatalf("levels = %v", got)
+	}
+	// A new member changes what the query says: worth one more info line.
+	conn.info[jid].Participants = append(members, types.GroupParticipant{})
+	refreshGroup(t.Context(), conn, log, g)
+	refreshGroup(t.Context(), conn, log, g)
+	if got := levels(); !slices.Equal(got, []string{"INFO", "DEBUG"}) {
+		t.Fatalf("after a change, levels = %v", got)
+	}
+	// A group the list describes fully logs nothing.
+	g.listed = conn.info[jid]
+	refreshGroup(t.Context(), conn, log, g)
+	if got := levels(); len(got) != 0 {
+		t.Fatalf("full listing logged %v", got)
 	}
 }

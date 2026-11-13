@@ -322,11 +322,52 @@ func refreshGroup(ctx context.Context, conn saleConn, log *slog.Logger, g offerT
 	}
 	log.Debug("group details before posting", append(append([]any{"group", g.Name, "jid", g.JID}, groupAttrs("listed_", g.listed)...), groupAttrs("", info)...)...)
 	if g.listed != nil && (g.listed.AddressingMode != info.AddressingMode || len(g.listed.Participants) != len(info.Participants)) {
-		log.Info("the group list described this group differently; posting with the fresh details", "group", g.Name, "jid", g.JID,
-			"listed_addressing_mode", string(g.listed.AddressingMode), "addressing_mode", string(info.AddressingMode),
-			"listed_participants", len(g.listed.Participants), "participants", len(info.Participants))
+		gap := listGap{listedMode: g.listed.AddressingMode, mode: info.AddressingMode, listedN: len(g.listed.Participants), n: len(info.Participants)}
+		level := slog.LevelDebug
+		if listGaps.note(g.JID, gap) {
+			level = slog.LevelInfo
+		}
+		log.Log(ctx, level, "the group list described this group differently; posting with the fresh details", "group", g.Name, "jid", g.JID,
+			"listed_addressing_mode", string(gap.listedMode), "addressing_mode", string(gap.mode),
+			"listed_participants", gap.listedN, "participants", gap.n)
 	}
 	return g
+}
+
+// listGap is how the joined-groups list and a direct query disagreed
+// about a group.
+type listGap struct {
+	listedMode, mode types.AddressingMode
+	listedN, n       int
+}
+
+// listGapLog remembers, per group, the last disagreement logged at info.
+//
+// The disagreement isn't a stale cache that one refresh could fix. Every
+// findGroups or postCopies call asks WhatsApp for the joined-groups list
+// again, and for "Mess Buy Sell @ IIITH - 2" (a community subgroup with
+// about 1025 members) WhatsApp answers each time with no addressing mode
+// and no members. whatsmeow writes that partial entry over its group cache
+// on every list call, and refreshGroup's direct query writes the full one
+// back before each copy. So the mismatch comes back on every post, and
+// logging it at info each time says nothing new. It logs at info the first
+// time per group and whenever the details change, and at debug otherwise.
+type listGapLog struct {
+	mu   sync.Mutex
+	seen map[types.JID]listGap
+}
+
+var listGaps = &listGapLog{seen: map[types.JID]listGap{}}
+
+// note records gap for jid and reports whether it is new for that group.
+func (l *listGapLog) note(jid types.JID, gap listGap) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if last, ok := l.seen[jid]; ok && last == gap {
+		return false
+	}
+	l.seen[jid] = gap
+	return true
 }
 
 // groupOffer is one offer posted as one or more copies, one per group.

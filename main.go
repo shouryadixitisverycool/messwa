@@ -10,11 +10,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -28,6 +30,7 @@ import (
 	"messwa/internal/config"
 	"messwa/internal/dashboard"
 	"messwa/internal/ingest"
+	"messwa/internal/logfile"
 	"messwa/internal/mcpserver"
 	"messwa/internal/store"
 	"messwa/internal/wa"
@@ -80,9 +83,6 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
-	// messwa logs at info. MESSWA_WA_LOG=debug lowers the level for
-	// whatsmeow's lines; messwa itself logs nothing at debug.
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: min(slog.LevelInfo, wa.LogLevel())}))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -93,6 +93,8 @@ func main() {
 	if err := config.EnsureDir(cfg.StateDir); err != nil {
 		fatal(err)
 	}
+	log, logFile := openLog(cfg)
+	defer logFile.Close()
 	if err := applySavedSettings(ctx, cfg, log); err != nil {
 		fatal(err)
 	}
@@ -137,8 +139,32 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil && !errors.Is(err, context.Canceled) {
+		// stderr gets the plain message below; the file gets a line too,
+		// so a run that dies leaves its reason next to the rest of its log.
+		if logFile != nil {
+			slog.New(slog.NewTextHandler(logFile, nil)).Error("messwa exited", "command", flag.Arg(0), "err", err)
+		}
 		fatal(err)
 	}
+}
+
+// logDays is how many daily log files stay in <state_dir>/logs.
+const logDays = 14
+
+// openLog logs to stderr and to a daily file under the state directory,
+// which outlives container restarts and docker logs. Without the file it
+// still logs to stderr, and the returned file is nil. messwa logs at info.
+// MESSWA_WA_LOG=debug lowers the level for whatsmeow's lines and messwa's
+// few debug ones.
+func openLog(cfg *config.Config) (*slog.Logger, *logfile.Writer) {
+	opts := &slog.HandlerOptions{Level: min(slog.LevelInfo, wa.LogLevel())}
+	f, err := logfile.Open(filepath.Join(cfg.StateDir, "logs"), logDays)
+	if err != nil {
+		log := slog.New(slog.NewTextHandler(os.Stderr, opts))
+		log.Warn("logging to stderr only", "err", err)
+		return log, nil
+	}
+	return slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, f), opts)), f
 }
 
 func fatal(err error) {
