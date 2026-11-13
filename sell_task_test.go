@@ -36,6 +36,8 @@ type sentMessage struct {
 	reaction, target string
 	// revoked is the message a revoke deletes for everyone.
 	revoked string
+	// quoted is the message a reply quotes.
+	quoted string
 }
 
 // fakeConn stands in for the WhatsApp connection. Events are delivered by
@@ -174,7 +176,8 @@ func (f *fakeConn) send(ctx context.Context, to types.JID, msg *waE2E.Message, e
 		f.tried[to]++
 		return whatsmeow.SendResponse{}, errors.New("server returned error 479")
 	}
-	m := sentMessage{to: to, text: msg.GetConversation(), qr: msg.GetImageMessage() != nil,
+	m := sentMessage{to: to, text: messageText(msg), qr: msg.GetImageMessage() != nil,
+		quoted:   msg.GetExtendedTextMessage().GetContextInfo().GetStanzaID(),
 		reaction: msg.GetReactionMessage().GetText(), target: msg.GetReactionMessage().GetKey().GetID()}
 	if pm := msg.GetProtocolMessage(); pm.GetType() == waE2E.ProtocolMessage_REVOKE {
 		m.revoked = pm.GetKey().GetID()

@@ -30,6 +30,9 @@ type Sell struct {
 	// chatting with the sender. Off by default: with it on, the bot answers
 	// people who never saw the post.
 	AcceptPlainDMs bool `toml:"accept_plain_dms"`
+	// MessageBuyPosts has a sell task message everyone whose open buy post
+	// in the groups asks for the task's meal, and queue them as buyers.
+	MessageBuyPosts bool `toml:"message_buy_posts"`
 	// Buyers is who may buy from an offer. Empty means BuyersAnyone.
 	Buyers Buyers `toml:"buyers"`
 	// Repost puts a fresh copy of the offer in a group once the last one

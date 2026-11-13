@@ -29,8 +29,9 @@ import (
 //
 //   - nothing is sent unless the task is active;
 //   - besides the group post, messages go only to people who replied
-//     privately to that post, or with [sell] accept_plain_dms, DMed about
-//     it (see plain_dm.go);
+//     privately to that post, with [sell] accept_plain_dms DMed about it
+//     (see plain_dm.go), or with [sell] message_buy_posts posted that they
+//     want the meal (see buy_posts.go);
 //   - with [sell] buyers = "unsaved_only", saved contacts never join the
 //     queue and get nothing;
 //   - no buyer is quoted, agreed with, asked, or armed for below the floor
@@ -679,6 +680,9 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, rt
 			detail, err = m.handOff(ctx, t, buyer, d, queue.name(buyer), others)
 			return err
 		}
+	}
+	if m.buyPostsWanted(t) {
+		go m.messageBuyPosts(ctx, t, s, gate, queue)
 	}
 	if n != nil {
 		err = m.sellNegotiated(ctx, n, s, j, resume)
