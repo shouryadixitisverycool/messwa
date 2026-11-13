@@ -34,6 +34,7 @@ const (
 	EventPrompt        = "prompt"         // asked to pay; N: paise
 	EventParked        = "parked"         // Text: why they need you
 	EventPassed        = "passed"         // the buyer dropped out
+	EventPassCounter   = "pass_counter"   // the buyer passed and got one lower price; N: paise, Text: what they passed at
 	EventTimedOut      = "timed_out"      // no payment in their turn, or went quiet
 	EventPayment       = "payment"        // a matching WhatsApp Pay payment; N: paise
 	EventPayUnreadable = "pay_unreadable" // a payment whose amount the bot couldn't read
