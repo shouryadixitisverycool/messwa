@@ -25,18 +25,19 @@
     </div>
   </header>
 
+  <p class="notice">An admin has to approve new accounts before you can use the auction house.</p>
+
   <section class="chest" aria-label="Sign up">
     <div class="chest-head">
       <span class="head-icon" id="headIcon"></span>
       <span class="head-name">Sign up</span>
     </div>
-    <form class="form" id="form" autocomplete="on">
-      <label>Name<input id="name" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="32" pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,31}" title="Letters, digits, dots, dashes or underscores" required></label>
-      <label>Password<input id="password" type="password" autocomplete="new-password" minlength="10" required></label>
-      <label>Password again<input id="again" type="password" autocomplete="new-password" minlength="10" required></label>
+    <form class="form" id="form" autocomplete="on" novalidate>
+      <label>Name<input id="name" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="32"></label>
+      <label>Password<input id="password" type="password" autocomplete="new-password"></label>
+      <label>Password again<input id="again" type="password" autocomplete="new-password"></label>
       <p class="err" id="err" role="alert" hidden></p>
-      <div class="actions"><button class="btn primary" type="submit" id="go">Create account</button></div>
-      <p class="note">Next you'll connect your mess API key and ask an admin to approve you. Already have an account? <a href="login.html">Sign in</a>.</p>
+      <div class="actions"><button class="btn primary" type="submit" id="go">Create account</button><a class="btn" href="login.html">Sign in</a></div>
     </form>
   </section>
 </div>

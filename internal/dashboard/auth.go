@@ -84,7 +84,9 @@ func withSession(acc *accounts.Accounts, next http.Handler) http.Handler {
 				jsonError(w, "cross-site request refused", http.StatusForbidden)
 				return
 			}
-			if sess != nil && r.URL.Path != "/api/login" {
+			// Signing in or up replaces the session, and the pages that do it
+			// have no token to send.
+			if sess != nil && r.URL.Path != "/api/login" && r.URL.Path != "/api/signup" {
 				got := r.Header.Get("X-CSRF-Token")
 				if subtle.ConstantTimeCompare([]byte(got), []byte(sess.CSRF)) != 1 {
 					jsonError(w, "missing or stale CSRF token; reload the page", http.StatusForbidden)
@@ -344,6 +346,20 @@ func authRoutes(mux *http.ServeMux, acc *accounts.Accounts, srv *mcpserver.Serve
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	// account-events streams an "account" event when the sign-up queue
+	// changes (for admins) or the signed-in user's own status does (for
+	// everyone else), so the account and welcome pages update at once.
+	mux.Handle("GET /api/account-events", signedIn(func(w http.ResponseWriter, r *http.Request) {
+		u := accounts.UserFrom(r.Context())
+		want := func(id int64) bool { return id == u.ID }
+		if u.IsAdmin() {
+			want = func(int64) bool { return true }
+		}
+		c, stop := acc.Watch(want)
+		defer stop()
+		stream(w, r, c, "account")
 	}))
 
 	mux.Handle("GET /api/signups", admin(func(w http.ResponseWriter, r *http.Request) {

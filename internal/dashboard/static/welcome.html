@@ -33,9 +33,10 @@
       <span class="head-icon" id="keyIcon"></span>
       <span class="head-name">1. Mess API key</span>
       <span class="head-meta" id="keyMeta"></span>
+      <button class="help" type="button" aria-expanded="false" aria-controls="keyHelp" title="What's this?">?</button>
     </div>
     <div class="form">
-      <p class="note">Your key for the IIIT mess portal. messwa uses it to read your own registrations and QR. It's stored encrypted and never shown again. messwa checks it with the portal before saving, so you need to be on the IIIT network.</p>
+      <p class="note" id="keyHelp" hidden>Your key for the IIIT mess portal. messwa uses it to read your own registrations and QR. It's stored encrypted and never shown again. messwa checks it with the portal before saving, so you need to be on the IIIT network.</p>
       <p class="notice" id="noSecret" hidden>The server has no <code>MESSWA_SECRET_KEY</code>, so it can't store keys yet. Ask an admin to set it.</p>
       <form id="keyForm" class="row">
         <label class="grow">Key<input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your mess API key" required></label>
@@ -50,13 +51,21 @@
       <span class="head-icon" id="waIcon"></span>
       <span class="head-name">2. WhatsApp</span>
       <span class="head-meta" id="waMeta"></span>
+      <button class="help" type="button" aria-expanded="false" aria-controls="waHelp" title="What's this?">?</button>
     </div>
     <div class="form">
-      <p class="note">Link your WhatsApp as a linked device. messwa reads the mess groups with it, and later sells your meals from it when you ask. Your chats, buyers and sales stay private to you. Linking sends no messages.</p>
-      <p id="waStatus" class="note">Checking…</p>
-      <img id="waQR" alt="QR code to scan in WhatsApp, Linked devices" hidden class="pairing-qr">
-      <div class="actions"><button class="btn primary" id="waLink" type="button">Link WhatsApp</button></div>
+      <p class="note" id="waHelp" hidden>Link your WhatsApp as a linked device. messwa reads the mess groups with it, and later sells your meals from it when you ask. Your chats, buyers and sales stay private to you. Linking sends no messages.</p>
+      <p id="waStatus" class="wa-status">Checking…</p>
+      <div class="qr-box" id="qrBox" hidden><img id="waQR" alt="QR code to scan in WhatsApp, Linked devices" class="pairing-qr"></div>
+      <div id="codeBox" class="code-box" hidden>
+        <form id="codeForm" class="row">
+          <label class="grow">Your WhatsApp number<input id="phone" type="tel" autocomplete="tel" placeholder="+91 98765 43210"></label>
+          <button class="btn primary" type="submit" id="codeGo">Get code</button>
+        </form>
+        <div class="pair-code" id="pairCode" hidden></div>
+      </div>
       <p class="err" id="waErr" role="alert" hidden></p>
+      <button class="mode-toggle" type="button" id="modeToggle" hidden>Link with phone number instead</button>
     </div>
   </section>
 

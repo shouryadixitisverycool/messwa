@@ -66,14 +66,14 @@ Each person saves their own mess API key on the account page (`/account.html`, t
 
 **Keys at rest.** Mess API keys are encrypted with AES-256-GCM. The key for that lives in `MESSWA_SECRET_KEY` (64 hex characters, `openssl rand -hex 32`) in `.env`, not in `state/`, so a copy of the state directory alone can't decrypt them. Each encrypted key is bound to its user, so copying it to another account's row doesn't decrypt either. Without `MESSWA_SECRET_KEY` messwa runs, but can't save or read mess keys. If you lose or change it, everyone has to save their key again.
 
-**Passwords and sessions.** Passwords are hashed with argon2id and must be at least 10 characters. Signing in sets an `HttpOnly`, `SameSite=Strict` session cookie that lasts 30 days. Sessions live in the database as SHA-256 hashes. Every change the pages make sends a per-session CSRF token and must come from the dashboard's own origin. Five wrong passwords for one name from one address lock that pair out for a minute. Changing a password signs out your other devices.
+**Passwords and sessions.** Passwords are hashed with argon2id. Any non-empty password works. Signing in sets an `HttpOnly`, `SameSite=Strict` session cookie that lasts 30 days. Sessions live in the database as SHA-256 hashes. Every change the pages make sends a per-session CSRF token and must come from the dashboard's own origin. Five wrong passwords for one name from one address lock that pair out for a minute. Changing a password signs out your other devices.
 
 **Signing up.** Anyone who can reach the dashboard can make an account from the link on the sign-in page (`/signup.html`). A new account lands on `/welcome.html` and can't open anything else until an admin approves it:
 
 1. They save their mess API key. messwa reads today's registrations with it first, so a mistyped key is refused, and saving one needs the IIIT network.
 2. They link their WhatsApp by scanning a QR code, the same way as on the account page.
 3. They ask for approval.
-4. An admin approves or declines them under Sign-up requests on the account page, or with `messwa user approve NAME` / `decline NAME`. The welcome page checks every 20 seconds and moves them to the board once approved.
+4. An admin approves or declines them under Sign-up requests on the account page, or with `messwa user approve NAME` / `decline NAME`. The admin's list and the user's welcome page update the moment either side acts, over server-sent events. The welcome page moves them to the board once approved. Decisions made with the CLI run in another process, so the welcome page catches those within a minute.
 
 Until then the API answers 403 and their MCP tokens don't work. `run` connects a waiting account's WhatsApp only while it pairs, and doesn't reconnect it after a restart until it's approved. Approval connects it and resumes its sell tasks. If you approve from the CLI, that happens the next time the user loads a page, or at the next restart. Declining unlinks the device. A declined account can still sign in, but only to see that it was declined; remove it with `user remove`. One address can sign up five times an hour. Accounts made with `user add` skip all this and start approved.
 
@@ -152,17 +152,17 @@ The MCP tools are `mark_sell_task_sold`, `add_sell_task_buyer`, `mute_sell_task_
 
 ### Settings page
 
-The account page lets everyone edit their own sell-task enable switch, offer groups, prices in posts, repost rules, buyer policy, handoff, negotiation timeout, image payments unsaved chat retention and monthly fee fallback. These settings are stored in that user's database and apply to their next actions and supported live task settings. New users start with conservative selling defaults, including image payments off. File values remain the fallback for the migrated admin. There is no configured phone number or UPI address to migrate: sender identity comes from the user's device and payment prompts use WhatsApp Pay.
+Everyone edits their own selling settings on the OFFER, REPOST and BUYERS tabs: the sell-task switch, offer groups, prices in posts, repost rules, buyer policy, handoff, image payments, unsaved chat retention and the monthly target. These settings are stored in that user's database and apply to their next actions and supported live task settings. New users start with conservative selling defaults, including image payments off. File values remain the fallback for the migrated admin. There is no configured phone number or UPI address to migrate: sender identity comes from the user's device and payment prompts use WhatsApp Pay.
 
-`settings.html` has a YOU tab for everyone and additional tabs for admins. Selling tabs edit that admin's own settings. Market and calendar tabs remain admin-only:
+`settings.html` has YOU, OFFER, REPOST and BUYERS tabs for everyone. The MARKET and CALENDAR tabs change messwa for everyone, so only admins get them:
 
 | Tab | Settings |
 | --- | --- |
-| OFFER | `[mcp] sell_tasks`, `[sell] groups` or `group_count`, `post_gap`, `show_price`, `mention_extras`, with a preview of the group post |
+| OFFER | `[mcp] sell_tasks`, `[sell] groups` or `group_count`, `post_gap`, `show_price`, `mention_extras`, `[sales] monthly_fee`, with a preview of the group post |
 | REPOST | `[sell] repost`, `repost_after`, `repost_messages`, `repost_listings`, `max_reposts` |
-| BUYERS | `[sell] buyers`, `handoff`, `accept_plain_dms`, `accept_payment_images` |
-| MARKET | `[sold]` emojis, closed emojis, words and `admins_count`, `[dedupe] window`, `[dms] retention` |
-| CALENDAR | meal times, `[[seasons]]`, each mess's `veg_only`, `[sales] monthly_fee` |
+| BUYERS | `[sell] buyers`, `handoff`, `accept_plain_dms`, `accept_payment_images`, `[dms] retention` |
+| MARKET | `[sold]` emojis, closed emojis, words and `admins_count`, `[dedupe] window` |
+| CALENDAR | meal times, `[[seasons]]`, each mess's `veg_only` |
 
 Edits wait for SAVE. messwa stores what you save in a `settings` table in the user's private `messwa.db`, on top of `config.toml`: a value equal to the file's isn't stored, so it keeps following the file. Every command reads the saved values when it starts, and `deliver-qr` flags still override them for one run.
 

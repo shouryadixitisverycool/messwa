@@ -29,9 +29,9 @@
 
   <nav class="set-tabs" id="tabs" aria-label="Settings sections" hidden>
     <button class="set-tab on" type="button" data-pane="you"><span class="ic" aria-hidden="true">👤</span>You</button>
-    <button class="set-tab" type="button" data-pane="offer" data-admin hidden><span class="crown" aria-hidden="true">👑</span><span class="ic" aria-hidden="true">📣</span>Offer</button>
-    <button class="set-tab" type="button" data-pane="repost" data-admin hidden><span class="crown" aria-hidden="true">👑</span><span class="ic" aria-hidden="true">🔁</span>Repost</button>
-    <button class="set-tab" type="button" data-pane="buyers" data-admin hidden><span class="crown" aria-hidden="true">👑</span><span class="ic" aria-hidden="true">🤝</span>Buyers</button>
+    <button class="set-tab" type="button" data-pane="offer" data-mine hidden><span class="ic" aria-hidden="true">📣</span>Offer</button>
+    <button class="set-tab" type="button" data-pane="repost" data-mine hidden><span class="ic" aria-hidden="true">🔁</span>Repost</button>
+    <button class="set-tab" type="button" data-pane="buyers" data-mine hidden><span class="ic" aria-hidden="true">🤝</span>Buyers</button>
     <button class="set-tab" type="button" data-pane="market" data-admin hidden><span class="crown" aria-hidden="true">👑</span><span class="ic" aria-hidden="true">✅</span>Market</button>
     <button class="set-tab" type="button" data-pane="calendar" data-admin hidden><span class="crown" aria-hidden="true">👑</span><span class="ic" aria-hidden="true">🗓️</span>Calendar</button>
   </nav>
@@ -76,6 +76,11 @@
       <div class="box row"><div class="lbl">💰 Show price</div><button class="tg" type="button" data-key="sell.show_price" aria-label="Show price"></button></div>
       <div class="box row"><div class="lbl">🍳 List extras</div><button class="tg" type="button" data-key="sell.mention_extras" aria-label="List extras"></button></div>
     </div>
+    <div class="master">
+      <span class="ic" aria-hidden="true">🧾</span>
+      <div class="lbl">Monthly target<small>Sales bar goal when the portal bill can't be read</small></div>
+      <span class="dim">₹</span><input class="num-in" type="number" min="0" step="1" data-key="sales.monthly_fee" aria-label="Monthly target in rupees">
+    </div>
   </section>
 
   <section class="pane" id="repost">
@@ -108,6 +113,7 @@
     <div class="box list">
       <div class="row"><div class="lbl">💬 Buyers who DM without replying<small>"price?", "kadamba lunch available?"</small></div><button class="tg" type="button" data-key="sell.accept_plain_dms" aria-label="Buyers who DM without replying"></button></div>
       <div class="row"><div class="lbl">🖼️ Screenshot counts as paid <span class="tag warn">Unverified</span><small>QR goes out on any image. Check UPI after.</small></div><button class="tg danger" type="button" data-key="sell.accept_payment_images" aria-label="Screenshot counts as paid"></button></div>
+      <div class="row"><div class="lbl">🧹 Forget unsaved DMs after</div><div class="step" data-key="dms.retention" data-unit="h"></div></div>
     </div>
   </section>
 
@@ -123,7 +129,6 @@
     <div class="box list">
       <div class="row"><div class="lbl">🛡️ Count group admins' ticks</div><button class="tg" type="button" data-key="sold.admins_count" aria-label="Count group admins' ticks"></button></div>
       <div class="row"><div class="lbl">🧩 Merge repeat posts within</div><div class="step" data-key="dedupe.window" data-unit="h"></div></div>
-      <div class="row"><div class="lbl">🧹 Forget unsaved DMs after</div><div class="step" data-key="dms.retention" data-unit="h"></div></div>
     </div>
   </section>
 
@@ -142,11 +147,6 @@
     <div class="box">
       <div class="h">Messes<span class="sp"></span><span class="tag" id="messRestart" hidden>Applies on restart</span><span class="leaf">🌿 veg only</span></div>
       <div class="chips" id="messes"></div>
-    </div>
-    <div class="master">
-      <span class="ic" aria-hidden="true">🧾</span>
-      <div class="lbl">Monthly target<small>Sales bar goal when the portal bill can't be read</small></div>
-      <span class="dim">₹</span><input class="num-in" type="number" min="0" step="1" data-key="sales.monthly_fee" aria-label="Monthly target in rupees">
     </div>
   </section>
 

@@ -15,13 +15,35 @@ function showErr(id, e) {
   p.hidden = !e;
 }
 
+// A "?" in a step's header shows or hides that step's explanation.
+for (const b of document.querySelectorAll('.help')) {
+  b.addEventListener('click', () => {
+    const open = b.getAttribute('aria-expanded') !== 'true';
+    b.setAttribute('aria-expanded', String(open));
+    $(b.getAttribute('aria-controls')).hidden = !open;
+  });
+}
+
 let polling = null;
 let waLinked = false;
 let waTimer = null;
 
-// paintWhatsApp shows the link state, and the QR while pairing. It checks
-// every 3 seconds while a QR is up, since the code rotates.
+// The WhatsApp step starts linking as soon as the page opens and starts a
+// new session whenever the last one runs out (they last about 160
+// seconds), so a fresh QR is always up. It checks every 3 seconds, since
+// the QR rotates. The phone-number mode shows a code instead.
+let codeMode = false;
+let declined = false;
+let restarting = false;
+
+async function startLink() {
+  if (restarting || document.hidden) return;
+  restarting = true;
+  try { await send('POST', 'api/whatsapp', {}); } catch (x) { showErr('waErr', x); } finally { restarting = false; }
+}
+
 async function paintWhatsApp() {
+  if (declined) return;
   try {
     const r = await fetch('api/whatsapp', { cache: 'no-store' });
     if (r.status === 401) return toLogin();
@@ -29,21 +51,49 @@ async function paintWhatsApp() {
     if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
     const was = waLinked;
     waLinked = !!d.linked;
-    $('waStatus').textContent = d.linked ? 'Linked.'
-      : d.pairing ? (d.qr ? 'On your phone open WhatsApp, then Settings, Linked devices, Link a device, and scan this.' : 'Getting a QR code…')
-        : 'Not linked yet.';
-    $('waQR').hidden = !d.qr;
-    if (d.qr) $('waQR').src = d.qr;
-    $('waLink').hidden = d.linked;
-    $('waLink').disabled = d.pairing;
     $('waMeta').replaceChildren(d.linked ? el('b', '', 'linked') : el('span', 'red', 'not linked'));
     $('waStep').classList.toggle('done', waLinked);
-    showErr('waErr', d.error ? new Error(d.error) : null);
-    if (d.pairing && !waTimer) waTimer = setInterval(paintWhatsApp, 3000);
-    if (!d.pairing && waTimer) { clearInterval(waTimer); waTimer = null; }
+    $('modeToggle').hidden = d.linked;
+    $('modeToggle').textContent = codeMode ? 'Scan a QR code instead' : 'Link with phone number instead';
+    $('qrBox').hidden = d.linked || codeMode || !d.qr;
+    $('codeBox').hidden = d.linked || !codeMode;
+    if (d.qr) $('waQR').src = d.qr;
+    $('pairCode').hidden = !d.code;
+    if (d.code) $('pairCode').textContent = d.code.length === 8 ? `${d.code.slice(0, 4)}-${d.code.slice(4)}` : d.code;
+    $('waStatus').textContent = d.linked ? 'Linked.'
+      : codeMode
+        ? (d.code ? 'On your phone open WhatsApp, then Settings, Linked devices, Link a device, Link with phone number instead, and type this code.' : 'Enter your number to get a code.')
+        : (d.qr ? 'On your phone open WhatsApp, then Settings, Linked devices, Link a device, and scan this.' : 'Getting a QR code…');
+    showErr('waErr', d.error && !d.linked ? new Error(d.error) : null);
+    if (!d.linked && !d.pairing) startLink();
+    if (!d.linked && !waTimer) waTimer = setInterval(paintWhatsApp, 3000);
+    if (d.linked && waTimer) { clearInterval(waTimer); waTimer = null; }
     if (was !== waLinked) paintAsk(await me());
   } catch (x) { showErr('waErr', x); }
 }
+
+$('modeToggle').addEventListener('click', () => {
+  codeMode = !codeMode;
+  showErr('waErr');
+  paintWhatsApp();
+  if (codeMode) $('phone').focus();
+});
+
+$('codeForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  showErr('waErr');
+  $('codeGo').disabled = true;
+  $('codeGo').textContent = 'Getting code…';
+  try {
+    await send('POST', 'api/whatsapp/code', { phone: $('phone').value });
+  } catch (x) { showErr('waErr', x); }
+  $('codeGo').disabled = false;
+  $('codeGo').textContent = 'Get a new code';
+  paintWhatsApp();
+});
+
+// A hidden tab doesn't start sessions; catch up when it comes back.
+document.addEventListener('visibilitychange', () => { if (!document.hidden && !waLinked) paintWhatsApp(); });
 
 function paintAsk(m) {
   const asked = m.status === 'requested';
@@ -63,7 +113,7 @@ async function paint() {
     return;
   }
   $('who').textContent = `Welcome, ${m.name}`;
-  const declined = m.status === 'declined';
+  declined = m.status === 'declined';
   $('declined').hidden = !declined;
   for (const id of ['keyStep', 'waStep', 'askStep']) $(id).hidden = declined;
   if (declined) return;
@@ -77,8 +127,9 @@ async function paint() {
   const asked = m.status === 'requested';
   paintAsk(m);
 
-  // Check for a decision every 20 seconds while the request is open.
-  if (asked && !polling) polling = setInterval(() => paint().catch(() => {}), 20000);
+  // The server pushes decisions (see listen below). A decision made with
+  // the CLI, in another process, only shows up through this slower check.
+  if (asked && !polling) polling = setInterval(() => paint().catch(() => {}), 60000);
   if (!asked && polling) { clearInterval(polling); polling = null; }
 }
 
@@ -93,15 +144,6 @@ $('keyForm').addEventListener('submit', async (e) => {
   } catch (x) { showErr('keyErr', x); } finally { $('keySave').disabled = false; }
 });
 
-$('waLink').addEventListener('click', async () => {
-  showErr('waErr');
-  $('waLink').disabled = true;
-  try {
-    await send('POST', 'api/whatsapp', {});
-  } catch (x) { showErr('waErr', x); }
-  await paintWhatsApp();
-});
-
 $('ask').addEventListener('click', async () => {
   showErr('askErr');
   try {
@@ -114,4 +156,13 @@ $('logout').addEventListener('click', async () => {
   try { await send('POST', 'api/logout'); } finally { location.href = 'login.html'; }
 });
 
-paint().then(paintWhatsApp).catch(() => {});
+// listen repaints as soon as an admin approves or declines this account.
+// A reconnect repaints too, in case a decision landed while it was down.
+function listen() {
+  if (typeof EventSource === 'undefined') return;
+  const es = new EventSource('api/account-events');
+  es.addEventListener('account', () => paint().catch(() => {}));
+  es.addEventListener('open', () => paint().catch(() => {}));
+}
+
+paint().then(paintWhatsApp).then(listen).catch(() => {});

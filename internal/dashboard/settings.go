@@ -28,11 +28,23 @@ type settingsState struct {
 	Messes   []string        `json:"messes"`
 }
 
-// settingsRoutes adds the admin settings API. Everything on the page acts
-// on the linked WhatsApp account or the shared market view, so members
-// can't read or change it.
+// settingsRoutes adds the settings API. srv and cfg are the signed-in
+// user's own, so the selling settings it saves (see perUserSetting) apply
+// to their WhatsApp only. Members see and save only those; admins also get
+// the shared ones.
 func settingsRoutes(mux *http.ServeMux, cfg *config.Config, srv *mcpserver.Server) {
-	admin := func(h http.HandlerFunc) http.Handler { return requireRole(accounts.Admin, h) }
+	member := func(h http.HandlerFunc) http.Handler { return requireRole(accounts.Member, h) }
+	mine := func(r *http.Request, k string) bool {
+		return perUserSetting(k) || accounts.UserFrom(r.Context()).IsAdmin()
+	}
+	only := func(r *http.Request, m map[string]any) map[string]any {
+		for k := range m {
+			if !mine(r, k) {
+				delete(m, k)
+			}
+		}
+		return m
+	}
 
 	state := func(w http.ResponseWriter, r *http.Request) {
 		saved, err := srv.Settings(r.Context())
@@ -46,9 +58,12 @@ func settingsRoutes(mux *http.ServeMux, cfg *config.Config, srv *mcpserver.Serve
 			return
 		}
 		live := cfg.Live()
-		out := settingsState{Values: live.Values(), Defaults: cfg.File().Values(),
+		out := settingsState{Values: only(r, live.Values()), Defaults: only(r, cfg.File().Values()),
 			Saved: []string{}, Restart: []string{}, Groups: []settingsGroup{}, Meals: []string{}, Messes: []string{}}
 		for _, k := range config.SettingKeys() {
+			if !mine(r, k) {
+				continue
+			}
 			if _, ok := saved[k]; ok {
 				out.Saved = append(out.Saved, k)
 			}
@@ -69,11 +84,11 @@ func settingsRoutes(mux *http.ServeMux, cfg *config.Config, srv *mcpserver.Serve
 		writeJSON(w, r, out)
 	}
 
-	mux.Handle("GET /api/settings", admin(state))
+	mux.Handle("GET /api/settings", member(state))
 
 	// PUT replaces every saved setting: keys left out go back to
 	// config.toml.
-	mux.Handle("PUT /api/settings", admin(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("PUT /api/settings", member(func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Values map[string]json.RawMessage `json:"values"`
 		}
@@ -82,6 +97,12 @@ func settingsRoutes(mux *http.ServeMux, cfg *config.Config, srv *mcpserver.Serve
 		}
 		if in.Values == nil {
 			in.Values = map[string]json.RawMessage{}
+		}
+		for k := range in.Values {
+			if !mine(r, k) {
+				jsonError(w, "only admins change "+k, http.StatusForbidden)
+				return
+			}
 		}
 		if err := srv.SaveSettings(r.Context(), config.Settings(in.Values), accounts.UserFrom(r.Context()).ID); err != nil {
 			jsonError(w, err.Error(), http.StatusBadRequest)

@@ -19,12 +19,22 @@ func TestSettingsAPI(t *testing.T) {
 	}
 	d := startDashboard(t, cfg, st, mcpserver.New(cfg, st, nil), NewHub())
 
+	// Members get only the settings for their own WhatsApp.
 	member := d.as(t, accounts.Member)
-	if res := member.get(t, "/api/settings", nil); res.StatusCode != 403 {
-		t.Fatalf("member GET = %d, want 403", res.StatusCode)
+	var mine settingsState
+	if res := member.get(t, "/api/settings", &mine); res.StatusCode != 200 {
+		t.Fatalf("member GET = %d", res.StatusCode)
 	}
-	if res := member.send(t, "PUT", "/api/settings", map[string]any{"values": map[string]any{}}); res.StatusCode != 403 {
-		t.Fatalf("member PUT = %d, want 403", res.StatusCode)
+	for k := range mine.Values {
+		if !perUserSetting(k) {
+			t.Errorf("member sees %s", k)
+		}
+	}
+	if _, ok := mine.Values["sell.show_price"]; !ok {
+		t.Error("member doesn't see their selling settings")
+	}
+	if res := member.send(t, "PUT", "/api/settings", map[string]any{"values": map[string]any{"dedupe.window": "2h"}}); res.StatusCode != 403 {
+		t.Fatalf("member PUT of a shared setting = %d, want 403", res.StatusCode)
 	}
 	if res := member.get(t, "/settings.html", nil); res.StatusCode != 200 {
 		t.Fatalf("member settings page = %d, want 200", res.StatusCode)
