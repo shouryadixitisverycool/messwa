@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"strconv"
 	"strings"
 )
@@ -14,34 +15,62 @@ CREATE TABLE IF NOT EXISTS market_prices (
 	date   TEXT NOT NULL,
 	meal   TEXT NOT NULL,
 	mess   TEXT NOT NULL,
+	diet   TEXT NOT NULL DEFAULT 'veg',
 	prices TEXT NOT NULL,
 	n      INTEGER NOT NULL,
-	PRIMARY KEY (date, meal, mess)
+	PRIMARY KEY (date, meal, mess, diet)
 );`
 
-// ServingPrices is every stated asking price for one serving of one meal at
-// one mess. Each sell listing counts once, at its latest price; free and
-// unpriced listings and exchanges don't count.
-type ServingPrices struct {
-	Date, Meal, Mess string
-	Prices           []int
+// migratePrices rebuilds a market_prices from before the diet column. The
+// old rows mix veg and non-veg asks, so they go, and the snapshot is
+// taken again from the listings that haven't been pruned yet.
+func migratePrices(db *sql.DB) error {
+	if _, err := db.Exec(`SELECT diet FROM market_prices LIMIT 0`); err == nil {
+		return nil
+	}
+	if _, err := db.Exec(`DROP TABLE market_prices`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(priceSchema); err != nil {
+		return err
+	}
+	return (&Store{db: db}).SnapshotPrices(context.Background(), "")
 }
 
-func (s *Store) livePrices(ctx context.Context, from, to string) (map[[3]string][]int, error) {
-	rows, err := s.boardDB().QueryContext(ctx, `SELECT meal_date, meal, mess, price FROM listings
+// PriceDiet is the diet an asking price counts under: nonveg, egg or veg.
+// A listing that doesn't say is counted as veg, which is what such posts
+// almost always are.
+func PriceDiet(diet string) string {
+	if diet == "nonveg" || diet == "egg" {
+		return diet
+	}
+	return "veg"
+}
+
+// ServingPrices is every stated asking price for one serving of one meal at
+// one mess, for one diet (see PriceDiet). Each sell listing counts once, at
+// its latest price; free and unpriced listings and exchanges don't count.
+type ServingPrices struct {
+	Date, Meal, Mess, Diet string
+	Prices                 []int
+}
+
+func (s *Store) livePrices(ctx context.Context, from, to string) (map[[4]string][]int, error) {
+	rows, err := s.boardDB().QueryContext(ctx, `SELECT meal_date, meal, mess, diet, price FROM listings
 		WHERE kind='sell' AND price > 0 AND meal != '' AND mess != '' AND meal_date >= ? AND meal_date <= ?
 		ORDER BY meal_date, meal, mess, price`, from, to)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := map[[3]string][]int{}
+	out := map[[4]string][]int{}
 	for rows.Next() {
-		var k [3]string
+		var k [4]string
 		var p int
-		if err := rows.Scan(&k[0], &k[1], &k[2], &p); err != nil {
+		if err := rows.Scan(&k[0], &k[1], &k[2], &k[3], &p); err != nil {
 			return nil, err
 		}
+		k[3] = PriceDiet(k[3])
 		out[k] = append(out[k], p)
 	}
 	return out, rows.Err()
@@ -55,9 +84,9 @@ func (s *Store) SnapshotPrices(ctx context.Context, from string) error {
 		return err
 	}
 	for k, ps := range live {
-		if _, err := s.boardDB().ExecContext(ctx, `INSERT INTO market_prices(date,meal,mess,prices,n) VALUES(?,?,?,?,?)
-			ON CONFLICT(date,meal,mess) DO UPDATE SET prices=excluded.prices, n=excluded.n WHERE excluded.n >= market_prices.n`,
-			k[0], k[1], k[2], joinInts(ps), len(ps)); err != nil {
+		if _, err := s.boardDB().ExecContext(ctx, `INSERT INTO market_prices(date,meal,mess,diet,prices,n) VALUES(?,?,?,?,?,?)
+			ON CONFLICT(date,meal,mess,diet) DO UPDATE SET prices=excluded.prices, n=excluded.n WHERE excluded.n >= market_prices.n`,
+			k[0], k[1], k[2], k[3], joinInts(ps), len(ps)); err != nil {
 			return err
 		}
 	}
@@ -71,15 +100,15 @@ func (s *Store) Prices(ctx context.Context, from, to string) ([]ServingPrices, e
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.boardDB().QueryContext(ctx, `SELECT date, meal, mess, prices FROM market_prices WHERE date >= ? AND date <= ?`, from, to)
+	rows, err := s.boardDB().QueryContext(ctx, `SELECT date, meal, mess, diet, prices FROM market_prices WHERE date >= ? AND date <= ?`, from, to)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var k [3]string
+		var k [4]string
 		var csv string
-		if err := rows.Scan(&k[0], &k[1], &k[2], &csv); err != nil {
+		if err := rows.Scan(&k[0], &k[1], &k[2], &k[3], &csv); err != nil {
 			return nil, err
 		}
 		if ps := splitInts(csv); len(ps) > len(all[k]) {
@@ -91,7 +120,7 @@ func (s *Store) Prices(ctx context.Context, from, to string) ([]ServingPrices, e
 	}
 	out := make([]ServingPrices, 0, len(all))
 	for k, ps := range all {
-		out = append(out, ServingPrices{Date: k[0], Meal: k[1], Mess: k[2], Prices: ps})
+		out = append(out, ServingPrices{Date: k[0], Meal: k[1], Mess: k[2], Diet: k[3], Prices: ps})
 	}
 	return out, nil
 }

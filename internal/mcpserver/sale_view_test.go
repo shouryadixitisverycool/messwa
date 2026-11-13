@@ -149,3 +149,26 @@ func TestSaleViewFriend(t *testing.T) {
 		}
 	}
 }
+
+func TestQuietUntil(t *testing.T) {
+	silence := 2 * time.Minute
+	ev := func(at int64, kind string) SaleEvent { return SaleEvent{At: at, Kind: kind} }
+	for _, c := range []struct {
+		name   string
+		events []SaleEvent
+		want   int64
+	}{
+		{"nothing said yet", []SaleEvent{ev(100, store.EventRead)}, 0},
+		{"silence after the last message", []SaleEvent{ev(100, store.EventBotSaid), ev(130, store.EventRead), ev(160, store.EventBotSaid)}, 160 + 120},
+		{"the session limit comes first", []SaleEvent{ev(100, store.EventBotSaid), ev(400, store.EventBotSaid)}, 100 + 360},
+		{"a revival starts the clock again", []SaleEvent{ev(100, store.EventBotSaid), ev(900, store.EventTimedOut), ev(1000, store.EventRevived), ev(1010, store.EventBotSaid)}, 1010 + 120},
+	} {
+		if got := quietUntil(c.events, silence); got != c.want {
+			t.Errorf("%s: got %d, want %d", c.name, got, c.want)
+		}
+	}
+	// A silence longer than the limit stretches the limit to match.
+	if got := quietUntil([]SaleEvent{ev(100, store.EventBotSaid), ev(500, store.EventBotSaid)}, 10*time.Minute); got != 100+600 {
+		t.Errorf("long silence: got %d, want %d", got, 100+600)
+	}
+}

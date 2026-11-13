@@ -33,7 +33,7 @@ type SellEventsIn struct {
 type SellEventOut struct {
 	Task  int64   `json:"task"`
 	At    string  `json:"at"`
-	Kind  string  `json:"kind" jsonschema:"posted, post_failed, joined, read, image, bot_said, agreed, prompt, parked, passed, pass_counter, timed_out, revived, payment, pay_unreadable, recovery, pay_mismatch, qr_sent, told_sold, ticked, ended, prices, or buy_post (the bot messaged someone whose buy post asked for this meal)"`
+	Kind  string  `json:"kind" jsonschema:"posted, post_failed, joined, read, image, bot_said, agreed, prompt, parked, passed, pass_counter, nudged, timed_out, outbid, handed_off, revived, payment, pay_unreadable, recovery, pay_mismatch, qr_sent, told_sold, ticked, ended, prices, or buy_post (the bot messaged someone whose buy post asked for this meal)"`
 	Group string  `json:"group,omitempty" jsonschema:"the group, for posted and post_failed"`
 	Buyer *Person `json:"buyer,omitempty"`
 	// Amount is set for kinds whose number is a price; Count for the rest.
@@ -63,7 +63,7 @@ type SellEventsOut struct {
 }
 
 // priceKinds are the event kinds whose N is paise.
-var priceKinds = []string{store.EventRead, store.EventBotSaid, store.EventAgreed, store.EventPrompt, store.EventPayment, store.EventPayMismatch, store.EventPassCounter, store.EventRevived, store.EventPrices, store.EventSoldByYou}
+var priceKinds = []string{store.EventRead, store.EventBotSaid, store.EventAgreed, store.EventPrompt, store.EventPayment, store.EventPayMismatch, store.EventPassCounter, store.EventNudged, store.EventOutbid, store.EventHandedOff, store.EventRevived, store.EventPrices, store.EventSoldByYou}
 
 func (s *Server) sellTaskEvents(ctx context.Context, req *mcp.CallToolRequest, in SellEventsIn) (*mcp.CallToolResult, SellEventsOut, error) {
 	if _, err := s.sellAdmin(ctx, req); err != nil {

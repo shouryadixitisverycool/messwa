@@ -589,3 +589,26 @@ a.copy.linked:hover .copy-go { color: var(--gold); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* Shared by the sales page and the sale cards. */
+/* Two range inputs stacked on one track. Only the thumbs take the pointer. */
+.dual { position: relative; height: 28px; }
+.dual .track { position: absolute; left: 9px; right: 9px; top: 11px; height: 6px; border-radius: 3px; background: #0c0f14; box-shadow: 0 0 0 1px var(--line); }
+.dual .fill { position: absolute; top: 0; bottom: 0; background: linear-gradient(90deg, #ff9f3d, var(--gold)); border-radius: 3px; }
+.dual .med { position: absolute; top: -5px; bottom: -5px; width: 2px; margin-left: -1px; background: var(--text); opacity: .7; border-radius: 1px; }
+.dual input {
+  position: absolute; inset: 0; width: 100%; margin: 0; background: none; pointer-events: none;
+  -webkit-appearance: none; appearance: none; z-index: 2;
+}
+.dual input::-webkit-slider-runnable-track { background: none; height: 28px; }
+.dual input::-moz-range-track { background: none; }
+.dual input::-webkit-slider-thumb {
+  -webkit-appearance: none; pointer-events: auto; cursor: grab; width: 18px; height: 18px; margin-top: 5px;
+  border-radius: 4px; background: var(--gold); border: 2px solid #141923; box-shadow: 0 0 0 1px var(--gold), 0 4px 10px rgba(0, 0, 0, .5);
+}
+.dual input::-moz-range-thumb {
+  pointer-events: auto; cursor: grab; width: 14px; height: 14px;
+  border-radius: 4px; background: var(--gold); border: 2px solid #141923; box-shadow: 0 0 0 1px var(--gold), 0 4px 10px rgba(0, 0, 0, .5);
+}
+.dual input:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(255, 197, 61, .5); }
+.dual input:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(255, 197, 61, .5); }

@@ -30,18 +30,30 @@ func Quantile(xs []int, q float64) float64 {
 const Window = 28 * 24 * time.Hour
 
 // MedianAsk is the median asking price, in rupees, for meal at mess on
-// date, from ps (servings within Window before date). It tries, needing
-// MinAsks each: that serving at that mess; the same weekday's meal at that
-// mess, which catches menus that always go for more; that serving at every
-// mess; then any ask for that meal. False when there is none.
-func MedianAsk(ps []store.ServingPrices, date, meal, mess string) (float64, bool) {
+// date in diet (veg, egg or nonveg; empty for any), from ps (servings
+// within Window before date). It tries, needing MinAsks each: that serving
+// at that mess; the same weekday's meal at that mess, which catches menus
+// that always go for more; that serving at every mess; then any ask for
+// that meal. Only asks for the same diet count, since non-veg goes for
+// two or three times veg. With none in that diet it tries every diet.
+// False when there is none.
+func MedianAsk(ps []store.ServingPrices, date, meal, mess, diet string) (float64, bool) {
+	if diet != "" {
+		if v, ok := medianAsk(ps, date, meal, mess, store.PriceDiet(diet)); ok {
+			return v, true
+		}
+	}
+	return medianAsk(ps, date, meal, mess, "")
+}
+
+func medianAsk(ps []store.ServingPrices, date, meal, mess, diet string) (float64, bool) {
 	day, err := time.Parse("2006-01-02", date)
 	if err != nil {
 		return 0, false
 	}
 	var serving, weekday, pooled, recent []int
 	for _, p := range ps {
-		if p.Meal != meal {
+		if p.Meal != meal || diet != "" && p.Diet != diet {
 			continue
 		}
 		d, err := time.Parse("2006-01-02", p.Date)
