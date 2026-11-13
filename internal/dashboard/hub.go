@@ -41,15 +41,21 @@ func (h *Hub) subscribe() (<-chan struct{}, func()) {
 	}
 }
 
-// events streams a "change" event each time the hub fires. Changes that
-// land close together, such as a post and its copies in other groups, go out
-// as one event.
+// events streams a "change" event each time the hub fires.
 func (h *Hub) events(w http.ResponseWriter, r *http.Request) {
+	c, done := h.subscribe()
+	defer done()
+	stream(w, r, c, "change")
+}
+
+// stream sends an SSE event named name each time c signals, and a ping
+// every 20 seconds so proxies keep the connection open. Signals that land
+// close together, such as a post and its copies in other groups, go out as
+// one event.
+func stream(w http.ResponseWriter, r *http.Request, c <-chan struct{}, name string) {
 	rc := http.NewResponseController(w)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
-	c, done := h.subscribe()
-	defer done()
 	fmt.Fprint(w, "retry: 3000\n\n")
 	if err := rc.Flush(); err != nil {
 		return
@@ -72,7 +78,7 @@ func (h *Hub) events(w http.ResponseWriter, r *http.Request) {
 			case <-c:
 			default:
 			}
-			msg = "event: change\ndata: \n\n"
+			msg = "event: " + name + "\ndata: \n\n"
 		}
 		if _, err := fmt.Fprint(w, msg); err != nil {
 			return

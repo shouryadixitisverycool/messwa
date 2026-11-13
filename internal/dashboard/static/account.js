@@ -99,9 +99,17 @@ $('tokForm').addEventListener('submit', async (e) => {
 
 // Admins approve or decline sign-ups here. Requests come first, then
 // accounts still setting up.
+let signupEvents = null;
+
 async function loadSignups() {
   const m = await me();
   if (m.role !== 'admin') return;
+  // The server pushes an event whenever someone signs up, asks, or is
+  // decided on, and the list reloads right away.
+  if (!signupEvents && typeof EventSource !== 'undefined') {
+    signupEvents = new EventSource('api/account-events');
+    signupEvents.addEventListener('account', () => loadSignups().catch(() => {}));
+  }
   const r = await fetch('api/signups', { cache: 'no-store' });
   if (!r.ok) return;
   const us = await r.json();

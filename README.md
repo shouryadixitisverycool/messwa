@@ -73,7 +73,7 @@ Each person saves their own mess API key on the account page (`/account.html`, t
 1. They save their mess API key. messwa reads today's registrations with it first, so a mistyped key is refused, and saving one needs the IIIT network.
 2. They link their WhatsApp by scanning a QR code, the same way as on the account page.
 3. They ask for approval.
-4. An admin approves or declines them under Sign-up requests on the account page, or with `messwa user approve NAME` / `decline NAME`. The welcome page checks every 20 seconds and moves them to the board once approved.
+4. An admin approves or declines them under Sign-up requests on the account page, or with `messwa user approve NAME` / `decline NAME`. The admin's list and the user's welcome page update the moment either side acts, over server-sent events. The welcome page moves them to the board once approved. Decisions made with the CLI run in another process, so the welcome page catches those within a minute.
 
 Until then the API answers 403 and their MCP tokens don't work. `run` connects a waiting account's WhatsApp only while it pairs, and doesn't reconnect it after a restart until it's approved. Approval connects it and resumes its sell tasks. If you approve from the CLI, that happens the next time the user loads a page, or at the next restart. Declining unlinks the device. A declined account can still sign in, but only to see that it was declined; remove it with `user remove`. One address can sign up five times an hour. Accounts made with `user add` skip all this and start approved.
 

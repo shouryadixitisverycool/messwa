@@ -127,8 +127,9 @@ async function paint() {
   const asked = m.status === 'requested';
   paintAsk(m);
 
-  // Check for a decision every 20 seconds while the request is open.
-  if (asked && !polling) polling = setInterval(() => paint().catch(() => {}), 20000);
+  // The server pushes decisions (see listen below). A decision made with
+  // the CLI, in another process, only shows up through this slower check.
+  if (asked && !polling) polling = setInterval(() => paint().catch(() => {}), 60000);
   if (!asked && polling) { clearInterval(polling); polling = null; }
 }
 
@@ -155,4 +156,13 @@ $('logout').addEventListener('click', async () => {
   try { await send('POST', 'api/logout'); } finally { location.href = 'login.html'; }
 });
 
-paint().then(paintWhatsApp).catch(() => {});
+// listen repaints as soon as an admin approves or declines this account.
+// A reconnect repaints too, in case a decision landed while it was down.
+function listen() {
+  if (typeof EventSource === 'undefined') return;
+  const es = new EventSource('api/account-events');
+  es.addEventListener('account', () => paint().catch(() => {}));
+  es.addEventListener('open', () => paint().catch(() => {}));
+}
+
+paint().then(paintWhatsApp).then(listen).catch(() => {});

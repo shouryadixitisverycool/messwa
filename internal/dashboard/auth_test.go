@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"messwa/internal/accounts"
 	"messwa/internal/config"
@@ -478,4 +480,87 @@ func (d *linkDevice) Link(context.Context) error   { d.linked = true; return nil
 func (d *linkDevice) Unlink(context.Context) error { d.linked = false; return nil }
 func (d *linkDevice) LinkCode(context.Context, string) (string, error) {
 	return "ABCD1234", nil
+}
+
+// events opens path as an SSE stream and returns a channel of event names.
+func (c *testClient) events(t *testing.T, path string) <-chan string {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	req, _ := http.NewRequestWithContext(ctx, "GET", c.d.URL+path, nil)
+	res, err := c.Do(req)
+	if err != nil || res.StatusCode != 200 {
+		t.Fatalf("open %s: %v %v", path, err, res)
+	}
+	out := make(chan string, 8)
+	go func() {
+		defer res.Body.Close()
+		sc := bufio.NewScanner(res.Body)
+		for sc.Scan() {
+			if name, ok := strings.CutPrefix(sc.Text(), "event: "); ok {
+				out <- name
+			}
+		}
+	}()
+	return out
+}
+
+func TestAccountEvents(t *testing.T) {
+	cfg := config.Default()
+	st := newTestStore(t)
+	ms := mcpserver.New(cfg, st, nil)
+	ms.Device = &linkDevice{linked: true}
+	d := startDashboard(t, cfg, st, ms, NewHub())
+	admin := d.as(t, accounts.Admin)
+	adminEvents := admin.events(t, "/api/account-events")
+
+	signUp := func(name string) *testClient {
+		jar, _ := cookiejar.New(nil)
+		c := &testClient{Client: &http.Client{Jar: jar}, d: d}
+		res := c.send(t, "POST", "/api/signup", map[string]string{"name": name, "password": "pw"})
+		var me struct{ CSRF string }
+		json.NewDecoder(res.Body).Decode(&me)
+		res.Body.Close()
+		c.csrf = me.CSRF
+		return c
+	}
+	expect := func(ch <-chan string, who string) {
+		t.Helper()
+		select {
+		case name := <-ch:
+			if name != "account" {
+				t.Errorf("%s got event %q", who, name)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("%s got no event", who)
+		}
+	}
+	quiet := func(ch <-chan string, who string) {
+		t.Helper()
+		select {
+		case name := <-ch:
+			t.Errorf("%s got %q for someone else's change", who, name)
+		case <-time.After(400 * time.Millisecond):
+		}
+	}
+
+	asha := signUp("asha")
+	expect(adminEvents, "admin, on sign-up")
+	ashaEvents := asha.events(t, "/api/account-events")
+	ravi := signUp("ravi")
+	expect(adminEvents, "admin, on ravi's sign-up")
+	raviEvents := ravi.events(t, "/api/account-events")
+
+	res := asha.send(t, "PUT", "/api/mess-key", map[string]string{"key": "good-key"})
+	res.Body.Close()
+	res = asha.send(t, "POST", "/api/approval", nil)
+	res.Body.Close()
+	expect(adminEvents, "admin, on request")
+	expect(ashaEvents, "asha, on her own request")
+
+	res = admin.send(t, "POST", "/api/signups/asha/approve", nil)
+	res.Body.Close()
+	expect(ashaEvents, "asha, on approval")
+	expect(adminEvents, "admin, on approval")
+	quiet(raviEvents, "ravi")
 }

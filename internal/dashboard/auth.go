@@ -347,6 +347,20 @@ func authRoutes(mux *http.ServeMux, acc *accounts.Accounts, srv *mcpserver.Serve
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
+	// account-events streams an "account" event when the sign-up queue
+	// changes (for admins) or the signed-in user's own status does (for
+	// everyone else), so the account and welcome pages update at once.
+	mux.Handle("GET /api/account-events", signedIn(func(w http.ResponseWriter, r *http.Request) {
+		u := accounts.UserFrom(r.Context())
+		want := func(id int64) bool { return id == u.ID }
+		if u.IsAdmin() {
+			want = func(int64) bool { return true }
+		}
+		c, stop := acc.Watch(want)
+		defer stop()
+		stream(w, r, c, "account")
+	}))
+
 	mux.Handle("GET /api/signups", admin(func(w http.ResponseWriter, r *http.Request) {
 		us, err := acc.Waiting(r.Context())
 		if err != nil {

@@ -131,6 +131,46 @@ type Accounts struct {
 	dummy     string
 
 	onDecision func(ctx context.Context, id int64)
+
+	watchMu  sync.Mutex
+	watchers map[*watcher]struct{}
+}
+
+type watcher struct {
+	c    chan struct{}
+	want func(id int64) bool
+}
+
+// Watch returns a channel that gets a signal whenever an account that want
+// accepts signs up, asks for approval, or is approved or declined in this
+// process. Signals coalesce: a slow reader gets one for several changes.
+// Call stop when done.
+func (a *Accounts) Watch(want func(id int64) bool) (<-chan struct{}, func()) {
+	w := &watcher{c: make(chan struct{}, 1), want: want}
+	a.watchMu.Lock()
+	if a.watchers == nil {
+		a.watchers = map[*watcher]struct{}{}
+	}
+	a.watchers[w] = struct{}{}
+	a.watchMu.Unlock()
+	return w.c, func() {
+		a.watchMu.Lock()
+		delete(a.watchers, w)
+		a.watchMu.Unlock()
+	}
+}
+
+func (a *Accounts) changed(id int64) {
+	a.watchMu.Lock()
+	defer a.watchMu.Unlock()
+	for w := range a.watchers {
+		if w.want(id) {
+			select {
+			case w.c <- struct{}{}:
+			default:
+			}
+		}
+	}
 }
 
 // OnDecision sets a function that runs after an admin approves or declines
@@ -209,7 +249,11 @@ func (a *Accounts) SignUp(ctx context.Context, name, password, from string) (*Us
 	}
 	a.signups[from] = append(recent, now)
 	a.mu.Unlock()
-	return a.add(ctx, name, password, Member, Pending)
+	u, err := a.add(ctx, name, password, Member, Pending)
+	if err == nil {
+		a.changed(u.ID)
+	}
+	return u, err
 }
 
 func (a *Accounts) add(ctx context.Context, name, password string, role Role, status Status) (*User, error) {
@@ -298,6 +342,9 @@ func (a *Accounts) RequestApproval(ctx context.Context, id int64, whatsappLinked
 	if err == nil && !ok {
 		err = errors.New("your account changed meanwhile; reload the page")
 	}
+	if err == nil {
+		a.changed(id)
+	}
 	return err
 }
 
@@ -317,8 +364,11 @@ func (a *Accounts) decide(ctx context.Context, id int64, to Status) error {
 	if err == nil && !ok {
 		err = errors.New("that account isn't waiting for approval")
 	}
-	if err == nil && a.onDecision != nil {
-		a.onDecision(ctx, id)
+	if err == nil {
+		a.changed(id)
+		if a.onDecision != nil {
+			a.onDecision(ctx, id)
+		}
 	}
 	return err
 }
