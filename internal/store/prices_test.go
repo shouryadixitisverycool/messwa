@@ -91,3 +91,46 @@ func TestDeliveryRecords(t *testing.T) {
 		t.Fatalf("sent %+v", r)
 	}
 }
+
+// A market_prices from before diets is rebuilt from the live listings, with
+// veg and non-veg asks kept apart and posts that don't say counted as veg.
+func TestPricesMigrateToDiets(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "d.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC)
+	for i, l := range []struct {
+		diet  string
+		price int
+	}{{"", 20}, {"veg", 25}, {"nonveg", 70}, {"nonveg", 80}} {
+		if err := s.CreateListing(ctx, &Listing{Seller: string(rune('a' + i)), Kind: "sell", Meal: "dinner", MealDate: "2026-11-02", Mess: "kadamba", Diet: l.diet, Price: l.price, Qty: 1, Text: "x", Norm: "x", FirstSeen: seen, LastSeen: seen}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{`DROP TABLE market_prices`,
+		`CREATE TABLE market_prices (date TEXT NOT NULL, meal TEXT NOT NULL, mess TEXT NOT NULL, prices TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (date, meal, mess))`,
+		`INSERT INTO market_prices VALUES ('2026-11-02','dinner','kadamba','20,25,70,80,90',5)`} {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+	if s, err = Open(path); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ps, err := s.Prices(ctx, "2026-11-01", "2026-11-03")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, p := range ps {
+		got[p.Diet] = joinInts(p.Prices)
+	}
+	if len(got) != 2 || got["veg"] != "20,25" || got["nonveg"] != "70,80" {
+		t.Fatalf("prices after migrating %+v", ps)
+	}
+}

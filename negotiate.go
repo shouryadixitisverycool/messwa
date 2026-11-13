@@ -35,14 +35,19 @@ import (
 // agree or arm below the task's floor.
 
 const (
-	maxSessions    = 10               // buyers negotiating at once
-	maxCounters    = 2                // counter-offers before "the lowest I can do"
-	maxBotMsgs     = 6                // replies a session sends one buyer; a two-message reply counts once
-	replyDebounce  = 2 * time.Second  // a burst of messages gets one reply
-	sessionLimit   = 6 * time.Minute  // one negotiation, start to agreement; never shorter than the silence
+	maxSessions    = 10              // buyers negotiating at once
+	maxCounters    = 2               // counter-offers before "the lowest I can do"
+	maxBotMsgs     = 6               // replies a session sends one buyer; a two-message reply counts once
+	replyDebounce  = 2 * time.Second // a burst of messages gets one reply
+	sessionLimit   = config.NegotiationLimit
 	paidGrace      = 60 * time.Second // "paid" with no WhatsApp Pay payment yet
 	maxOfferFactor = 3                // an "offer" above 3x max_price is not a price
 )
+
+// nudgeAfter is how long a buyer may stay quiet after the bot's first
+// message before it asks "yes or no?", and again after that before it
+// drops the price once and times them out. A reply to either revives them.
+var nudgeAfter = time.Minute
 
 var errSoldDirect = errors.New("a buyer paid before their turn and got the meal")
 
@@ -92,11 +97,12 @@ type haggleState struct {
 	quoted                                    []int
 	saidLowest                                bool
 	passCountered                             bool // see passCounter
+	nudges                                    int  // see quietNudge
 }
 
 func (s haggleState) store(started time.Time) store.Negotiation {
 	n := store.Negotiation{Ask: int64(s.ask) * 100, Rounds: s.rounds, BotMsgs: s.botMsgs, Unknowns: s.unknowns,
-		LastOffer: int64(s.lastOffer) * 100, SaidLowest: s.saidLowest, PassCountered: s.passCountered, StartedAt: started}
+		LastOffer: int64(s.lastOffer) * 100, SaidLowest: s.saidLowest, PassCountered: s.passCountered, Nudges: s.nudges, StartedAt: started}
 	for _, q := range s.quoted {
 		n.Quoted = append(n.Quoted, int64(q)*100)
 	}
@@ -105,7 +111,7 @@ func (s haggleState) store(started time.Time) store.Negotiation {
 
 func haggleFromStore(n store.Negotiation, maxRupees int) haggleState {
 	s := haggleState{ask: int(n.Ask / 100), rounds: n.Rounds, botMsgs: n.BotMsgs, unknowns: n.Unknowns,
-		lastOffer: int(n.LastOffer / 100), saidLowest: n.SaidLowest, passCountered: n.PassCountered}
+		lastOffer: int(n.LastOffer / 100), saidLowest: n.SaidLowest, passCountered: n.PassCountered, nudges: n.Nudges}
 	if s.ask == 0 {
 		s.ask = maxRupees
 	}
@@ -138,6 +144,21 @@ func (h haggle) passCounter(st haggleState) (int, bool) {
 	// Capped like decide's ask, after a range edit lowered max.
 	a := min(st.ask, h.max)
 	if st.passCountered || st.botMsgs == 0 || st.botMsgs >= maxBotMsgs || st.saidLowest || a <= h.min {
+		return 0, false
+	}
+	if a > h.target {
+		return h.target, true
+	}
+	return max(h.min, min(a-h.unit, h.round(float64(a+h.min)/2))), true
+}
+
+// quietDrop is the lower price a buyer hears after staying quiet through
+// the bot's first message and the nudge: the same price passCounter would
+// give, but a later pass still gets its own counter. It reports false when
+// the ask is already at the floor.
+func (h haggle) quietDrop(st haggleState) (int, bool) {
+	a := min(st.ask, h.max)
+	if a <= h.min || st.saidLowest {
 		return 0, false
 	}
 	if a > h.target {
@@ -274,6 +295,9 @@ type session struct {
 	inbox   chan buyerMsg
 	firstID string // the reply that queued them; it may also reach inbox
 	first   string // the text to answer first when a revived session starts
+	// heard is set once the buyer writes after the session started, which
+	// stops the nudges. A revived buyer has written.
+	heard bool
 
 	// Guarded by n.mu.
 	state   string
@@ -337,7 +361,7 @@ func newNegotiation(ctx context.Context, m *sellManager, t store.SellTask, s *sa
 		if ps, err := m.prices(ctx, from, t.Date); err != nil {
 			m.log.Warn("could not read market prices; negotiating toward max_price", "task", t.ID, "err", err)
 		} else {
-			median, have = market.MedianAsk(ps, t.Date, baseMeal(t.Meal), s.mess)
+			median, have = market.MedianAsk(ps, t.Date, baseMeal(t.Meal), s.mess, s.diet)
 		}
 	}
 	n := &negotiation{
@@ -976,7 +1000,15 @@ func (ss *session) run(first string, slot bool) {
 	var batch []string
 	n.mu.Lock()
 	fresh := ss.hs.botMsgs == 0
+	if !ss.revived.IsZero() {
+		ss.heard = true
+	}
 	n.mu.Unlock()
+	// nudge fires while the buyer is quiet after the bot's first message.
+	var nudge <-chan time.Time
+	if ss.nudgeDue() {
+		nudge = time.After(nudgeAfter)
+	}
 	if state == sessionNegotiating && (fresh || strings.TrimSpace(first) != "") {
 		// Restored sessions have no in-memory first message. Open with
 		// the price instead of counting the missing text as unreadable.
@@ -995,6 +1027,10 @@ func (ss *session) run(first string, slot bool) {
 		if ss.current() == sessionNegotiating {
 			limitC, silenceC = limit.C, silence.C
 		}
+		if nudge != nil {
+			// The nudges decide when a quiet buyer times out.
+			silenceC = nil
+		}
 		select {
 		case <-n.talk.Done():
 			return
@@ -1004,6 +1040,10 @@ func (ss *session) run(first string, slot bool) {
 			}
 			batch = append(batch, m.text)
 			debounce = time.After(replyDebounce)
+			n.mu.Lock()
+			ss.heard = true
+			n.mu.Unlock()
+			nudge = nil
 		case <-debounce:
 			debounce = nil
 			texts := batch
@@ -1015,9 +1055,23 @@ func (ss *session) run(first string, slot bool) {
 				release()
 			case handledReplied:
 				silence.Reset(n.silence)
+				if ss.nudgeDue() {
+					nudge = time.After(nudgeAfter)
+				}
 			case handledPaidClaim:
 				if paidWait == nil {
 					paidWait = time.After(paidGrace)
+				}
+			}
+		case <-nudge:
+			nudge = nil
+			switch ss.quietNudge() {
+			case handledEnded:
+				return
+			case handledReplied:
+				silence.Reset(n.silence)
+				if ss.nudgeDue() {
+					nudge = time.After(nudgeAfter)
 				}
 			}
 		case <-silenceC:
@@ -1039,6 +1093,54 @@ func (ss *session) run(first string, slot bool) {
 			}
 		}
 	}
+}
+
+// nudgeDue reports whether the buyer has said nothing since the bot's
+// first message and has a follow-up left: the bot has sent only that
+// message and its nudges.
+func (ss *session) nudgeDue() bool {
+	ss.n.mu.Lock()
+	defer ss.n.mu.Unlock()
+	hs := ss.hs
+	return ss.state == sessionNegotiating && !ss.heard && hs.nudges < 2 && hs.botMsgs == 1+hs.nudges
+}
+
+// quietNudge follows up on a buyer who stayed quiet after the bot's first
+// message. The first time it asks "yes or no?" at the same price. The
+// second time it offers one lower price and times them out, so a late
+// reply revives them at that price.
+func (ss *session) quietNudge() handled {
+	n := ss.n
+	if !ss.nudgeDue() || n.gate.muted(n.talk, ss.buyer) {
+		return handledNothing
+	}
+	n.mu.Lock()
+	hs := ss.hs
+	n.mu.Unlock()
+	next := hs
+	next.quoted = slices.Clone(hs.quoted)
+	next.nudges++
+	if hs.nudges == 0 {
+		if !ss.say(next, sayNudge()) {
+			return handledEnded
+		}
+		n.event(ss.buyer, store.EventNudged, next.ask, "quiet after the first message; asked if they're buying")
+		return handledReplied
+	}
+	k, ok := n.prices().quietDrop(hs)
+	if ok {
+		next.ask = k
+		next.rounds++
+		if !slices.Contains(next.quoted, k) {
+			next.quoted = append(next.quoted, k)
+		}
+		if !ss.say(next, sayQuietDrop(k)) {
+			return handledEnded
+		}
+		n.event(ss.buyer, store.EventNudged, k, fmt.Sprintf("still quiet; dropped from ₹%d to ₹%d", min(hs.ask, n.prices().max), k))
+	}
+	ss.timeOut("went quiet after the first message and a follow-up")
+	return handledEnded
 }
 
 func (ss *session) current() string {

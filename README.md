@@ -915,6 +915,8 @@ After two counters the next one is its lowest. A buyer still below that after th
 
 **Buyers who need you.** The bot stops talking to a buyer, without ending the task, when they send two messages it can't read in a row (it restates its price once first), stay below its lowest, ask to pay some other way a second time, say they paid but no WhatsApp Pay payment arrives within a minute, or reach the limit of 6 replies (a two-message reply counts once). `sell_task_status` lists them under `needs_you` with why, a `wa.me` link, the bot's last price and their last offer. To sell to one of them yourself, cancel the task and use `deliver-qr -peer`. Lowering the floor also lists buyers whose offer it now meets; see [Changing prices](#changing-prices).
 
+**A buyer who goes quiet** after the bot's first message gets two follow-ups. After a minute of silence the bot asks `yes or no?` (or `are you buying?`, `interested?`) at the same price. `yes` agrees to it, and `no` counts as a pass, so it gets the one lower price above. After another quiet minute the bot offers one lower price, worked out like the pass counter (`can do 40 if you want it`), and times them out straight away. If they reply later, the bot picks them up again at that lower price (see below). A buyer who writes anything after the first message gets no follow-ups, and the silence below applies instead. Both follow-ups show in the task's events as `nudged` and count toward the 6-reply limit.
+
 A negotiation times out when the buyer has been quiet for `[sell] negotiation_silence` (10 minutes by default, 1 to 30) after the bot's last message, or after six minutes in all, or the silence if that's longer. At most 10 buyers negotiate at once; the rest wait their turn. Nothing is reserved for a quiet buyer, but they hold one of those 10 slots and count as competition, which slows the price drop.
 
 A buyer who timed out and writes again while the task is active and the meal unsold negotiates again from where they stopped: the bot keeps its last ask, the prices it quoted, their last offer and its message count, so it doesn't open at the full price again and the 6-reply limit still holds. The event log records `revived`. Buyers who passed, were parked or skipped stay out. If the task has sold the meal, a timed-out buyer who writes before the meal ends hears `sold sorry` once. After a cancelled, expired or failed task the bot says nothing, since you may be selling the meal by hand.
@@ -930,6 +932,8 @@ Every DM the bot sends is in `buyer_text.go`. It writes like the sellers in the 
 | Its lowest | `40`, `final offer` |
 | `nv?`, `kadamba?` | `kadamba non-veg for 60` |
 | A message it can't read | `60, want it?` |
+| Quiet for a minute after the first price | `yes or no?` |
+| Still quiet a minute later | `can do 40 if you want it` |
 | Wants to pay another way | `only whatsapp pay sorry` |
 | Agreed while someone else pays | `ok 50`, `someone else is paying rn, if they dont in 2 min its yours` |
 | Outbid during their payment turn | `wait dont pay yet`, `someone offered more, if they dont pay in 2 min ill msg u` |

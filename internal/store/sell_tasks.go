@@ -402,7 +402,7 @@ func (s *Store) IsSellTaskBuyer(ctx context.Context, id int64, peers ...string) 
 // SellTaskBuyers returns buyers in the order they replied.
 func (s *Store) SellTaskBuyers(ctx context.Context, id int64) ([]SellBuyer, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT peer,alt,joined_at,state,amount,coalesce(pay_until,0),
- ask,rounds,bot_msgs,unknowns,last_offer,quoted,said_lowest,pass_countered,coalesce(started_at,0),agreed,coalesce(agreed_at,0),note,refund,
+ ask,rounds,bot_msgs,unknowns,last_offer,quoted,said_lowest,pass_countered,nudges,coalesce(started_at,0),agreed,coalesce(agreed_at,0),note,refund,
  muted_at IS NOT NULL,name
  FROM sell_task_buyers WHERE task_id=? ORDER BY joined_at, rowid`, id)
 	if err != nil {
@@ -415,7 +415,7 @@ func (s *Store) SellTaskBuyers(ctx context.Context, id int64) ([]SellBuyer, erro
 		var joined, until, started, agreed int64
 		var quoted string
 		if err := rows.Scan(&b.Peer, &b.Alt, &joined, &b.State, &b.Amount, &until,
-			&b.Ask, &b.Rounds, &b.BotMsgs, &b.Unknowns, &b.LastOffer, &quoted, &b.SaidLowest, &b.PassCountered, &started, &b.Agreed, &agreed, &b.Note, &b.Refund, &b.Muted, &b.Name); err != nil {
+			&b.Ask, &b.Rounds, &b.BotMsgs, &b.Unknowns, &b.LastOffer, &quoted, &b.SaidLowest, &b.PassCountered, &b.Nudges, &started, &b.Agreed, &agreed, &b.Note, &b.Refund, &b.Muted, &b.Name); err != nil {
 			return nil, err
 		}
 		b.JoinedAt = time.Unix(0, joined)
