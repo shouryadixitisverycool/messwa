@@ -641,6 +641,10 @@ func TestNegotiationNoReviveAfterPass(t *testing.T) {
 		settle()
 		f.conn.emit(dm(buyerA, "not interested"))
 		settle()
+		// The first refusal now gets one lower counter. Refuse that too
+		// before verifying that a buyer who passed cannot revive.
+		f.conn.emit(dm(buyerA, "not interested"))
+		settle()
 		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerPassed {
 			t.Fatalf("A = %+v", b)
 		}

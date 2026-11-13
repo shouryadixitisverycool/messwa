@@ -259,6 +259,9 @@ func (g *taskGate) sendSoldNotice(ctx context.Context, to types.JID, msg *waE2E.
 	if err := g.m.limits.wait(ctx, g.id); err != nil {
 		return whatsmeow.SendResponse{}, err
 	}
+	if g.muted(ctx, to) {
+		return whatsmeow.SendResponse{}, errBuyerMuted
+	}
 	return g.m.send(ctx, to, msg, extra...)
 }
 
