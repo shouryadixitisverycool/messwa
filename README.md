@@ -66,7 +66,7 @@ Each person saves their own mess API key on the account page (`/account.html`, t
 
 **Keys at rest.** Mess API keys are encrypted with AES-256-GCM. The key for that lives in `MESSWA_SECRET_KEY` (64 hex characters, `openssl rand -hex 32`) in `.env`, not in `state/`, so a copy of the state directory alone can't decrypt them. Each encrypted key is bound to its user, so copying it to another account's row doesn't decrypt either. Without `MESSWA_SECRET_KEY` messwa runs, but can't save or read mess keys. If you lose or change it, everyone has to save their key again.
 
-**Passwords and sessions.** Passwords are hashed with argon2id and must be at least 10 characters. Signing in sets an `HttpOnly`, `SameSite=Strict` session cookie that lasts 30 days. Sessions live in the database as SHA-256 hashes. Every change the pages make sends a per-session CSRF token and must come from the dashboard's own origin. Five wrong passwords for one name from one address lock that pair out for a minute. Changing a password signs out your other devices.
+**Passwords and sessions.** Passwords are hashed with argon2id. Any non-empty password works. Signing in sets an `HttpOnly`, `SameSite=Strict` session cookie that lasts 30 days. Sessions live in the database as SHA-256 hashes. Every change the pages make sends a per-session CSRF token and must come from the dashboard's own origin. Five wrong passwords for one name from one address lock that pair out for a minute. Changing a password signs out your other devices.
 
 **Signing up.** Anyone who can reach the dashboard can make an account from the link on the sign-in page (`/signup.html`). A new account lands on `/welcome.html` and can't open anything else until an admin approves it:
 

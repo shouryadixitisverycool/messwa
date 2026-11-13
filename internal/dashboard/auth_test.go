@@ -359,10 +359,10 @@ func TestSignUpAndApproval(t *testing.T) {
 
 	jar, _ := cookiejar.New(nil)
 	c := &testClient{Client: &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, d: d}
-	res := c.send(t, "POST", "/api/signup", map[string]string{"name": "asha", "password": "short"})
+	res := c.send(t, "POST", "/api/signup", map[string]string{"name": "asha", "password": ""})
 	res.Body.Close()
 	if res.StatusCode != http.StatusBadRequest {
-		t.Fatalf("short password: %d", res.StatusCode)
+		t.Fatalf("empty password: %d", res.StatusCode)
 	}
 	res = c.send(t, "POST", "/api/signup", map[string]string{"name": "asha", "password": "asha's password"})
 	var me struct{ CSRF, Status string }

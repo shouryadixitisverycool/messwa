@@ -112,7 +112,9 @@ async function loadSignups() {
   body.replaceChildren();
   if (!us.length) {
     const tr = el('tr');
-    tr.append(el('td', 'dim', 'Nobody is waiting.'));
+    const td = el('td', 'dim empty', 'Nobody is waiting.');
+    td.colSpan = 3;
+    tr.append(td);
     body.append(tr);
     return;
   }
@@ -156,93 +158,148 @@ $('logout').addEventListener('click', async () => {
 
 paintMe().then(() => Promise.all([loadTokens(), loadSignups()])).catch(() => {});
 
+$('waIcon').append(svgEl(icon('coin')));
+$('sellIcon').append(svgEl(icon('ingot')));
+
+let waTimer = null;
+
 async function whatsappStatus() {
   try {
     const response = await fetch('api/whatsapp', { cache: 'no-store' });
     const device = await response.json();
     if (!response.ok) throw new Error(device.error);
     $('waStatus').textContent = device.linked
-      ? device.connected ? 'Linked and connected' : 'Linked, reconnecting'
-      : device.pairing ? 'Scan this QR in WhatsApp > Linked devices' : 'No account linked';
+      ? (device.connected ? 'Linked and connected.' : 'Linked, reconnecting…')
+      : device.pairing
+        ? (device.qr ? 'On your phone open WhatsApp, then Settings, Linked devices, Link a device, and scan this.' : 'Getting a QR code…')
+        : 'Not linked.';
+    $('waMeta').replaceChildren(device.linked ? el('b', '', 'linked') : el('span', 'red', 'not linked'));
     $('waQR').hidden = !device.qr;
     if (device.qr) $('waQR').src = device.qr;
-    $('waLink').disabled = device.linked || device.pairing;
-    $('waUnlink').disabled = !device.linked;
-    showErr('waErr', device.error);
+    $('waLink').hidden = device.linked;
+    $('waLink').disabled = device.pairing;
+    $('waUnlink').hidden = !device.linked;
+    showErr('waErr', device.error ? new Error(device.error) : null);
+    // Poll while the QR is up (it rotates) or the link is settling.
+    const busy = device.pairing || (device.linked && !device.connected);
+    if (busy && !waTimer) waTimer = setInterval(whatsappStatus, 3000);
+    if (!busy && waTimer) { clearInterval(waTimer); waTimer = null; }
   } catch (error) { showErr('waErr', error); }
 }
 
 $('waLink').onclick = async () => {
-  try {
-    await send('POST', 'api/whatsapp', {});
-    await whatsappStatus();
-  } catch (error) { showErr('waErr', error); }
+  showErr('waErr');
+  $('waLink').disabled = true;
+  try { await send('POST', 'api/whatsapp', {}); } catch (error) { showErr('waErr', error); }
+  await whatsappStatus();
 };
 
 $('waUnlink').onclick = async () => {
-  if (!confirm('Unlink your WhatsApp and stop your active sell tasks?')) return;
+  if (!confirm('Unlink your WhatsApp? Your active sell tasks stop.')) return;
   try {
     await send('DELETE', 'api/whatsapp');
     await whatsappStatus();
   } catch (error) { showErr('waErr', error); }
 };
 
-const deviceLabels = {
-  'dms.retention': 'Keep unsaved chat text for this many seconds',
-  'mcp.sell_tasks': 'Enable sell tasks for your agent',
-  'sales.monthly_fee': 'Monthly bill fallback (rupees)',
-  'sell.groups': 'Offer groups (names or JIDs, separated by commas)',
-  'sell.group_count': 'First allowed groups to use (0 to use named groups)',
-  'sell.post_gap': 'Pause between group posts (seconds)',
-  'sell.show_price': 'Show the price in group offers',
-  'sell.mention_extras': 'Mention registered extras in offers',
-  'sell.handoff': 'When to hand the sale over to you',
-  'sell.accept_plain_dms': 'Accept buyers who message without quoting an offer',
-  'sell.buyers': 'Who can buy',
-  'sell.repost': 'Repost active offers',
-  'sell.repost_after': 'Repost after this many seconds (0 to disable timer)',
-  'sell.repost_messages': 'Repost after this many messages (0 to disable)',
-  'sell.repost_listings': 'Repost after this many listings (0 to disable)',
-  'sell.max_reposts': 'Maximum reposts per group',
-  'sell.negotiation_silence': 'Wait for a buyer to reply (seconds)',
-  'sell.accept_payment_images': 'Treat buyer images as payment (unverified)',
-};
+// The settings, grouped and in the order a seller thinks about them. Keys
+// the server sends that aren't listed here go in a last group.
+const deviceGroups = [
+  ['General', [
+    ['mcp.sell_tasks', 'Let your agent start sell tasks over MCP'],
+    ['dms.retention', 'Keep chat text from unsaved numbers for', 's'],
+    ['sales.monthly_fee', 'Monthly bill when the portal is unreachable', '₹'],
+  ]],
+  ['Offers', [
+    ['sell.groups', 'Groups to post in (names or JIDs, comma separated)'],
+    ['sell.group_count', 'Or the first N allowed groups (0 uses the list above)'],
+    ['sell.post_gap', 'Pause between group posts', 's'],
+    ['sell.show_price', 'Show the price in offers'],
+    ['sell.mention_extras', 'Mention registered extras'],
+  ]],
+  ['Reposting', [
+    ['sell.repost', 'Repost offers that are still open'],
+    ['sell.repost_after', 'Repost after (0 turns the timer off)', 's'],
+    ['sell.repost_messages', 'Or after this many new messages (0 for off)'],
+    ['sell.repost_listings', 'Or after this many new listings (0 for off)'],
+    ['sell.max_reposts', 'At most this many reposts per group'],
+  ]],
+  ['Buyers', [
+    ['sell.buyers', 'Who can buy'],
+    ['sell.accept_plain_dms', "Accept buyers who don't quote the offer"],
+    ['sell.handoff', 'Hand the sale over to you'],
+    ['sell.negotiation_silence', 'Wait for a buyer to reply', 's'],
+    ['sell.accept_payment_images', 'Count a buyer\'s image as payment (unverified)'],
+  ]],
+];
 const deviceChoices = {
-  'sell.handoff': [['', 'Automatic'], ['never', 'Automatic'], ['on_reply', 'On first reply'], ['on_agreement', 'After agreeing a price']],
-  'sell.buyers': [['', 'Anyone'], ['anyone', 'Anyone'], ['unsaved_only', 'Unsaved contacts only']],
+  'sell.handoff': [['never', 'Never, sell automatically'], ['on_reply', 'When the buyer first replies'], ['on_agreement', 'Once a price is agreed']],
+  'sell.buyers': [['anyone', 'Anyone'], ['unsaved_only', 'Only numbers not in your contacts']],
 };
 let deviceValues = {};
+
+function settingField(key, title, unit) {
+  const value = deviceValues[key];
+  if (typeof value === 'boolean') {
+    const label = el('label', 'check');
+    const input = el('input');
+    input.type = 'checkbox';
+    input.checked = value;
+    input.dataset.setting = key;
+    label.append(input, el('span', '', title));
+    return label;
+  }
+  const label = el('label', 'field');
+  label.append(el('span', '', title));
+  const choices = deviceChoices[key];
+  let input;
+  if (choices) {
+    input = el('select');
+    for (const [v, t] of choices) input.add(new Option(t, v));
+    input.value = choices.some(([v]) => v === value) ? value : choices[0][0];
+  } else {
+    input = el('input');
+    input.type = typeof value === 'number' ? 'number' : 'text';
+    input.value = Array.isArray(value) ? value.join(', ') : value;
+    if (input.type === 'number') input.min = '0';
+  }
+  input.dataset.setting = key;
+  if (unit) {
+    const wrap = el('div', 'unit');
+    wrap.append(input, el('span', '', unit));
+    label.append(wrap);
+  } else label.append(input);
+  return label;
+}
 
 async function loadDeviceSettings() {
   try {
     const response = await fetch('api/account-settings', { cache: 'no-store' });
-    if (!response.ok) throw new Error('Could not load your selling settings');
+    if (!response.ok) throw new Error('Could not load your selling settings.');
     deviceValues = await response.json();
-    for (const [key, value] of Object.entries(deviceValues)) {
-      const label = document.createElement('label');
-      label.textContent = deviceLabels[key] || key;
-      const choices = deviceChoices[key];
-      const input = document.createElement(choices ? 'select' : 'input');
-      input.dataset.setting = key;
-      if (choices) {
-        for (const [v, title] of choices) input.add(new Option(title, v));
-        input.value = value;
-      } else if (typeof value === 'boolean') {
-        input.type = 'checkbox';
-        input.checked = value;
-      } else {
-        input.type = typeof value === 'number' ? 'number' : 'text';
-        input.value = Array.isArray(value) ? value.join(', ') : value;
-        if (input.type === 'number') input.min = '0';
-      }
-      label.append(input);
-      $('deviceFields').append(label);
+    const seen = new Set();
+    const groups = deviceGroups.map(([name, items]) => [name, items.filter(([k]) => k in deviceValues)]);
+    for (const [, items] of groups) for (const [k] of items) seen.add(k);
+    const rest = Object.keys(deviceValues).filter((k) => !seen.has(k)).map((k) => [k, k]);
+    if (rest.length) groups.push(['Other', rest]);
+    for (const [name, items] of groups) {
+      if (!items.length) continue;
+      const set = el('fieldset', 'settings-group');
+      set.append(el('legend', '', name));
+      const checks = el('div', 'checks');
+      const fields = el('div', 'fields');
+      for (const [k, t, u] of items) (typeof deviceValues[k] === 'boolean' ? checks : fields).append(settingField(k, t, u));
+      if (checks.childElementCount) set.append(checks);
+      if (fields.childElementCount) set.append(fields);
+      $('deviceFields').append(set);
     }
   } catch (error) { showErr('deviceErr', error); }
 }
 
 $('deviceSettings').onsubmit = async (event) => {
   event.preventDefault();
+  showErr('deviceErr');
+  $('deviceOk').hidden = true;
   try {
     const values = {};
     for (const input of $('deviceFields').querySelectorAll('[data-setting]')) {
@@ -250,14 +307,15 @@ $('deviceSettings').onsubmit = async (event) => {
       const old = deviceValues[key];
       values[key] = typeof old === 'boolean' ? input.checked
         : typeof old === 'number' ? Number(input.value)
-          : Array.isArray(old) ? input.value.split(',').map(s => s.trim()).filter(Boolean)
+          : Array.isArray(old) ? input.value.split(',').map((s) => s.trim()).filter(Boolean)
             : input.value;
     }
     await send('PUT', 'api/account-settings', values);
-    showErr('deviceErr');
+    deviceValues = { ...deviceValues, ...values };
+    $('deviceOk').hidden = false;
+    setTimeout(() => { $('deviceOk').hidden = true; }, 3000);
   } catch (error) { showErr('deviceErr', error); }
 };
 
 loadDeviceSettings();
 whatsappStatus();
-setInterval(whatsappStatus, 3000);

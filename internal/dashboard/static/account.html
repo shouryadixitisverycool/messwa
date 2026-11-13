@@ -41,15 +41,32 @@
   </section>
 
   <section class="chest" aria-label="WhatsApp">
-    <div class="chest-head"><span class="head-name">Your WhatsApp account</span></div>
-    <div class="form">
-      <p class="note">Link your own account. Your chats, buyers and sales are private to you. Linking sends no messages.</p>
-      <p id="waStatus">Loading...</p><img id="waQR" alt="Scan in WhatsApp linked devices" hidden class="pairing-qr">
-      <div class="actions"><button class="btn primary" id="waLink" type="button">Link WhatsApp</button><button class="btn" id="waUnlink" type="button">Unlink</button></div>
-      <p class="err" id="waErr" hidden></p>
-      <form id="deviceSettings" class="form"><p class="note">Your selling settings. Durations are seconds. Enable sell tasks only when you want to start them over MCP.</p><div id="deviceFields"></div><button class="btn primary" type="submit">Save settings</button></form>
-      <p class="err" id="deviceErr" hidden></p>
+    <div class="chest-head">
+      <span class="head-icon" id="waIcon"></span>
+      <span class="head-name">WhatsApp</span>
+      <span class="head-meta" id="waMeta"></span>
     </div>
+    <div class="form">
+      <p class="note">Your own WhatsApp, linked as a device. Your chats, buyers and sales are private to you. Linking sends no messages.</p>
+      <p class="wa-status" id="waStatus">Checking…</p>
+      <img id="waQR" alt="QR code to scan in WhatsApp, Linked devices" hidden class="pairing-qr">
+      <div class="actions"><button class="btn primary" id="waLink" type="button">Link WhatsApp</button><button class="btn" id="waUnlink" type="button" hidden>Unlink</button></div>
+      <p class="err" id="waErr" role="alert" hidden></p>
+    </div>
+  </section>
+
+  <section class="chest" aria-label="Selling settings">
+    <div class="chest-head">
+      <span class="head-icon" id="sellIcon"></span>
+      <span class="head-name">Selling settings</span>
+    </div>
+    <form class="form" id="deviceSettings">
+      <p class="note">How your agent sells meals from your WhatsApp. Times are in seconds.</p>
+      <div id="deviceFields" class="settings-groups"></div>
+      <p class="err" id="deviceErr" role="alert" hidden></p>
+      <p class="ok" id="deviceOk" hidden>Saved.</p>
+      <div class="actions"><button class="btn primary" type="submit">Save settings</button></div>
+    </form>
   </section>
 
   <section class="chest" aria-label="Mess API key">
@@ -104,8 +121,8 @@
     <form class="form" id="pwForm">
       <input type="text" name="username" autocomplete="username" id="pwUser" hidden>
       <label>Current password<input id="pwOld" type="password" autocomplete="current-password" required></label>
-      <label>New password<input id="pwNew" type="password" autocomplete="new-password" minlength="10" required></label>
-      <label>New password again<input id="pwAgain" type="password" autocomplete="new-password" minlength="10" required></label>
+      <label>New password<input id="pwNew" type="password" autocomplete="new-password" required></label>
+      <label>New password again<input id="pwAgain" type="password" autocomplete="new-password" required></label>
       <p class="err" id="pwErr" role="alert" hidden></p>
       <p class="ok" id="pwOk" hidden>Password changed. Your other devices are signed out.</p>
       <div class="actions"><button class="btn primary" type="submit">Change password</button></div>

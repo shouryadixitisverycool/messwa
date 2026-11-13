@@ -77,7 +77,7 @@ func TestBox(t *testing.T) {
 func TestLoginAndSessions(t *testing.T) {
 	ctx := context.Background()
 	a := open(t, secret)
-	if _, err := a.Add(ctx, "asha", "short", Member); err == nil {
+	if _, err := a.Add(ctx, "asha", "", Member); err == nil {
 		t.Error("short password accepted")
 	}
 	if _, err := a.Add(ctx, "bad name!", "long enough pw", Member); err == nil {

@@ -100,7 +100,7 @@ type Session struct {
 
 const (
 	sessionTTL    = 30 * 24 * time.Hour
-	minPassword   = 10
+	minPassword   = 1
 	maxPassword   = 256
 	tokenPrefix   = "mwa_"
 	failLimit     = 5
@@ -113,7 +113,7 @@ var (
 	ErrBadLogin    = errors.New("wrong name or password")
 	ErrLocked      = errors.New("too many failed sign-ins; wait a minute")
 	ErrNoSecret    = errors.New("set " + SecretEnv + " (openssl rand -hex 32) to store mess API keys")
-	ErrBadPassword = fmt.Errorf("passwords must be %d to %d characters", minPassword, maxPassword)
+	ErrBadPassword = fmt.Errorf("passwords can't be empty or longer than %d characters", maxPassword)
 	ErrSignUpLimit = errors.New("too many sign-ups from here; try again in an hour")
 	validName      = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,31}$`)
 )
