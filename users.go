@@ -287,6 +287,11 @@ func readSecret(prompt string) (string, error) {
 // empty name means the owner: the first admin, or MESS_API_KEY before any
 // admin exists.
 func userPortal(ctx context.Context, cfg *config.Config, name string) (*portal.Client, error) {
+	if cfg.AccountRoot != "" {
+		c := *cfg
+		c.StateDir = cfg.AccountRoot
+		cfg = &c
+	}
 	st, err := store.Open(cfg.DataDB())
 	if err != nil {
 		return nil, err

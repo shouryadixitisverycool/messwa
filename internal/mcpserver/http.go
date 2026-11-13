@@ -24,7 +24,24 @@ func (s *Server) HTTPHandler(legacy string, anonymous bool) (http.Handler, error
 		return nil, errors.New("mcpserver: HTTPHandler needs SetAccounts")
 	}
 	srv := s.MCP()
-	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
+	h := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
+		if s.AccountServer == nil {
+			return srv
+		}
+		info := mcpauth.TokenInfoFromContext(r.Context())
+		if info == nil {
+			return nil
+		}
+		id, err := strconv.ParseInt(info.UserID, 10, 64)
+		if err != nil {
+			return nil
+		}
+		account, err := s.AccountServer(r.Context(), id)
+		if err != nil {
+			return nil
+		}
+		return account.MCPServer()
+	}, nil)
 
 	// Tokenless requests get a random per-process token, so they pass
 	// through the same verifier and session binding as everyone else.
@@ -37,7 +54,14 @@ func (s *Server) HTTPHandler(legacy string, anonymous bool) (http.Handler, error
 
 	verify := func(ctx context.Context, token string, _ *http.Request) (*mcpauth.TokenInfo, error) {
 		if (anonymous && same(token, internal)) || (legacy != "" && same(token, legacy)) {
-			return &mcpauth.TokenInfo{UserID: ownerID}, nil
+			u, err := s.acc.Owner(ctx)
+			if err != nil {
+				return nil, err
+			}
+			if s.AccountServer == nil {
+				return &mcpauth.TokenInfo{UserID: ownerID}, nil
+			}
+			return &mcpauth.TokenInfo{UserID: strconv.FormatInt(u.ID, 10)}, nil
 		}
 		u, err := s.acc.VerifyToken(ctx, token)
 		if err != nil {

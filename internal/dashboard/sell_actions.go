@@ -10,7 +10,7 @@ import (
 // sellActionRoutes shares the task operations with MCP. Session middleware
 // applies the same origin and CSRF checks as every other dashboard write.
 func sellActionRoutes(mux *http.ServeMux, srv *mcpserver.Server) {
-	mux.Handle("POST /api/sell-action", requireRole(accounts.Admin, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /api/sell-action", requireRole(accounts.Member, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Action string `json:"action"`
 			ID     int64  `json:"id"`
@@ -20,6 +20,10 @@ func sellActionRoutes(mux *http.ServeMux, srv *mcpserver.Server) {
 			Note   string `json:"note"`
 		}
 		if !readJSON(w, r, &in) {
+			return
+		}
+		if !srv.Scoped() && !accounts.UserFrom(r.Context()).IsAdmin() {
+			jsonError(w, "admins only", http.StatusForbidden)
 			return
 		}
 		op, err := srv.SellOperator()

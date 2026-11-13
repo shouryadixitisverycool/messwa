@@ -106,6 +106,7 @@ func Handler(cfg *config.Config, srv *mcpserver.Server, hub *Hub, acc *accounts.
 	regs := newRegCache(acc)
 	authRoutes(mux, acc, regs, "http://"+cfg.MCP.Listen+"/mcp")
 	settingsRoutes(mux, cfg, srv)
+	deviceRoutes(mux, srv)
 	sellActionRoutes(mux, srv)
 
 	mux.Handle("GET /api/events", member(hub.events))
@@ -127,7 +128,7 @@ func Handler(cfg *config.Config, srv *mcpserver.Server, hub *Hub, acc *accounts.
 		}
 		// Meals armed with deliver-qr belong to the linked WhatsApp account.
 		st.Mine = []mine{}
-		if accounts.UserFrom(r.Context()).IsAdmin() {
+		if srv.Scoped() || accounts.UserFrom(r.Context()).IsAdmin() {
 			if st.Mine, err = mineToday(r.Context(), cfg, srv); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return

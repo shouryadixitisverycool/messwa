@@ -28,7 +28,7 @@ type ServingPrices struct {
 }
 
 func (s *Store) livePrices(ctx context.Context, from, to string) (map[[3]string][]int, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT meal_date, meal, mess, price FROM listings
+	rows, err := s.boardDB().QueryContext(ctx, `SELECT meal_date, meal, mess, price FROM listings
 		WHERE kind='sell' AND price > 0 AND meal != '' AND mess != '' AND meal_date >= ? AND meal_date <= ?
 		ORDER BY meal_date, meal, mess, price`, from, to)
 	if err != nil {
@@ -55,7 +55,7 @@ func (s *Store) SnapshotPrices(ctx context.Context, from string) error {
 		return err
 	}
 	for k, ps := range live {
-		if _, err := s.db.ExecContext(ctx, `INSERT INTO market_prices(date,meal,mess,prices,n) VALUES(?,?,?,?,?)
+		if _, err := s.boardDB().ExecContext(ctx, `INSERT INTO market_prices(date,meal,mess,prices,n) VALUES(?,?,?,?,?)
 			ON CONFLICT(date,meal,mess) DO UPDATE SET prices=excluded.prices, n=excluded.n WHERE excluded.n >= market_prices.n`,
 			k[0], k[1], k[2], joinInts(ps), len(ps)); err != nil {
 			return err
@@ -71,7 +71,7 @@ func (s *Store) Prices(ctx context.Context, from, to string) ([]ServingPrices, e
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT date, meal, mess, prices FROM market_prices WHERE date >= ? AND date <= ?`, from, to)
+	rows, err := s.boardDB().QueryContext(ctx, `SELECT date, meal, mess, prices FROM market_prices WHERE date >= ? AND date <= ?`, from, to)
 	if err != nil {
 		return nil, err
 	}

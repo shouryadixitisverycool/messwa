@@ -4,7 +4,7 @@ messwa links to WhatsApp as a companion device (via [whatsmeow](https://github.c
 
 The WhatsApp access limits live in the binary. Ingest drops every chat outside the allowed set before anything touches disk, and WhatsApp MCP tools read only that stored data. Optional portal tools separately read your own registrations and current QR, using the mess API key saved on your messwa account.
 
-By default the `run` service and MCP tools are read-only: no messages, read receipts or presence are sent. Your phone keeps showing messages as unread and notifications don't change. Two things can send, and both are off until you ask for them: the explicitly armed `deliver-qr` command, and sell tasks, which an admin starts over MCP once `[mcp] sell_tasks = true` is set (see [Sell tasks](#sell-tasks)). After a sale, both react ✅ to their own offer posts. `mark-sold` sends only that ✅, after recording a sale you finished yourself.
+By default the `run` service and MCP tools are read-only: no messages, read receipts or presence are sent. Your phone keeps showing messages as unread and notifications don't change. Two things can send, and both are off until you ask for them: the explicitly armed `deliver-qr` command, and sell tasks, which a user starts over MCP after enabling sell tasks on their account page (see [Sell tasks](#sell-tasks)). After a sale, both react ✅ to their own offer posts. `mark-sold` sends only that ✅, after recording a sale you finished yourself.
 
 ## What gets stored
 
@@ -39,17 +39,28 @@ Mess (Kadamba, Yuktahar, Palash, Bakul) and diet (veg, nonveg, egg) are tagged w
 
 Everyone signs in to the dashboard with their own messwa account. There are two roles:
 
-| | Admin | Member |
+| Feature | Admin | Member |
 | --- | --- | --- |
-| Board, market pulse, listing details | yes | yes |
-| `sales.html` | the linked WhatsApp account's sales, buyers, regulars, earnings, plus their own registrations | their own registrations only: eaten, wasted, still open, and what the wasted meals would have fetched |
-| Coins for armed and sold meals on the day track | yes | no |
-| `insights.html`: market analytics, every seller's number and record | yes | no |
-| MCP `my_registrations`, `my_qr` | with their own mess key | with their own mess key |
-| MCP `list_recent_chats`, `read_unsaved_chat` | yes | no |
-| MCP sell tasks (when turned on) | yes | no |
+| Shared board, market pulse and listing details | yes | yes |
+| Own WhatsApp link, QR, status and unlink | yes | yes |
+| Own sales, buyers, regulars, earnings and registrations | yes | yes |
+| Own DMs and saved-contact checks over MCP | yes | yes |
+| Own sell tasks and operator actions, when enabled | yes | yes |
+| Own deliver-qr and mark-sold, through CLI shell access | yes | yes |
+| Own mess key, password, MCP tokens and selling settings | yes | yes |
+| insights.html, including every seller's market record | yes | no |
+| Market and calendar settings | yes | no |
+| Account management | CLI shell access | CLI shell access |
 
-Everything tied to the one linked WhatsApp device belongs to admins: `deliver-qr`, sell tasks, the sales ledger, DMs and saved contacts. `login`, `groups` and `inspect-payment` are CLI-only and need shell access anyway. Make yourself the admin and everyone else a member.
+Each messwa user has zero or one linked WhatsApp account. Open `/account.html`, choose Link WhatsApp, and scan the server-generated QR from WhatsApp's Linked devices screen. The page polls connection status and refreshes the QR while pairing. Unlink stops your active sell tasks and logs your device out. Other users, including admins, cannot read or act on your private data through the dashboard or MCP. Pairing codes are available through `login --user NAME --phone NUMBER`; the dashboard currently supports QR only.
+
+The service starts each user's linked device independently. WhatsApp's reconnect handling and startup retries belong to that client; a failed connection or logout does not stop the service or another account. Users need not belong to every configured group. Group ingest checks the global allowlist separately on each client. The shared group log deduplicates by group JID, message ID and event type, and posts by group JID and message ID.
+
+**Private storage and upgrades.** The first enabled admin at upgrade owns the old `state/session.db`, all existing private rows in `state/messwa.db`, and the old selling settings. A persistent `device_ownership` mapping pins that assignment even after role changes or deletion. Existing task ownership is updated in the same migration transaction. No device keys are copied or moved, so the old device reconnects without linking again. If there is no admin, assignment waits until one exists. Other users use `state/user-ID/session.db` and `state/user-ID/messwa.db`. Account IDs are never reused, including after deletion, so a new user cannot inherit an old user's directory. Back up the complete state directory. Deleted users' private files remain on disk for operator-managed retention, but their sessions and tokens cannot access them.
+
+Only market tables are shared: groups, listings, posts, reactions, the group log, market prices and listing facts. DMs, delivery claims, payment IDs, offers, sell tasks, buyers, negotiations, event journals and settings live in the owner's private database. A task ID or payment ID can occur in two users' databases without referring to the same sale. WhatsApp contact and device keys live in that user's session database.
+
+`login`, `groups`, `inspect-payment`, `deliver-qr`, `mark-sold`, `offer-group` and `release-handoff` accept `--user NAME`. Except for `login`, omitting it selects the first admin for CLI compatibility. Stop the service before opening the same WhatsApp session from a CLI command. Linking and unlinking through the account page work while the service runs.
 
 Each person saves their own mess API key on the account page (`/account.html`, the ACCOUNT button on the board). The key never leaves the server again after that. The page also changes your password and creates and revokes your MCP tokens.
 
@@ -109,11 +120,11 @@ Until the key has moved, the first admin's portal reads (MCP, the sales page, th
 
 Keys: `1`-`5` messes, arrows for pages, `R` `P` `D` `M` `S` `W` for the bottom row, `/` to search. Right click on the diet or meal button, or Shift with `D` or `M`, cycles backwards.
 
-The board shows sellers' names and phone numbers from the groups. From DMs it shows admins only their own sell tasks' buyers (see [My sale](#my-sale)). The sales page below adds the names and numbers of people you sold to, for admins only.
+The board shows sellers' names and phone numbers from the groups. From DMs it shows each user only their own sell tasks' buyers (see [My sale](#my-sale)). The sales page below adds the names and numbers of people you sold to, for that user only.
 
 ### My sale
 
-While a [sell task](#sell-tasks) runs, admins get a MY SALE box above the board, built to read in one look on a phone. It stays 20 minutes after the task ends, so you see how it went. Hovering anything (or opening it) says what it means.
+While a [sell task](#sell-tasks) runs, users get a MY SALE box above the board, built to read in one look on a phone. It stays 20 minutes after the task ends, so you see how it went. Hovering anything (or opening it) says what it means.
 
 - **Glow.** Green: a buyer's pay window is open. Red: a buyer needs you, or sent a picture instead of paying. No glow: the bot has it.
 - **Clock.** Minutes until the meal ends. A ✓ or ✕ once the task is over.
@@ -125,13 +136,15 @@ While a [sell task](#sell-tasks) runs, admins get a MY SALE box above the board,
 
 Tap a buyer for the negotiation as a tug of war: each row is one round, their offer in red and the bot's answer in green, with the bot's lowest at the bottom and the gap between them in red. Below it, the payment steps (armed, paid, read, QR, ✅), with the attempts to read an unreadable payment from your phone. CHAT opens their chat in WhatsApp or Beeper. Tap the clock or the posts for the lowest price over time, each post, and the meal's tries.
 
-Admins can use **MARK SOLD** to record a sale made outside the bot (pick a buyer or enter a phone/name, price and optional note). Confirming stops negotiation, records paid/sent timestamps with payment kind `manual`, marks posts ✅ and gives other eligible buyers the usual sold handling; the chosen buyer gets no message. **ADD BUYER** queues a phone/JID with an optional name and sends the opening quote. Buyer sheets offer **MUTE** (with confirmation) and **UNMUTE**. Muted buyers keep their records and get no task messages, including sold notices or automatic QR delivery. Unmuting resumes handling their next message. Each action appears in the task event log.
+Users can use **MARK SOLD** to record a sale made outside the bot (pick a buyer or enter a phone/name, price and optional note). Confirming stops negotiation, records paid/sent timestamps with payment kind `manual`, marks posts ✅ and gives other eligible buyers the usual sold handling; the chosen buyer gets no message. **ADD BUYER** queues a phone/JID with an optional name and sends the opening quote. Buyer sheets offer **MUTE** (with confirmation) and **UNMUTE**. Muted buyers keep their records and get no task messages, including sold notices or automatic QR delivery. Unmuting resumes handling their next message. Each action appears in the task event log.
 
-The MCP tools are `mark_sell_task_sold`, `add_sell_task_buyer`, `mute_sell_task_buyer` and `unmute_sell_task_buyer`. They require admin access and sell tasks enabled. The dashboard uses the same operations with session and CSRF protection. Live updates preserve forms while you type.
+The MCP tools are `mark_sell_task_sold`, `add_sell_task_buyer`, `mute_sell_task_buyer` and `unmute_sell_task_buyer`. They require your own linked WhatsApp account and sell tasks enabled for your account. The dashboard uses the same operations with session and CSRF protection. Live updates preserve forms while you type.
 
 ### Settings page
 
-`settings.html` has a YOU tab for everyone and five tabs for admins, which change `config.toml`'s settings from the browser:
+The account page lets everyone edit their own sell-task enable switch, offer groups, prices in posts, repost rules, buyer policy, handoff, negotiation timeout, image payments unsaved chat retention and monthly fee fallback. These settings are stored in that user's database and apply to their next actions and supported live task settings. New users start with conservative selling defaults, including image payments off. File values remain the fallback for the migrated admin. There is no configured phone number or UPI address to migrate: sender identity comes from the user's device and payment prompts use WhatsApp Pay.
+
+`settings.html` has a YOU tab for everyone and additional tabs for admins. Selling tabs edit that admin's own settings. Market and calendar tabs remain admin-only:
 
 | Tab | Settings |
 | --- | --- |
@@ -141,7 +154,7 @@ The MCP tools are `mark_sell_task_sold`, `add_sell_task_buyer`, `mute_sell_task_
 | MARKET | `[sold]` emojis, closed emojis, words and `admins_count`, `[dedupe] window`, `[dms] retention` |
 | CALENDAR | meal times, `[[seasons]]`, each mess's `veg_only`, `[sales] monthly_fee` |
 
-Edits wait for SAVE. messwa stores what you save in a `settings` table in `messwa.db`, on top of `config.toml`: a value equal to the file's isn't stored, so it keeps following the file. Every command reads the saved values when it starts, and `deliver-qr` flags still override them for one run.
+Edits wait for SAVE. messwa stores what you save in a `settings` table in the user's private `messwa.db`, on top of `config.toml`: a value equal to the file's isn't stored, so it keeps following the file. Every command reads the saved values when it starts, and `deliver-qr` flags still override them for one run.
 
 Saves made in `run`'s own dashboard apply at once: the next sell task, `sell_task_status` and running tasks' reposts, the sold rule, dedupe, pruning, the sales page target and the insights seasons. Turning sell tasks on or off adds or removes their MCP tools for connected agents. A save made from `messwa dashboard` reaches a running `run` within 30 seconds. Meal times and `veg_only` show APPLIES ON RESTART: `run` builds its listing classifier and meal schedule once, when it starts.
 
@@ -149,7 +162,7 @@ Some things stay in `config.toml`: the listen addresses, `state_dir`, `timezone`
 
 ### My sales
 
-`/sales.html` (the MY SALES button on the board) tracks the meals you sell with `deliver-qr` or a sell task. Members get MY MEALS instead: the same ledger with their own registrations and no sales, regulars, price check or earnings. On the board's day track, a coin and the price replace the meal icon for any meal you sold or armed today.
+`/sales.html` (the MY SALES button on the board) tracks the meals you sell with `deliver-qr` or a sell task. Every user sees only their own sales and registrations. On the board's day track, a coin and the price replace the meal icon for any meal you sold or armed today.
 
 - **Sales ledger.** Days across, meals down, for the last four weeks (arrow keys page by week). A sold slot shows the price, the mess, and the buyer's pixel head. Each buyer always gets the same head. An armed slot drains like a listing until the meal ends. ATE means you used the registration yourself. WASTED means the meal ended unsold and unused. Dashed slots are registered meals that haven't ended. Hovering shows the buyer, their number, when they paid, how fast the QR went out, and the median ask for that meal.
 - **Saved this month.** The green bar is what your sales earned back against this month's mess bill. The striped part after it is what the month's wasted meals would have fetched at the median ask. The bill comes from the portal's `/registrations/bill`, the same read as IIITH-mess-MCP's `get_bill`: availed meals plus the projected cost of meals you're registered for, so it grows as you register. When the portal can't be read, the page uses `sales.monthly_fee` from `config.toml` instead.
@@ -165,7 +178,7 @@ Buyer names are the WhatsApp name on the payment message, or the one stored for 
 
 ### Insights
 
-`/insights.html` is for admins only. It's the INSIGHTS button on the board, which members don't see. It charts the market from `listing_facts`. Listings, posts and reactions are pruned after 14 days, so every hour `run` writes one permanent row per listing whose meal has ended. The first run after upgrading backfills whatever the last 14 days still hold. A row keeps updating for 7 days after its meal, so a late tick or un-tick still counts, and is final after that. Rows are keyed by the listing's first post, so `rebuild` updates them instead of adding copies.
+`/insights.html` is for that user only. It's the INSIGHTS button on the board, which members don't see. It charts the market from `listing_facts`. Listings, posts and reactions are pruned after 14 days, so every hour `run` writes one permanent row per listing whose meal has ended. The first run after upgrading backfills whatever the last 14 days still hold. A row keeps updating for 7 days after its meal, so a late tick or un-tick still counts, and is final after that. Rows are keyed by the listing's first post, so `rebuild` updates them instead of adding copies.
 
 Each weekday has its own menu, so the page treats "Bakul, Tuesday lunch" as one slot across weeks. The filters along the top pick a season, 4, 8 or 12 weeks of it or all of it, a mess and a diet. `?mess=bakul&metric=ask` and the like open a view directly.
 
@@ -190,15 +203,15 @@ To preview without the live service, `messwa dashboard -at "2026-11-02 12:45"` s
 | `meal_schedule` | Now, current/next meal, today's windows |
 | `list_listings` | Listings filtered by kind, status, meal, mess, hours. Default: available sells, last 24h |
 | `get_listing` | One listing with every copy across groups |
-| `list_recent_chats` | DM peers in the last 24h (max 72h): saved or not, new or not, last in/out. No content. Admins only |
-| `read_unsaved_chat` | Message text for one unsaved number. Errors for saved contacts. Admins only |
+| `list_recent_chats` | DM peers in the last 24h (max 72h): saved or not, new or not, last in/out. No content. Your account only |
+| `read_unsaved_chat` | Message text for one unsaved number. Errors for saved contacts. Your account only |
 | `my_registrations` | Live portal registrations for a date range, including cancellation and usage fields. Uses the caller's own mess API key |
 | `my_qr` | Current portal QR as a PNG image. Sensitive; fetch again after token resets. Uses the caller's own mess API key |
-| `start_sell_task` | Only with `[mcp] sell_tasks = true`. Sells one of your registered meals: date, meal, `min_price`, `max_price` in rupees, negotiating in between. Admins only |
-| `sell_task_status` | Only with `sell_tasks` on. One task by id, or the active and last 24 hours' tasks: state, posts, buyers and where each stands in the haggle, buyers who need you, sale. Admins only |
-| `sell_task_events` | Only with `sell_tasks` on. Sell task events in a time window (`since`, `until`) or for one task (`id`), to the second: copies posted or failed, buyers joining, what the bot read and said, prices, payments, QRs, the end. Also each task in the window and its current state. For reviewing a sale or a test run afterwards. Admins only |
-| `cancel_sell_task` | Only with `sell_tasks` on. Stops a task and deletes its group posts, unless `keep_posts` is set. Admins only |
-| `set_sell_task_prices` | Only with `sell_tasks` on. Changes an active task's `min_price` and `max_price` in place, without reposting (see [Changing prices](#changing-prices)). Admins only |
+| `start_sell_task` | Only with `[mcp] sell_tasks = true`. Sells one of your registered meals: date, meal, `min_price`, `max_price` in rupees, negotiating in between. Your account only |
+| `sell_task_status` | Only with `sell_tasks` on. One task by id, or the active and last 24 hours' tasks: state, posts, buyers and where each stands in the haggle, buyers who need you, sale. Your account only |
+| `sell_task_events` | Only with `sell_tasks` on. Sell task events in a time window (`since`, `until`) or for one task (`id`), to the second: copies posted or failed, buyers joining, what the bot read and said, prices, payments, QRs, the end. Also each task in the window and its current state. For reviewing a sale or a test run afterwards. Your account only |
+| `cancel_sell_task` | Only with `sell_tasks` on. Stops a task and deletes its group posts, unless `keep_posts` is set. Your account only |
+| `set_sell_task_prices` | Only with `sell_tasks` on. Changes an active task's `min_price` and `max_price` in place, without reposting (see [Changing prices](#changing-prices)). Your account only |
 
 Every tool except `start_sell_task`, `cancel_sell_task` and `set_sell_task_prices` is read-only, and those three don't exist unless you turn them on.
 
@@ -270,9 +283,10 @@ Needs Go 1.27+. On this server it's at `~/.local/go` (`export PATH=$HOME/.local/
 go build -o messwa .
 cp config.example.toml config.toml
 
-./messwa login                       # asks for your number (pairing code) or Enter for a QR
+./messwa user add -admin <you>       # create your dashboard account first
+./messwa login --user <you>          # scan a QR; --phone NUMBER uses a pairing code
 ./messwa groups                      # copy the mess groups' JIDs into config.toml
-./messwa user add -admin <you>       # your dashboard account
+./messwa user add asha               # another person links their own WhatsApp on /account.html
 ./messwa run                         # serves http://127.0.0.1:8766/mcp
 ```
 
@@ -299,7 +313,7 @@ To serve MCP beyond loopback, set `[mcp] listen` to that address. Every request 
 
 The old systemd unit (`~/.config/systemd/user/messwa.service`) is disabled. Don't run both: WhatsApp allows one connection per linked device.
 
-`/healthz` returns 503 when the WhatsApp connection is down.
+`/healthz` reports service availability. A disconnected user does not make the shared service unhealthy; the account page reports that user's connection status.
 
 ### Log files
 
@@ -777,7 +791,7 @@ contact when selected. Stop `run` before reusing its session.
 
 ```sh
 go build -o messwa .
-# First setup only: copy config.example.toml to config.toml and run messwa login.
+# First setup only: copy config.example.toml to config.toml and create a user and run messwa login --user NAME.
 ./messwa inspect-payment -peer '91XXXXXXXXXX@s.whatsapp.net'
 ```
 

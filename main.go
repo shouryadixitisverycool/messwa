@@ -39,7 +39,7 @@ import (
 const usage = `usage: messwa [-config config.toml] <command>
 
 commands:
-  login [-phone 91XXXXXXXXXX]   link as a WhatsApp companion device (QR, or pairing code with -phone)
+  login --user NAME [-phone 91XXXXXXXXXX]   link as a WhatsApp companion device (QR, or pairing code with -phone)
   user <add|list|passwd|role|disable|enable|remove|mess-key|token|tokens|revoke> ...
                                 manage dashboard accounts and MCP tokens (messwa user help)
   groups                        list your groups and their JIDs, to fill in config.toml
@@ -99,6 +99,24 @@ func main() {
 		fatal(err)
 	}
 	args := flag.Args()[1:]
+	switch flag.Arg(0) {
+	case "groups", "inspect-payment", "offer-group", "release-handoff":
+		name := ""
+		for i := 0; i < len(args); i++ {
+			if args[i] == "--user" || args[i] == "-user" {
+				if i+1 >= len(args) {
+					fatal(errors.New("--user needs a name"))
+				}
+				name = args[i+1]
+				args = append(args[:i], args[i+2:]...)
+				break
+			}
+		}
+		cfg, err = scopeCLI(ctx, cfg, name)
+		if err != nil {
+			fatal(err)
+		}
+	}
 	switch flag.Arg(0) {
 	case "login":
 		err = login(ctx, cfg, log, args)
@@ -174,8 +192,17 @@ func fatal(err error) {
 
 func login(ctx context.Context, cfg *config.Config, log *slog.Logger, args []string) error {
 	fs := flag.NewFlagSet("login", flag.ExitOnError)
+	user := fs.String("user", "", "messwa user to link")
 	phone := fs.String("phone", "", "link with a pairing code for this number instead of a QR code")
 	fs.Parse(args)
+	if *user == "" {
+		return errors.New("login requires --user NAME")
+	}
+	var err error
+	cfg, err = scopeCLI(ctx, cfg, *user)
+	if err != nil {
+		return err
+	}
 	c, err := wa.Open(ctx, cfg, log)
 	if err != nil {
 		return err
@@ -207,6 +234,16 @@ func login(ctx context.Context, cfg *config.Config, log *slog.Logger, args []str
 		mu.Lock()
 		defer mu.Unlock()
 		for _, conv := range hs.Data.GetConversations() {
+			allowed := false
+			for _, g := range cfg.Groups {
+				if g == conv.GetID() {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				continue
+			}
 			for _, e := range c.HistoryGroupEntries(ctx, conv) {
 				if err := enc.Encode(e); err == nil {
 					saved++
@@ -328,7 +365,7 @@ func groups(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 
 func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	if len(cfg.Groups) == 0 {
-		return errors.New("no groups in config; run messwa groups and fill in `groups`")
+		log.Info("no market groups configured; link an account on the dashboard, then configure the allowed groups")
 	}
 	token := ""
 	if cfg.MCP.TokenEnv != "" {
@@ -360,33 +397,21 @@ func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	c, err := wa.Open(ctx, cfg, log)
+
+	hub := dashboard.NewHub()
+	manager := &deviceAccounts{ctx: ctx, cfg: cfg, log: log, st: st, acc: acc, hub: hub, users: map[int64]*deviceAccount{}}
+	defer manager.close()
+	users, err := acc.List(ctx)
 	if err != nil {
 		return err
 	}
-	if !c.LoggedIn() {
-		return errors.New("not linked; run messwa login first")
+	for _, u := range users {
+		if !u.Disabled {
+			if _, err := manager.server(ctx, u.ID); err != nil {
+				log.Error("open user's WhatsApp", "user", u.ID, "err", err)
+			}
+		}
 	}
-	hub := dashboard.NewHub()
-	in := ingest.New(cfg, st)
-	in.OnChange(hub.Notify)
-	c.Ingest(in, st)
-	// Sell tasks share this connection. Resume them before connecting so
-	// replies and payments that arrived while run was down reach them.
-	sell := newSellManager(ctx, cfg, log, st, waConn{c.WA}, c.WA.SendMessage, c.WA.WaitForConnection,
-		func(ctx context.Context, userID int64) (mealPortal, error) {
-			return proxyPortal{stateDir: cfg.StateDir, real: func(ctx context.Context) (mealPortal, error) { return acc.Portal(ctx, userID) }}, nil
-		},
-		newOwnGroupLog(ctx, cfg, st, c))
-	sell.notify = hub.Notify
-	if err := sell.Resume(ctx, cfg.MCP.SellTasks); err != nil {
-		return fmt.Errorf("resume sell tasks: %w", err)
-	}
-	if err := c.WA.Connect(); err != nil {
-		return err
-	}
-	defer c.WA.Disconnect()
-	log.Info("connected to WhatsApp", "groups", len(cfg.Groups), "sell_tasks", cfg.MCP.SellTasks)
 
 	go func() {
 		for t := time.NewTicker(time.Hour); ; {
@@ -403,6 +428,7 @@ func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 			if err := st.Prune(ctx, now.Add(-cfg.Live().DMs.Retention.Duration), now.Add(-14*24*time.Hour)); err != nil {
 				log.Error("prune", "err", err)
 			}
+			manager.prune(ctx, now)
 			select {
 			case <-ctx.Done():
 				t.Stop()
@@ -412,13 +438,13 @@ func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		}
 	}()
 
-	ms := mcpserver.New(cfg, st, c)
+	ms := mcpserver.New(cfg, st, nil)
 	ms.SetAccounts(acc)
 	// The sell tools come and go with the sell_tasks setting.
-	ms.SetSellTasks(sell)
+	ms.AccountServer = manager.server
 	go reloadSettings(ctx, log, ms)
 	if dashLn != nil {
-		go serve(ctx, log, dashLn, dashboard.Handler(cfg, ms, hub, acc))
+		go serve(ctx, log, dashLn, dashboard.AccountHandler(cfg, ms, hub, acc, manager.server))
 		log.Info("serving dashboard", "url", "http://"+cfg.Dash.Listen+"/")
 	}
 	// Tokenless requests act as the owner, as before accounts, but only on
@@ -431,10 +457,6 @@ func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", h)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		if !c.WA.IsConnected() {
-			http.Error(w, "whatsapp disconnected", http.StatusServiceUnavailable)
-			return
-		}
 		fmt.Fprintln(w, "ok")
 	})
 	hs := &http.Server{Addr: cfg.MCP.Listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
@@ -506,7 +528,10 @@ func dashboardCmd(ctx context.Context, cfg *config.Config, log *slog.Logger, arg
 		ms.SetClock(func() time.Time { return time.Now().Add(offset) })
 	}
 	fmt.Printf("dashboard on http://%s/\n", *listen)
-	return serve(ctx, log, ln, dashboard.Handler(cfg, ms, dashboard.NewHub(), acc))
+	hub := dashboard.NewHub()
+	manager := &deviceAccounts{ctx: ctx, cfg: cfg, log: log, st: st, acc: acc, hub: hub, users: map[int64]*deviceAccount{}, readOnly: true, clock: ms.Now}
+	defer manager.close()
+	return serve(ctx, log, ln, dashboard.AccountHandler(cfg, ms, hub, acc, manager.server))
 }
 
 // openAccounts opens the account service and moves MESS_API_KEY onto the

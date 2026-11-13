@@ -33,7 +33,7 @@ type MarketSale struct {
 // allows it) and their "sold" reply or edit. Buy orders that went through
 // aren't sales.
 func (s *Store) Market(ctx context.Context, rule SoldRule, since, until time.Time) ([]MarketPost, []MarketSale, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT p.ts, l.id, l.mess, l.diet, l.kind, l.price FROM posts p JOIN listings l ON l.id=p.listing_id
+	rows, err := s.boardDB().QueryContext(ctx, `SELECT p.ts, l.id, l.mess, l.diet, l.kind, l.price FROM posts p JOIN listings l ON l.id=p.listing_id
 		WHERE p.ts >= ? AND p.ts <= ? AND l.mess != ''
 		AND NOT EXISTS (SELECT 1 FROM group_log g WHERE g.chat=p.chat AND g.id=p.id AND g.type='post' AND g.reply_to != '')
 		ORDER BY p.ts`, since.Unix(), until.Unix())
@@ -78,7 +78,7 @@ func (s *Store) Market(ctx context.Context, rule SoldRule, since, until time.Tim
 		WHERE l.kind != 'buy' AND l.mess != '' AND l.last_seen >= ? AND l.first_seen <= ?)
 	WHERE at >= ? AND at <= ? ORDER BY at`
 	args := append(toAny(sold), since.Add(-24*time.Hour).Unix(), until.Unix(), since.Unix(), until.Unix())
-	rows, err = s.db.QueryContext(ctx, q, args...)
+	rows, err = s.boardDB().QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, nil, err
 	}

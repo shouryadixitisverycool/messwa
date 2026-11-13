@@ -1122,11 +1122,7 @@ paintSettingsIcon();
 me().then((m) => {
   userLink(m);
   $('insLink').hidden = m.role !== 'admin';
-  // Sales belong to the linked WhatsApp account; members get their meals.
-  if (m.role !== 'admin') {
-    $('salesLabel').textContent = 'My meals';
-    $('salesLink').title = 'Your registrations: eaten, wasted and still open';
-  }
+
 }).catch(() => {});
 $('pulseIcon').append(svgEl(icon('chart')));
 layout();

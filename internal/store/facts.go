@@ -112,13 +112,13 @@ func (s *Store) SnapshotFacts(ctx context.Context, rule SoldRule, now time.Time)
 	args = append(args, toAny(closed)...)
 	args = append(args, toAny(sold)...)
 	args = append(args, now.Add(-FactsFreeze).Unix())
-	_, err := s.db.ExecContext(ctx, q, args...)
+	_, err := s.boardDB().ExecContext(ctx, q, args...)
 	return err
 }
 
 // Facts returns every fact for meals dated from..to, inclusive.
 func (s *Store) Facts(ctx context.Context, from, to string) ([]Fact, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT seller,seller_name,kind,meal,meal_date,mess,diet,wants,price,qty,
+	rows, err := s.boardDB().QueryContext(ctx, `SELECT seller,seller_name,kind,meal,meal_date,mess,diet,wants,price,qty,
 		first_seen,last_seen,meal_end,coalesce(sold_at,0),closed,deleted,posts,groups,other_ticks
 		FROM listing_facts WHERE meal_date >= ? AND meal_date <= ? ORDER BY meal_end, first_seen`, from, to)
 	if err != nil {
@@ -145,7 +145,7 @@ func (s *Store) Facts(ctx context.Context, from, to string) ([]Fact, error) {
 // FirstFactDate is the earliest meal date with a fact, or "" when there are none.
 func (s *Store) FirstFactDate(ctx context.Context) (string, error) {
 	var d string
-	err := s.db.QueryRowContext(ctx, `SELECT coalesce(min(meal_date), '') FROM listing_facts`).Scan(&d)
+	err := s.boardDB().QueryRowContext(ctx, `SELECT coalesce(min(meal_date), '') FROM listing_facts`).Scan(&d)
 	return d, err
 }
 
@@ -161,7 +161,7 @@ type FactTotal struct {
 
 // FactTotals returns the totals for every meal date up to to, oldest first.
 func (s *Store) FactTotals(ctx context.Context, to string) ([]FactTotal, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT meal_date, mess, diet,
+	rows, err := s.boardDB().QueryContext(ctx, `SELECT meal_date, mess, diet,
 		sum(kind != 'buy' AND mess != '' AND deleted = 0),
 		sum(kind != 'buy' AND mess != '' AND deleted = 0 AND sold_at IS NOT NULL),
 		sum(kind = 'buy' AND deleted = 0),
