@@ -29,6 +29,7 @@ var pageRoles = map[string]accounts.Role{
 	"/account.html":  accounts.Member,
 	"/settings.html": accounts.Member,
 	"/insights.html": accounts.Admin,
+	"/usage.html":    accounts.Admin,
 }
 
 // welcomePage is where a new account sets itself up and asks for approval.

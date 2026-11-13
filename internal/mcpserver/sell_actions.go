@@ -5,6 +5,8 @@ import (
 	"errors"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"messwa/internal/store"
 )
 
 // SellOperator is what you can do to a running sell task by hand. The
@@ -19,15 +21,26 @@ type SellOperator interface {
 	MuteBuyer(ctx context.Context, id int64, who string, muted bool) error
 }
 
-// SellOperator returns the sell task actions while sell tasks are on.
-func (s *Server) SellOperator() (SellOperator, error) {
+// SellControl returns what starts, reprices and cancels sell tasks, while
+// sell tasks are on and this account's WhatsApp is linked. The dashboard's
+// sales ledger uses it to sell a meal from its slot.
+func (s *Server) SellControl() (SellTasks, error) {
 	if s.Scoped() && (s.Device == nil || !s.Device.Linked()) {
 		return nil, errors.New("link your WhatsApp account first")
 	}
 	if !s.sellEnabled() {
 		return nil, errors.New("sell tasks are turned off; an admin can turn them on in the dashboard's settings")
 	}
-	op, ok := s.sell.(SellOperator)
+	return s.sell, nil
+}
+
+// SellOperator returns the sell task actions while sell tasks are on.
+func (s *Server) SellOperator() (SellOperator, error) {
+	sell, err := s.SellControl()
+	if err != nil {
+		return nil, err
+	}
+	op, ok := sell.(SellOperator)
 	if !ok {
 		return nil, errors.New("this messwa can't change running sell tasks")
 	}
@@ -95,4 +108,36 @@ func (s *Server) muteSellTaskBuyer(ctx context.Context, req *mcp.CallToolRequest
 
 func (s *Server) unmuteSellTaskBuyer(ctx context.Context, req *mcp.CallToolRequest, in MuteBuyerIn) (*mcp.CallToolResult, SellTaskOut, error) {
 	return s.sellAction(ctx, req, in.ID, func(op SellOperator) error { return op.MuteBuyer(ctx, in.ID, in.Buyer, false) })
+}
+
+// StartFriendSale saves a friend's meal and starts a sell task for it as
+// userID. m.Slot names the meal ("dinner"); the meal gets its own slot so
+// it never touches your own registration. Nothing stays saved when the
+// task can't start. It returns the task id and the slot.
+func (s *Server) StartFriendSale(ctx context.Context, userID int64, m store.FriendMeal, minRupees, maxRupees int) (int64, string, error) {
+	sell, err := s.SellControl()
+	if err != nil {
+		return 0, "", err
+	}
+	if err := s.checkAccount(userID); err != nil {
+		return 0, "", err
+	}
+	m.CreatedAt = s.now()
+	slot, err := s.st.AddFriendMeal(ctx, m)
+	if err != nil {
+		return 0, "", err
+	}
+	id, err := sell.Start(ctx, userID, m.Date, slot, minRupees, maxRupees, "")
+	if err != nil {
+		if derr := s.st.DeleteFriendMeal(context.WithoutCancel(ctx), m.Date, slot); derr != nil {
+			err = errors.Join(err, derr)
+		}
+		return 0, "", err
+	}
+	return id, slot, nil
+}
+
+// FriendMeals lists friends' meals from the date from, without QR images.
+func (s *Server) FriendMeals(ctx context.Context, from string) ([]store.FriendMeal, error) {
+	return s.st.FriendMeals(ctx, from)
 }

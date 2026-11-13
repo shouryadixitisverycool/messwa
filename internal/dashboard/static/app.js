@@ -1118,10 +1118,12 @@ function tickLive() {
 $('logo').append(svgEl(icon('coin')));
 $('navIcon').append(svgEl(icon('ingot')));
 $('insIcon').append(svgEl(icon('chart')));
+$('useIcon').append(svgEl(icon('check')));
 paintSettingsIcon();
 me().then((m) => {
   userLink(m);
   $('insLink').hidden = m.role !== 'admin';
+  $('useLink').hidden = m.role !== 'admin';
 
 }).catch(() => {});
 $('pulseIcon').append(svgEl(icon('chart')));

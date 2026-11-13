@@ -844,6 +844,7 @@ function addDaysISO(date, n) {
 $('logo').append(svgEl(icon('chart')));
 $('navIcon').append(svgEl(icon('prev')));
 $('salesIcon').append(svgEl(icon('coin')));
+$('useIcon').append(svgEl(icon('check')));
 me().then(userLink).catch(() => {});
 $('ovIcon').append(svgEl(icon('paper')));
 $('snIcon').append(svgEl(icon('chart')));

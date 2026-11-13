@@ -24,6 +24,7 @@
       </div>
       <a class="nav-link" href="./" title="Back to the listings"><span id="navIcon"></span>Auction house</a>
       <a class="nav-link" href="insights.html" id="insLink" title="What sells, when, and who's selling" hidden><span id="insIcon"></span>Insights</a>
+      <a class="nav-link" href="usage.html" id="useLink" title="How everyone is using messwa" hidden><span id="useIcon"></span>Usage</a>
       <a class="nav-link" href="account.html" id="accountLink" title="Your account">Account</a>
     </div>
     <span class="live" id="live"><i></i><span id="liveText">connecting</span></span>
@@ -53,10 +54,21 @@
     <div class="slegend">
       <span class="own"><i class="sw s"></i>Sold</span>
       <span class="own"><i class="sw r"></i>Armed, awaiting pay</span>
+      <span class="own"><i class="sw l"></i>Selling</span>
       <span><i class="sw a"></i>Ate it</span>
       <span><i class="sw w"></i>Wasted</span>
       <span><i class="sw u"></i>Registered</span>
     </div>
+  </section>
+
+  <section class="chest own" id="friendSec" hidden aria-label="Friends' meals">
+    <div class="chest-head">
+      <span class="head-icon" id="frIcon"></span>
+      <span class="head-name">Friends' meals</span>
+      <span class="head-meta" id="frMeta"></span>
+      <button class="sell-btn gold fr-add" id="frAdd" type="button">+ Sell a friend's meal</button>
+    </div>
+    <div class="friends" id="friends"></div>
   </section>
 
   <section class="chest" id="regSec" aria-label="Regular buyers">
@@ -89,6 +101,9 @@
   </section>
 </div>
 
+<div class="modal" id="modal" hidden>
+  <div class="sheet sell-sheet" id="sheet" role="dialog" aria-modal="true" aria-label="Sell this meal"></div>
+</div>
 <div class="tip" id="tip" hidden></div>
 </body>
 </html>

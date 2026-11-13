@@ -104,6 +104,7 @@ function render() {
   renderSaved();
   renderLedger();
   if (D.owner) {
+    renderFriends();
     renderRegulars();
     renderPrices();
     renderEarnings();
@@ -267,6 +268,12 @@ function cellNode(date, c) {
       bar.append(i);
       n.append(bar);
     }
+  } else if (c.state === 'selling') {
+    const t = c.task;
+    const p = el('div', 'price range');
+    p.append(el('span', 'r', '₹'), t.min === t.max ? String(t.min) : `${t.min}-${t.max}`);
+    if (c.diet) n.append(span('diet', dietMark(c.diet)));
+    n.append(span('messg', messIcon(c.mess)), p, el('div', 'glint'), el('span', 'sell-tag', 'SELLING'));
   } else if (c.state === 'unknown') {
     n.append(el('div', 'ghost', '?'));
   } else {
@@ -275,6 +282,13 @@ function cellNode(date, c) {
     n.append(g);
     if (c.state === 'ate') n.append(el('span', 'stamp', 'ATE'));
     if (c.state === 'wasted') n.append(el('span', 'stamp', 'WASTED'));
+    if (c.sellable) n.append(el('span', 'sell-tag', 'SELL'));
+  }
+  if (canSell(c)) {
+    n.classList.add('sellable');
+    n.tabIndex = 0;
+    n.setAttribute('role', 'button');
+    n.setAttribute('aria-label', c.task ? `Manage the sale of ${c.meal}: mark sold, edit prices or stop` : `Sell ${c.meal}`);
   }
   return n;
 }
@@ -308,6 +322,7 @@ function cellLines(date, c) {
     lines.push([{ t: 'Waiting for ', c: 'c7' }, { t: rupees(s.amount), c: 'c6' }, { t: ' on WhatsApp Pay', c: 'c8' }]);
     if (s.offer_at) lines.push([{ t: 'Offer sent ', c: 'c7' }, { t: hm(s.offer_at), c: 'c8' }]);
     lines.push([{ t: 'Window closes ', c: 'c7' }, { t: hm(c.end), c: 'ce' }, { t: ` (in ${dur(c.end - now())})`, c: 'c8' }]);
+    if (c.task) lines.push(null, [{ t: 'Click to mark it sold, edit the prices or stop selling.', c: 'lore' }]);
     lines.push({ rar: 'ARMED' + diet, c: 'ce' });
   } else if (c.state === 'handoff') {
     lines.push([{ t: 'Handed to you ', c: 'c7' }, { t: hm(s.armed_at), c: 'c8' }, { t: ' when ', c: 'c7' }, who(s), { t: ' replied', c: 'c7' }]);
@@ -322,10 +337,19 @@ function cellLines(date, c) {
     if (s) lines.push([{ t: `Your offer of ${rupees(s.amount)} to ${s.name || fmtPhone(s.phone) || 'the buyer'} lapsed.`, c: 'c8' }]);
     if (c.ask != null) lines.push([{ t: `Would have fetched about ${rupees(Math.round(c.ask))} at the median ask.`, c: 'lore' }]);
     lines.push({ rar: 'WASTED' + diet, c: 'cc' });
+  } else if (c.state === 'selling') {
+    const t = c.task;
+    lines.push([{ t: 'Selling now for ', c: 'c7' }, { t: t.min === t.max ? rupees(t.min) : `${rupees(t.min)}-${rupees(t.max)}`, c: 'c6' }]);
+    const a = askLine('Median ask ');
+    if (a) lines.push(a);
+    lines.push([{ t: 'Window closes ', c: 'c7' }, { t: hm(c.end), c: 'ce' }, { t: ` (in ${dur(c.end - now())})`, c: 'c8' }]);
+    lines.push(null, [{ t: 'Click to mark it sold, edit the prices or stop selling.', c: 'lore' }]);
+    lines.push({ rar: 'SELLING' + diet, c: 'c6' });
   } else if (c.state === 'open') {
     lines.push([{ t: now() >= c.start ? 'Being served now. Still yours to sell.' : 'Registered. Not sold yet.', c: 'c7' }]);
     const a = askLine('Median ask ');
     if (a) lines.push(a);
+    if (canSell(c)) lines.push(null, [{ t: 'Click to put it up for sale.', c: 'lore' }]);
     lines.push({ rar: 'REGISTERED' + diet, c: 'c8' });
   } else {
     lines.push([{ t: "The portal couldn't be read, so this could be eaten, wasted or not registered.", c: 'c8' }]);
@@ -339,6 +363,474 @@ $('lgrid').addEventListener('pointerover', (e) => {
   const n = e.target.closest('.cell');
   if (n && n.dataset.k !== pickedCell) pickCell(n.dataset.k);
 });
+const sellTarget = (e) => {
+  const n = e.target.closest('.cell.sellable');
+  return n && ledgerCells.get(n.dataset.k);
+};
+$('lgrid').addEventListener('click', (e) => {
+  const hit = sellTarget(e);
+  if (hit) openSell(...hit);
+});
+$('lgrid').addEventListener('keydown', (e) => {
+  const hit = (e.key === 'Enter' || e.key === ' ') && sellTarget(e);
+  if (hit) { e.preventDefault(); openSell(...hit); }
+});
+
+// ---------- selling from the ledger ----------
+
+// canSell: the meal being served now or the next one, while it's still
+// open, or any meal with a task running (to mark sold, reprice or stop it).
+const canSell = (c) => D.owner && (c.task != null || (c.state === 'open' && c.sellable));
+
+const modal = $('modal');
+const sheet = $('sheet');
+let sellOpen = '';   // "date|meal" the sell menu is for
+function closeModal() { modal.hidden = true; sheet.replaceChildren(); sellOpen = ''; }
+modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+
+// sellBounds is the slider's scale: wide enough for the median ask with
+// room to haggle above it.
+function sellBounds(c) {
+  const top = Math.max(150, c.ask ? Math.ceil((c.ask * 2.5) / 50) * 50 : 0, c.task ? Math.ceil(c.task.max / 50) * 50 : 0);
+  return { lo: 10, hi: top };
+}
+
+// sellDefaults opens a new sale a little under the median ask and asks a
+// quarter above it, or the running task's range.
+function sellDefaults(c, b) {
+  if (c.task) return [c.task.min, c.task.max];
+  if (c.ask == null) return [40, 80];
+  const r5 = (v) => Math.max(b.lo, Math.min(b.hi, Math.round(v / 5) * 5));
+  return [r5(c.ask * 0.85), r5(c.ask * 1.25)];
+}
+
+// Buyer states as the sell menu words them.
+const BUYER_WORD = {
+  queued: 'waiting', negotiating: 'haggling', agreed: 'agreed, waiting to pay', offered: 'asked to pay', passed: 'passed',
+  timed_out: 'timed out', bought: 'bought it', skipped: 'skipped', told_sold: 'told sold', parked: 'needs you', handed_off: 'handed to you',
+};
+const priceText = (t) => (t.min === t.max ? rupees(t.min) : `${rupees(t.min)}-${rupees(t.max)}`);
+const buyerName = (b) => b.name || fmtPhone(b.phone) || b.key;
+
+// openSell opens the sell menu for a ledger cell. A meal with no task goes
+// straight to the price range; a running task opens on its overview, with
+// views to mark it sold or edit its prices.
+function openSell(date, c, view = 'menu') {
+  hideTip();
+  sellOpen = `${date}|${c.meal}`;
+  const t = c.task;
+  const head = el('div', 'sell-head');
+  const h = el('h2', '', `${t ? 'Selling' : 'Sell'} ${messName(c.mess)} ${c.meal}${c.friend != null ? ` for ${c.friend || 'a friend'}` : ''}`);
+  h.id = 'sellTitle';
+  h.style.setProperty('color', messColor(c.mess));
+  const live = now() >= c.start;
+  head.append(h, el('div', 'sub', `${fmtDay(date)}, ${hm(c.start)}-${hm(c.end)} · ${live ? `ends in ${dur(c.end - now())}` : `starts in ${dur(c.start - now())}`}`));
+  sheet.setAttribute('aria-labelledby', 'sellTitle');
+  sheet.replaceChildren(head);
+  if (!t) priceView(date, c);
+  else if (view === 'prices') priceView(date, c);
+  else if (view === 'sold') soldView(date, c);
+  else menuView(date, c);
+  modal.hidden = false;
+  const first = sheet.querySelector('[data-focus]') || sheet.querySelector('input, select, button');
+  if (first) first.focus();
+}
+
+// sellParts are the pieces every view shares: the error line and a row of
+// buttons, and run, which sends one action and closes on success.
+function sellParts() {
+  const error = el('p', 'sell-err');
+  error.setAttribute('role', 'alert');
+  if (D.sell_off) error.textContent = D.sell_off;
+  const acts = el('div', 'sell-acts');
+  const btn = (label, cls, fn) => {
+    const x = el('button', 'sell-btn ' + cls, label);
+    x.type = 'button';
+    x.addEventListener('click', fn);
+    if (D.sell_off && (cls === 'gold' || cls === 'red')) x.disabled = true;
+    return x;
+  };
+  const run = async (body, done) => {
+    const btns = [...sheet.querySelectorAll('button')];
+    for (const k of btns) k.disabled = true;
+    error.textContent = '';
+    try {
+      await send('POST', 'api/sell-action', body);
+      closeModal();
+      toast(done);
+      load();
+    } catch (err) {
+      error.textContent = err.message;
+      for (const k of btns) k.disabled = false;
+    }
+  };
+  return { error, acts, btn, run };
+}
+
+function menuView(date, c) {
+  const t = c.task;
+  const { error, acts, btn, run } = sellParts();
+  const sum = el('div', 'sell-sum');
+  const stat = (k, v, cls) => { const d = el('div', 'st'); d.append(el('span', '', k), el('b', cls || '', v)); return d; };
+  const talking = t.buyers.filter((b) => ['queued', 'negotiating', 'agreed', 'offered', 'parked'].includes(b.state));
+  sum.append(stat('PRICE', priceText(t), 'gold'), stat('BUYERS', `${talking.length} active`), stat('ENDS', hm(c.end)));
+
+  const list = el('ul', 'sell-buyers');
+  list.setAttribute('aria-label', 'Buyers');
+  if (!t.buyers.length) list.append(el('li', 'none', 'No replies yet.'));
+  for (const b of t.buyers) {
+    const li = el('li');
+    li.append(el('span', 'who', buyerName(b)), el('span', 'what', (b.muted ? 'muted · ' : '') + (BUYER_WORD[b.state] || b.state)),
+      el('span', 'amt', b.price ? rupees(b.price) : ''));
+    list.append(li);
+  }
+
+  const tools = el('div', 'sell-tools');
+  const tool = (glyph, label, hint, cls, fn) => {
+    const x = btn('', 'sell-tool ' + cls, fn);
+    x.append(el('b', '', glyph), el('span', '', label), el('small', '', hint));
+    return x;
+  };
+  const sold = tool('✓', 'MARK SOLD', 'You sold it yourself', 'grn', () => openSell(date, c, 'sold'));
+  sold.dataset.focus = '1';
+  const stop = tool('✕', 'STOP SELLING', 'Deletes the offer posts', 'red', () => {
+    if (stop.dataset.sure) return run({ action: 'cancel', id: t.id }, 'Stopped. The offer posts are being deleted.');
+    stop.dataset.sure = '1';
+    stop.querySelector('span').textContent = 'SURE? STOP';
+    stop.querySelector('small').textContent = 'Click again to stop';
+  });
+  tools.append(sold, tool('₹', 'EDIT PRICES', priceText(t), 'gold-o', () => openSell(date, c, 'prices')), stop);
+  // Marking sold and editing prices need sell tasks on, like stopping.
+  if (D.sell_off) for (const x of tools.children) x.disabled = true;
+
+  acts.append(btn('CLOSE', '', closeModal));
+  sheet.append(sum, list, tools, error, acts);
+}
+
+// priceSlider is the two-handle price range for a cell-like c (ask,
+// task). It returns its nodes and a getter for [lowest, opening].
+function priceSlider(c) {
+  const t = c.task;
+  const b = sellBounds(c);
+  let [lo, hi] = sellDefaults(c, b);
+  // A running task can't switch between haggling and a fixed price, so a
+  // fixed one moves both handles together and a haggling one keeps them
+  // at least a rupee apart.
+  const fixed = t && t.min === t.max;
+  const gap = t && !fixed ? 1 : 0;
+
+  const vals = el('div', 'sell-vals');
+  const vMin = el('b'), vMax = el('b');
+  const lMin = el('div', 'sv'), lMax = el('div', 'sv');
+  lMin.append(el('span', '', fixed ? 'PRICE' : 'LOWEST'), vMin);
+  lMax.append(el('span', '', 'OPENS AT'), vMax);
+  vals.append(lMin);
+  if (!fixed) vals.append(lMax);
+
+  const dual = el('div', 'dual');
+  const fill = el('i', 'fill');
+  const track = el('div', 'track');
+  track.append(fill);
+  if (c.ask != null) {
+    const m = el('i', 'med');
+    m.style.setProperty('left', `${((c.ask - b.lo) / (b.hi - b.lo)) * 100}%`);
+    track.append(m);
+  }
+  const range = (v, label) => {
+    const r = el('input');
+    Object.assign(r, { type: 'range', min: b.lo, max: b.hi, step: 1, value: v });
+    r.setAttribute('aria-label', label);
+    return r;
+  };
+  const rMin = range(lo, fixed ? 'Price' : 'Lowest price'), rMax = range(hi, 'Opening price');
+  rMin.dataset.focus = '1';
+  dual.append(track, rMin);
+  if (!fixed) dual.append(rMax);
+
+  const axis = el('div', 'sell-axis');
+  axis.append(el('span', '', rupees(b.lo)), c.ask != null ? el('span', 'med-l', `median ${rupees(Math.round(c.ask))}`) : el('span'), el('span', '', rupees(b.hi)));
+
+  const note = el('p', 'sell-note');
+  note.setAttribute('aria-live', 'polite');
+  const draw = () => {
+    vMin.textContent = rupees(lo);
+    vMax.textContent = rupees(hi);
+    rMin.setAttribute('aria-valuetext', rupees(lo));
+    rMax.setAttribute('aria-valuetext', rupees(hi));
+    fill.style.setProperty('left', `${((lo - b.lo) / (b.hi - b.lo)) * 100}%`);
+    fill.style.setProperty('right', `${100 - ((hi - b.lo) / (b.hi - b.lo)) * 100}%`);
+    note.textContent = lo === hi
+      ? `Posts the meal at ${rupees(lo)} and sells to the first buyer who pays it.`
+      : `Opens at ${rupees(hi)} and haggles down toward the median, reaching ${rupees(lo)} only as the meal nears its end. Never goes below ${rupees(lo)}.`;
+    if (t) note.textContent += ' Prices already quoted or agreed stand.';
+  };
+  // The thumb that last moved sits on top, so two thumbs at the same spot
+  // can still be pulled apart.
+  rMin.addEventListener('input', () => {
+    if (fixed) hi = lo = +rMin.value;
+    else { lo = Math.min(+rMin.value, hi - gap); rMin.value = lo; }
+    rMin.style.zIndex = 3; rMax.style.zIndex = 2; draw();
+  });
+  rMax.addEventListener('input', () => { hi = Math.max(+rMax.value, lo + gap); rMax.value = hi; rMax.style.zIndex = 3; rMin.style.zIndex = 2; draw(); });
+  draw();
+  return { nodes: [vals, dual, axis, note], get: () => [lo, hi] };
+}
+
+function priceView(date, c) {
+  const t = c.task;
+  const slider = priceSlider(c);
+  const { error, acts, btn, run } = sellParts();
+  if (t) {
+    acts.append(btn('BACK', '', () => openSell(date, c)),
+      btn('SAVE PRICES', 'gold', () => { const [min, max] = slider.get(); run({ action: 'prices', id: t.id, min, max }, 'Prices updated'); }));
+  } else {
+    acts.append(btn('CANCEL', '', closeModal),
+      btn('CONFIRM SALE', 'gold', () => { const [min, max] = slider.get(); run({ action: 'start', date, meal: c.meal, min, max }, `Selling your ${c.meal}`); }));
+  }
+  sheet.append(...slider.nodes, error, acts);
+}
+
+function soldView(date, c) {
+  const t = c.task;
+  const { error, acts, btn, run } = sellParts();
+  const form = el('form', 'sell-form');
+  const field = (label, input) => { const l = el('label', '', label); l.append(input); form.append(l); return l; };
+  const input = (type, attrs = {}) => { const i = el('input'); Object.assign(i, { type, ...attrs }); return i; };
+
+  const pick = el('select');
+  pick.dataset.focus = '1';
+  for (const b of t.buyers) pick.append(new Option(`${buyerName(b)}${b.price ? ` · ${rupees(b.price)}` : ''}`, b.key));
+  pick.append(new Option('Someone else', ''));
+  // Default to the buyer furthest along.
+  const order = ['bought', 'offered', 'agreed', 'handed_off', 'parked', 'negotiating', 'queued'];
+  const rank = (x) => { const i = order.indexOf(x.state); return i < 0 ? order.length : i; };
+  const best = t.buyers.slice().sort((x, y) => rank(x) - rank(y))[0];
+  pick.value = best ? best.key : '';
+  field('Buyer', pick);
+  const phone = input('tel', { placeholder: '+91 98765 43210', autocomplete: 'off' });
+  const name = input('text', { autocomplete: 'off' });
+  const other = [field('Their phone, with country code', phone), field('Or their name', name)];
+  const price = input('number', { min: 1, max: 10000, step: 1, required: true });
+  field('Sold for (₹)', price);
+  const note = input('text', { placeholder: 'e.g. paid cash', autocomplete: 'off' });
+  field('Note (optional)', note);
+
+  const sync = () => {
+    const b = t.buyers.find((x) => x.key === pick.value);
+    for (const l of other) l.hidden = !!b;
+    price.value = b && b.price ? Math.round(b.price) : price.value || Math.round(t.max);
+  };
+  pick.addEventListener('change', sync);
+  sync();
+
+  form.append(el('p', 'sell-note', 'Only confirm once the meal is sold and paid for. The bot stops selling, records the sale, ticks the offer posts and tells other buyers it\'s sold. It sends your buyer nothing.'));
+  const submit = btn('CONFIRM SOLD', 'gold', () => {});
+  submit.type = 'submit';
+  acts.append(btn('BACK', '', () => openSell(date, c)), submit);
+  form.append(error, acts);
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const body = { action: 'sold', id: t.id, price: Number(price.value), note: note.value.trim() };
+    if (pick.value) body.buyer = pick.value;
+    else { body.buyer = phone.value.replace(/[^\d+]/g, ''); body.name = name.value.trim(); }
+    if (!body.buyer && !body.name) { error.textContent = 'Enter their phone number or name.'; return; }
+    if (!(body.price >= 1)) { error.textContent = 'Enter the price it sold for.'; return; }
+    run(body, 'Marked sold');
+  });
+  sheet.append(form);
+}
+
+// ---------- friends' meals ----------
+
+// Friends' meals are sold through your WhatsApp from their QR. They're
+// listed here and nowhere else on the page, so they never count as yours.
+
+const FRIEND_LOOK = {
+  selling: ['SELLING', 'c6'], armed: ['ARMED', 'ce'], sending: ['PAID · SENDING', 'c6'], sold: ['SOLD', 'ca'],
+  handoff: ['HANDED OFF', 'c6'], ended: ['ENDED UNSOLD', 'c8'],
+};
+const friendCell = (f) => ({ meal: f.meal, mess: f.mess, diet: f.diet, start: f.start, end: f.end, ask: f.ask, task: f.task, friend: f.friend || '' });
+
+function renderFriends() {
+  const box = $('friends');
+  box.replaceChildren();
+  const fs = D.friends.slice().reverse();
+  const live = fs.filter((f) => f.task).length, sold = fs.filter((f) => f.state === 'sold');
+  $('frMeta').replaceChildren(el('b', '', String(live)), ' selling · ', el('b', '', String(sold.length)),
+    ` sold for ${rupees(sum(sold.map((f) => f.amount)))} · not in your totals`);
+  if (!fs.length) {
+    box.append(el('div', 'empty-note', 'Selling a meal for a friend? Add it with their QR. It posts and haggles like yours, and its money stays out of your numbers.'));
+    return;
+  }
+  for (const f of fs) {
+    const row = el(f.task ? 'button' : 'div', 'friend' + (f.task ? ' live' : ''));
+    row.style.setProperty('--m', messColor(f.mess));
+    if (f.task) {
+      row.type = 'button';
+      row.setAttribute('aria-label', `Manage the sale of ${f.friend || 'a friend'}'s ${f.meal}: mark sold, edit prices or stop`);
+      row.addEventListener('click', () => openSell(f.date, friendCell(f)));
+    }
+    const ic = el('span', 'fr-ic');
+    ic.append(svgEl(messIcon(f.mess)));
+    const what = el('div', 'fr-what');
+    const nm = el('b', '', `${messName(f.mess)}${f.diet ? ` ${DIET_LABEL[f.diet].toLowerCase()}` : ''} ${f.meal}`);
+    nm.style.setProperty('color', messColor(f.mess));
+    what.append(nm, el('span', '', `${f.friend ? `for ${f.friend} · ` : ''}${dayWord(f.date)}${f.start ? `, ${hm(f.start)}-${hm(f.end)}` : ''}${f.extras && f.extras.length ? ` · + ${f.extras.join(', ')}` : ''}`));
+    const [word, cls] = FRIEND_LOOK[f.state] || [f.state.toUpperCase(), 'c8'];
+    const right = el('div', 'fr-right');
+    const price = f.task ? priceText(f.task) : f.amount ? rupees(f.amount) : '';
+    right.append(el('span', 'pill ' + cls, word), el('span', 'fr-amt', price));
+    if (f.buyer && (f.state === 'sold' || f.state === 'armed' || f.state === 'sending' || f.state === 'handoff')) right.append(el('span', 'fr-buyer', fmtPhone(f.buyer)));
+    row.append(ic, what, right);
+    box.append(row);
+  }
+}
+
+function openFriendForm() {
+  hideTip();
+  sellOpen = 'friend';
+  const head = el('div', 'sell-head');
+  const h = el('h2', '', "Sell a friend's meal");
+  h.id = 'sellTitle';
+  head.append(h, el('div', 'sub', 'Posted and haggled like yours; the buyer gets their QR. The money stays out of your totals.'));
+  sheet.setAttribute('aria-labelledby', 'sellTitle');
+
+  const form = el('form', 'sell-form');
+  const field = (label, node) => { const l = el('label', '', label); l.append(node); form.append(l); return l; };
+  const friend = el('input');
+  Object.assign(friend, { type: 'text', maxLength: 60, autocomplete: 'off', placeholder: 'e.g. Ravi' });
+  field("Friend's name (optional)", friend);
+
+  const slots = D.friend_slots;
+  const meal = el('select');
+  slots.forEach((w, i) => meal.append(new Option(`${w.date === D.today ? 'Today' : fmtDay(w.date)} ${w.meal} · ${hm(w.start)}-${hm(w.end)}${now() >= w.start ? ' · serving now' : ''}`, String(i))));
+  field('Meal', meal);
+
+  // Radios styled as chips, so arrow keys and screen readers work.
+  const chips = (legend, name, opts) => {
+    const fs = el('fieldset', 'chips');
+    fs.append(el('legend', '', legend));
+    for (const [value, label, color] of opts) {
+      const l = el('label', 'chip'), r = el('input');
+      Object.assign(r, { type: 'radio', name, value });
+      if (color) l.style.setProperty('--m', color);
+      l.append(r, el('span', '', label));
+      fs.append(l);
+    }
+    form.append(fs);
+    return fs;
+  };
+  const messes = chips('Mess', 'fmess', D.messes.map((m) => [m.name, messName(m.name), messColor(m.name)]));
+  const diets = chips('Diet', 'fdiet', [['veg', 'Veg'], ['egg', 'Egg'], ['nonveg', 'Non-veg']]);
+  const picked = (fs) => (fs.querySelector('input:checked') || {}).value || '';
+
+  const priceBox = el('div', 'fr-price');
+  form.append(priceBox);
+  let slider;
+  const drawPrice = () => {
+    const w = slots[+meal.value];
+    const m = w && D.market.find((x) => x.meal === w.meal);
+    slider = priceSlider({ ask: m ? m.median : null });
+    priceBox.replaceChildren(el('span', 'fr-k', 'Price'), ...slider.nodes);
+  };
+  meal.addEventListener('change', drawPrice);
+  drawPrice();
+
+  const extras = el('input');
+  Object.assign(extras, { type: 'text', autocomplete: 'off', placeholder: 'e.g. 2 omelette, lassi' });
+  field('Extras they registered (optional, comma separated)', extras);
+
+  // The QR: a file picker that also takes a dropped image.
+  const file = el('input');
+  Object.assign(file, { type: 'file', accept: 'image/png,image/jpeg' });
+  const drop = el('label', 'qr-drop');
+  const preview = el('img');
+  preview.alt = '';
+  preview.hidden = true;
+  const dropText = el('span', '', 'Attach their meal QR (PNG or JPEG, up to 5 MB). Click or drop the image here.');
+  drop.append(file, preview, dropText);
+  form.append(drop);
+  let qr = null;
+  const takeFile = (f) => {
+    if (!f) return;
+    if (!/^image\/(png|jpeg)$/.test(f.type)) { error.textContent = 'The QR must be a PNG or JPEG image.'; return; }
+    if (f.size > 5 * 1024 * 1024) { error.textContent = 'The QR image is over 5 MB.'; return; }
+    error.textContent = '';
+    qr = f;
+    dropText.textContent = `${f.name} · ${Math.ceil(f.size / 1024)} KB. Click to change.`;
+    // The page's CSP allows data: images, not blob: ones.
+    const rd = new FileReader();
+    rd.onload = () => { preview.src = rd.result; preview.hidden = false; preview.alt = "Your friend's QR"; };
+    rd.readAsDataURL(f);
+  };
+  file.addEventListener('change', () => takeFile(file.files[0]));
+  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); takeFile(e.dataTransfer.files[0]); });
+
+  const error = el('p', 'sell-err');
+  error.setAttribute('role', 'alert');
+  if (D.sell_off) error.textContent = D.sell_off;
+  if (!slots.length) error.textContent = 'No meal left to sell today.';
+
+  // A veg-only mess has no non-veg to sell.
+  const syncDiet = () => {
+    const m = D.messes.find((x) => x.name === picked(messes));
+    const vegOnly = !!(m && m.veg_only);
+    for (const r of diets.querySelectorAll('input:not([value="veg"])')) r.disabled = vegOnly;
+    if (vegOnly) diets.querySelector('input[value="veg"]').checked = true;
+  };
+  messes.addEventListener('change', syncDiet);
+
+  const acts = el('div', 'sell-acts');
+  const cancel = el('button', 'sell-btn', 'CANCEL');
+  cancel.type = 'button';
+  cancel.addEventListener('click', closeModal);
+  const submit = el('button', 'sell-btn gold', 'CONFIRM SALE');
+  submit.type = 'submit';
+  submit.disabled = !!D.sell_off || !slots.length;
+  acts.append(cancel, submit);
+  form.append(error, acts);
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const w = slots[+meal.value];
+    const mess = picked(messes), diet = picked(diets);
+    if (!mess) { error.textContent = 'Pick their mess.'; messes.querySelector('input').focus(); return; }
+    if (!diet) { error.textContent = 'Pick veg, egg or non-veg.'; diets.querySelector('input').focus(); return; }
+    if (!qr) { error.textContent = "Attach your friend's QR."; file.focus(); return; }
+    const [min, max] = slider.get();
+    const body = new FormData();
+    for (const [k, v] of Object.entries({ date: w.date, meal: w.meal, mess, diet, friend: friend.value.trim(), extras: extras.value, min, max })) body.append(k, String(v));
+    body.append('qr', qr);
+    submit.disabled = cancel.disabled = true;
+    error.textContent = '';
+    try {
+      const m = await me();
+      const r = await fetch('api/friend-sale', { method: 'POST', cache: 'no-store', headers: { 'X-CSRF-Token': m.csrf }, body });
+      if (r.status === 401) return toLogin();
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+      closeModal();
+      toast(`Selling ${friend.value.trim() ? `${friend.value.trim()}'s` : "your friend's"} ${w.meal}`);
+      load();
+    } catch (err) {
+      error.textContent = err.message;
+      submit.disabled = cancel.disabled = false;
+    }
+  });
+
+  sheet.replaceChildren(head, form);
+  modal.hidden = false;
+  friend.focus();
+}
+
+// toast is a short note at the bottom of the page.
+function toast(text) {
+  const t = el('div', 'toast', text);
+  document.body.append(t);
+  setTimeout(() => t.remove(), 2600);
+}
 
 // ---------- regulars ----------
 
@@ -569,11 +1061,15 @@ function renderEarnings() {
 $('logo').append(svgEl(icon('ingot')));
 $('navIcon').append(svgEl(icon('prev')));
 $('insIcon').append(svgEl(icon('chart')));
+$('useIcon').append(svgEl(icon('check')));
 me().then((m) => {
   userLink(m);
   $('insLink').hidden = m.role !== 'admin';
+  $('useLink').hidden = m.role !== 'admin';
 }).catch(() => {});
 $('ledIcon').append(svgEl(icon('coin')));
+$('frIcon').append(svgEl(icon('coin')));
+$('frAdd').addEventListener('click', () => { if (D) openFriendForm(); });
 $('regIcon').append(svgEl(icon('paper')));
 $('pcIcon').append(svgEl(icon('chart')));
 $('cardIcon').append(svgEl(icon('chart')));
@@ -581,6 +1077,7 @@ tip($('xpBar'), () => (D ? savedTip() : []));
 $('pgPrev').addEventListener('click', () => { if (D) { page = Math.min(pages() - 1, page + 1); renderLedger(); if (D.owner) renderEarnings(); } });
 $('pgNext').addEventListener('click', () => { if (D) { page = Math.max(0, page - 1); renderLedger(); if (D.owner) renderEarnings(); } });
 addEventListener('keydown', (e) => {
+  if (!modal.hidden) { if (e.key === 'Escape') closeModal(); return; }
   if (!D || e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.key === 'ArrowLeft') $('pgPrev').click();
   if (e.key === 'ArrowRight') $('pgNext').click();

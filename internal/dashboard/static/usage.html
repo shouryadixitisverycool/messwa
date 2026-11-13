@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0d12">
+<title>Usage · Mess Auction House</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preload" href="silkscreen-700.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="sales.css">
+<link rel="stylesheet" href="insights.css">
+<link rel="stylesheet" href="usage.css">
+<script src="common.js" defer></script>
+<script src="usage.js" defer></script>
+</head>
+<body>
+<div class="app sales insights usage">
+  <header class="top">
+    <div class="brand">
+      <span class="logo" id="logo"></span>
+      <div>
+        <h1>Usage</h1>
+        <p class="sub">How everyone is using messwa · admins only</p>
+      </div>
+      <a class="nav-link" href="./" title="Back to the listings"><span id="navIcon"></span>Auction house</a>
+      <a class="nav-link" href="sales.html" title="Who you sold to, and for how much"><span id="salesIcon"></span>My sales</a>
+      <a class="nav-link" href="insights.html" title="What sells, when, and who's selling"><span id="insIcon"></span>Insights</a>
+      <a class="nav-link" href="account.html" id="accountLink" title="Your account">Account</a>
+    </div>
+  </header>
+
+  <div class="filters" aria-label="Filters">
+    <div class="wins" id="fRange" aria-label="Range"></div>
+    <div class="wins" id="fWho" aria-label="Users"></div>
+  </div>
+
+  <p class="notice" id="notice" hidden></p>
+
+  <section class="chest" aria-label="Overview">
+    <div class="chest-head">
+      <span class="head-icon" id="ovIcon"></span>
+      <span class="head-name">Overview</span>
+      <span class="head-meta" id="ovMeta"></span>
+    </div>
+    <div class="saved" id="month">
+      <div class="saved-top"><span class="saved-k">Bills won back this month, all users</span><span class="saved-v" id="monthV"></span></div>
+      <div class="xp-bar" id="monthBar"><i class="earned" id="monthFill"></i><i class="could" id="monthCould"></i></div>
+      <div class="saved-row" id="monthRow"></div>
+    </div>
+    <div class="kpis six" id="kpis"></div>
+  </section>
+
+  <section class="chest" aria-label="Sales per day">
+    <div class="chest-head">
+      <span class="head-icon" id="dyIcon"></span>
+      <span class="head-name">Sales per day</span>
+      <span class="head-meta">Spare meals by how they ended</span>
+      <span class="pleg"><span><i class="u-sold"></i>sold</span><span><i class="u-hand"></i>handed off</span><span><i class="u-lapse"></i>lapsed</span><span><i class="u-waste"></i>wasted</span></span>
+    </div>
+    <div id="daily"></div>
+    <p class="u-note">Lapsed: a buyer agreed but hadn't paid when the meal ended. Wasted: registered, not eaten, not sold.</p>
+  </section>
+
+  <section class="chest" aria-label="Users">
+    <div class="chest-head">
+      <span class="head-icon" id="usIcon"></span>
+      <span class="head-name">Users</span>
+      <span class="head-meta">Totals only. Buyers never leave a user's own sales page.</span>
+    </div>
+    <div class="tablewrap"><table class="sellers u-users" id="users"></table></div>
+  </section>
+
+  <div class="u-two">
+    <section class="chest" aria-label="Onboarding">
+      <div class="chest-head">
+        <span class="head-icon" id="obIcon"></span>
+        <span class="head-name">Onboarding</span>
+        <span class="head-meta">Where sign-ups stall</span>
+      </div>
+      <div class="u-funnel" id="funnel"></div>
+      <p class="notice u-pend" id="pending" hidden></p>
+    </section>
+    <section class="chest" aria-label="Needs attention">
+      <div class="chest-head">
+        <span class="head-icon" id="atIcon"></span>
+        <span class="head-name">Needs attention</span>
+      </div>
+      <ul class="u-att" id="attention"></ul>
+    </section>
+  </div>
+
+  <div class="u-two">
+    <section class="chest" aria-label="How sales close">
+      <div class="chest-head">
+        <span class="head-icon" id="mxIcon"></span>
+        <span class="head-name">How sales close</span>
+        <span class="head-meta" id="mxMeta"></span>
+      </div>
+      <div class="u-mix" id="mix"></div>
+      <div class="pleg u-mixleg"><span><i class="u-sold"></i>WhatsApp Pay</span><span><i class="u-img"></i>screenshot, unverified</span><span><i class="u-man"></i>marked by hand</span><span><i class="u-hand"></i>handed off</span></div>
+      <p class="u-note" id="mixNote"></p>
+    </section>
+    <section class="chest" aria-label="Price vs market">
+      <div class="chest-head">
+        <span class="head-icon" id="pvIcon"></span>
+        <span class="head-name">Price vs market</span>
+        <span class="head-meta">Average sale minus the median ask</span>
+      </div>
+      <div id="price"></div>
+    </section>
+  </div>
+</div>
+
+<div class="tip" id="tip" hidden></div>
+</body>
+</html>

@@ -13,9 +13,15 @@ import (
 // AccountHandler selects the private server after authenticating the session.
 func AccountHandler(cfg *config.Config, root *mcpserver.Server, hub *Hub, acc *accounts.Accounts, lookup func(context.Context, int64) (*mcpserver.Server, error)) http.Handler {
 	fallback := Handler(cfg, root, hub, acc)
+	usage := headers(requireRole(accounts.Admin, newUsage(cfg, root, acc, lookup)))
 	var mu sync.Mutex
 	handlers := map[int64]http.Handler{}
 	return withSession(acc, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Usage spans every account, so it can't live in one user's handler.
+		if r.Method == http.MethodGet && r.URL.Path == "/api/usage" {
+			usage.ServeHTTP(w, r)
+			return
+		}
 		u := accounts.UserFrom(r.Context())
 		if u == nil {
 			fallback.ServeHTTP(w, r)
