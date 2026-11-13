@@ -325,7 +325,7 @@ func TestSellTaskSellsToFirstPayingBuyer(t *testing.T) {
 		f.conn.emit(f.reply(buyerB, "me too"))
 		synctest.Wait()
 		prompts := sentTo(f.conn.messages(), buyerA)
-		if len(prompts) != 2 || prompts[0].text != "ok 1" || prompts[1].text != "pay on whatsapp pay in this chat, not gpay/upi. qr right after" {
+		if len(prompts) != 3 || prompts[0].text != "ok 1" || prompts[1].text != "pay using whatsapp pay pls, not gpay/upi" || prompts[2].text != "ill send the qr right after" {
 			t.Fatalf("buyer A got %+v", prompts)
 		}
 		if got := sentTo(f.conn.messages(), buyerB); len(got) != 0 {
@@ -337,7 +337,7 @@ func TestSellTaskSellsToFirstPayingBuyer(t *testing.T) {
 		f.conn.emit(payment(buyerA, "pay-a"))
 		synctest.Wait()
 		toA, toB := sentTo(f.conn.messages(), buyerA), sentTo(f.conn.messages(), buyerB)
-		if len(toA) != 3 || !toA[2].qr {
+		if len(toA) != 4 || !toA[3].qr {
 			t.Fatalf("buyer A got %+v, want the prompt then the QR", toA)
 		}
 		if len(toB) != 1 || toB[0].text != "sold sorry" {
@@ -404,7 +404,7 @@ func TestSellTaskResumesWithoutResending(t *testing.T) {
 		time.Sleep(time.Second)
 		f.conn.emit(payment(buyerA, "pay-a"))
 		synctest.Wait()
-		if toA := sentTo(f.conn.messages(), buyerA); len(toA) != 3 || !toA[2].qr {
+		if toA := sentTo(f.conn.messages(), buyerA); len(toA) != 4 || !toA[3].qr {
 			t.Fatalf("buyer A got %+v", toA)
 		}
 		if toB := sentTo(f.conn.messages(), buyerB); len(toB) != 1 || toB[0].text != "sold sorry" {
@@ -453,7 +453,7 @@ func TestResumedTurnTakesPaymentSentWhileDown(t *testing.T) {
 		time.Sleep(5 * time.Second) // reconnecting
 		f.conn.emit(paymentAt(buyerA, "pay-a", paidAt))
 		synctest.Wait()
-		if toA := sentTo(f.conn.messages(), buyerA); len(toA) != 3 || !toA[2].qr {
+		if toA := sentTo(f.conn.messages(), buyerA); len(toA) != 4 || !toA[3].qr {
 			t.Fatalf("buyer A got %+v", toA)
 		}
 		if task := f.task(id); task.State != store.TaskSold {
@@ -482,7 +482,7 @@ func TestSellTaskTurnsAndExpiry(t *testing.T) {
 		f.conn.emit(&events.Message{Info: types.MessageInfo{MessageSource: types.MessageSource{Chat: buyerA}, ID: "pass", Timestamp: time.Now()},
 			Message: &waE2E.Message{Conversation: proto.String("not interested")}})
 		synctest.Wait()
-		if got := sentTo(f.conn.messages(), buyerB); len(got) != 2 || got[0].text != "ok 1" {
+		if got := sentTo(f.conn.messages(), buyerB); len(got) != 3 || got[0].text != "ok 1" {
 			t.Fatalf("B's turn didn't start: %+v", got)
 		}
 		time.Sleep(3 * time.Minute)

@@ -150,7 +150,7 @@ func TestSellTaskPostsCopiesAndResumesTheRest(t *testing.T) {
 		time.Sleep(time.Second)
 		f.conn.emit(payment(buyerA, "pay-a"))
 		synctest.Wait()
-		if toA := sentTo(f.conn.messages(), buyerA); len(toA) != 3 || !toA[2].qr {
+		if toA := sentTo(f.conn.messages(), buyerA); len(toA) != 4 || !toA[3].qr {
 			t.Fatalf("buyer A got %+v", toA)
 		}
 		if task := f.task(id); task.State != store.TaskSold {
