@@ -10,7 +10,7 @@ import (
 )
 
 // sellToolNames are the tools addSellTools adds.
-var sellToolNames = []string{"start_sell_task", "sell_task_status", "cancel_sell_task"}
+var sellToolNames = []string{"start_sell_task", "sell_task_status", "cancel_sell_task", "set_sell_task_prices"}
 
 // Settings returns the settings saved on the dashboard. Keys without a value
 // come from config.toml.

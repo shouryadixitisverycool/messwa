@@ -22,9 +22,10 @@ import (
 // fakeSell records what the tools asked for and creates the task rows a
 // real manager would.
 type fakeSell struct {
-	st      *store.Store
-	started []int64 // user IDs
-	cancels []int64
+	st       *store.Store
+	started  []int64 // user IDs
+	cancels  []int64
+	repriced []int64
 }
 
 func (f *fakeSell) Start(ctx context.Context, userID int64, date, meal string, minRupees, maxRupees int, handoff string) (int64, error) {
@@ -37,6 +38,16 @@ func (f *fakeSell) Cancel(ctx context.Context, id int64) error {
 	f.cancels = append(f.cancels, id)
 	_, err := f.st.EndSellTask(ctx, id, store.TaskCancelled, "cancelled", time.Now())
 	return err
+}
+
+func (f *fakeSell) SetPrices(ctx context.Context, id int64, minRupees, maxRupees int) error {
+	f.repriced = append(f.repriced, id)
+	old, err := f.st.SetSellTaskPrices(ctx, id, int64(minRupees)*100, int64(maxRupees)*100)
+	if err != nil {
+		return err
+	}
+	return f.st.AddSellTaskEvent(ctx, store.SellEvent{TaskID: id, Kind: store.EventPrices, N: int64(minRupees) * 100,
+		Text: fmt.Sprintf("%d.00-%d.00 was %s-%s", minRupees, maxRupees, store.FormatPaise(old.MinPaise), store.FormatPaise(old.MaxPaise))})
 }
 
 func TestSellToolsNeedSettingAndAdmin(t *testing.T) {
@@ -101,7 +112,7 @@ func TestSellToolsNeedSettingAndAdmin(t *testing.T) {
 	cfg := config.Default()
 	cfg.MCP.SellTasks = true
 	on := connect(cfg, sell, adminTok)
-	for _, want := range []string{"start_sell_task", "sell_task_status", "cancel_sell_task", "mark_sell_task_sold", "add_sell_task_buyer", "mute_sell_task_buyer", "unmute_sell_task_buyer"} {
+	for _, want := range []string{"start_sell_task", "sell_task_status", "cancel_sell_task", "set_sell_task_prices", "mark_sell_task_sold", "add_sell_task_buyer", "mute_sell_task_buyer", "unmute_sell_task_buyer"} {
 		if !slices.Contains(tools(on), want) {
 			t.Fatalf("%s missing with the setting on", want)
 		}
@@ -112,7 +123,7 @@ func TestSellToolsNeedSettingAndAdmin(t *testing.T) {
 	start := map[string]any{"date": "2026-11-11", "meal": "lunch", "min_price": 30, "max_price": 60}
 
 	member1 := connect(cfg, sell, memberTok)
-	for _, name := range []string{"start_sell_task", "sell_task_status", "cancel_sell_task", "mark_sell_task_sold", "add_sell_task_buyer", "mute_sell_task_buyer", "unmute_sell_task_buyer"} {
+	for _, name := range []string{"start_sell_task", "sell_task_status", "cancel_sell_task", "set_sell_task_prices", "mark_sell_task_sold", "add_sell_task_buyer", "mute_sell_task_buyer", "unmute_sell_task_buyer"} {
 		res, err := member1.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: map[string]any{"id": 1, "date": "2026-11-11", "meal": "lunch", "min_price": 30, "max_price": 60}})
 		if err != nil {
 			t.Fatal(err)
@@ -121,7 +132,7 @@ func TestSellToolsNeedSettingAndAdmin(t *testing.T) {
 			t.Fatalf("member could call %s", name)
 		}
 	}
-	if len(sell.started) != 0 {
+	if len(sell.started) != 0 || len(sell.repriced) != 0 {
 		t.Fatal("a member's call reached the manager")
 	}
 
@@ -204,6 +215,22 @@ func TestSellToolsNeedSettingAndAdmin(t *testing.T) {
 	if nu := list.Tasks[0].NeedsYou; len(nu) != 1 || nu[0].ChatLink != "https://wa.me/913333333333" || nu[0].Ask != "50.00" ||
 		nu[0].LastOffer != "20.00" || nu[0].Why == "" || list.Tasks[0].Buyers[0].State != store.BuyerParked {
 		t.Fatalf("needs_you = %+v, buyers = %+v", nu, list.Tasks[0].Buyers)
+	}
+
+	// A range edit shows the new prices and when they changed.
+	res, err = on.CallTool(ctx, &mcp.CallToolParams{Name: "set_sell_task_prices", Arguments: map[string]any{"id": task.ID, "min_price": 20, "max_price": 50}})
+	if err != nil || res.IsError {
+		t.Fatalf("set prices: %v %+v", err, res)
+	}
+	b, _ = json.Marshal(res.StructuredContent)
+	json.Unmarshal(b, &task)
+	if pc := task.PriceChanges; task.MinPrice != "20.00" || task.MaxPrice != "50.00" || len(pc) != 1 || pc[0].MinPrice != "20.00" ||
+		pc[0].MaxPrice != "50.00" || pc[0].WasMin != "30.00" || pc[0].WasMax != "60.00" || pc[0].At == "" {
+		t.Fatalf("after set prices %+v", task)
+	}
+	res, err = on.CallTool(ctx, &mcp.CallToolParams{Name: "set_sell_task_prices", Arguments: map[string]any{"id": task.ID, "min_price": 50, "max_price": 20}})
+	if err != nil || !res.IsError {
+		t.Fatalf("set prices with max below min: %v %+v", err, res)
 	}
 
 	res, err = on.CallTool(ctx, &mcp.CallToolParams{Name: "cancel_sell_task", Arguments: map[string]any{"id": task.ID}})
