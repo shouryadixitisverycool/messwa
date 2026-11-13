@@ -17,14 +17,20 @@ const saleViewLinger = 20 * time.Minute
 // Prices are rupees. Buyer events hold what the bot read and said, never
 // what a buyer wrote (see store.SellEvent).
 type SaleView struct {
-	ID      int64  `json:"id"`
-	Date    string `json:"date"`
-	Meal    string `json:"meal"`
-	Mess    string `json:"mess,omitempty"`
-	Diet    string `json:"diet,omitempty"`
-	State   string `json:"state"`
-	Detail  string `json:"detail,omitempty"`
-	Handoff string `json:"handoff"`
+	ID   int64  `json:"id"`
+	Date string `json:"date"`
+	Meal string `json:"meal"`
+	// BaseMeal is Meal without a slot suffix: "dinner" for "dinner#f1".
+	BaseMeal string `json:"base_meal"`
+	// Friend is set for a friend's meal: their name, or "" when none was
+	// given. ForFriend says it is one.
+	Friend    string `json:"friend,omitempty"`
+	ForFriend bool   `json:"for_friend,omitempty"`
+	Mess      string `json:"mess,omitempty"`
+	Diet      string `json:"diet,omitempty"`
+	State     string `json:"state"`
+	Detail    string `json:"detail,omitempty"`
+	Handoff   string `json:"handoff"`
 	// Min is the floor and Max the opening price. Target is what the
 	// negotiation aims for. Lowest is what the bot accepts right now; Held
 	// says it is held at Target because two or more buyers are active.
@@ -148,6 +154,13 @@ func (s *Server) saleView(ctx context.Context, t store.SellTask, now time.Time) 
 	v := SaleView{ID: t.ID, Date: t.Date, Meal: t.Meal, Mess: t.Mess, Diet: t.Diet, State: t.State, Detail: t.Detail, Handoff: t.Handoff,
 		Min: rupeesOf(t.MinPaise), Max: rupeesOf(t.MaxPaise), Started: unix(t.CreatedAt), Ends: unix(t.EndsAt), Ended: unix(t.EndedAt),
 		Posts: []SalePost{}, Buyers: []SaleBuyer{}, History: []SaleTry{}, Listings: []int64{}}
+	v.BaseMeal, _, _ = strings.Cut(t.Meal, "#")
+	if store.IsFriendSlot(t.Meal) {
+		v.ForFriend = true
+		if f, err := s.st.FriendMeal(ctx, t.Date, t.Meal); err == nil && f != nil {
+			v.Friend = f.Friend
+		}
+	}
 
 	names, _ := s.st.GroupNames(ctx)
 	offers, err := s.st.SellTaskOffers(ctx, t.ID)
