@@ -720,7 +720,8 @@ func (m *sellManager) postCopies(ctx context.Context, t store.SellTask, s *sale,
 		return groups, nil
 	}
 	extras := sync.OnceValue(func() []string {
-		if ep, ok := s.portal.(extrasPortal); ok && settings.MentionExtras {
+		// Extras typed in for someone else's meal are meant to be posted.
+		if ep, ok := s.portal.(extrasPortal); ok && (settings.MentionExtras || t.Meal != baseMeal(t.Meal)) {
 			return readExtras(ctx, ep, m.log, t.Date, t.Meal, s.mess)
 		}
 		return nil

@@ -150,7 +150,7 @@ func (m *deviceAccounts) server(ctx context.Context, id int64) (*mcpserver.Serve
 			if userID != id {
 				return nil, fmt.Errorf("account mismatch")
 			}
-			return proxyPortal{stateDir: cfg.StateDir, real: func(ctx context.Context) (mealPortal, error) { return m.acc.Portal(ctx, id) }}, nil
+			return proxyPortal{stateDir: cfg.StateDir, real: func(ctx context.Context) (mealPortal, error) { return m.acc.Portal(ctx, id) }, friends: st.FriendMeal}, nil
 		}, newOwnGroupLog(accountCtx, cfg, st, client))
 	sell.notify = m.hub.Notify
 	a.sell = sell

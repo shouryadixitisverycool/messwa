@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"messwa/internal/portal"
+	"messwa/internal/store"
 )
 
 // proxyMeal sells someone else's meal through a sell task: a friend's QR
@@ -18,6 +19,9 @@ import (
 // take the mess from the file and send its image instead of reading the
 // portal. Other meals still use the portal. The file is read on every
 // call, so deleting it turns this off without a restart.
+//
+// Friends' meals added from the dashboard's sales page live in the store
+// instead, under slots like "dinner#f1" (see store.FriendMeal).
 type proxyMeal struct {
 	Date string `json:"date"`
 	Meal string `json:"meal"`
@@ -30,9 +34,22 @@ type proxyMeal struct {
 type proxyPortal struct {
 	stateDir string
 	real     func(context.Context) (mealPortal, error)
+	// friends looks up a friend's meal saved from the dashboard; nil
+	// when there are none.
+	friends func(ctx context.Context, date, slot string) (*store.FriendMeal, error)
 }
 
-func (p proxyPortal) load(date, meal string) (*proxyMeal, []byte, error) {
+func (p proxyPortal) load(ctx context.Context, date, meal string) (*proxyMeal, []byte, error) {
+	if p.friends != nil && store.IsFriendSlot(meal) {
+		f, err := p.friends(ctx, date, meal)
+		if err != nil || f == nil {
+			if err == nil {
+				err = errors.New("no friend's meal saved for " + date + " " + meal)
+			}
+			return nil, nil, err
+		}
+		return &proxyMeal{Date: date, Meal: meal, Mess: f.Mess, Extras: f.Extras}, f.QR, nil
+	}
 	raw, err := os.ReadFile(filepath.Join(p.stateDir, "proxy-meal.json"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil, nil
@@ -72,7 +89,7 @@ func (m proxyMeal) registration() portal.Registration {
 }
 
 func (p proxyPortal) RequireRegistration(ctx context.Context, date, meal string) (portal.Registration, error) {
-	m, _, err := p.load(date, meal)
+	m, _, err := p.load(ctx, date, meal)
 	if err != nil || m != nil {
 		if m == nil {
 			return portal.Registration{}, err
@@ -87,7 +104,7 @@ func (p proxyPortal) RequireRegistration(ctx context.Context, date, meal string)
 }
 
 func (p proxyPortal) QRForMeal(ctx context.Context, date, meal, accountHash string) (portal.CurrentQR, error) {
-	m, img, err := p.load(date, meal)
+	m, img, err := p.load(ctx, date, meal)
 	if err != nil {
 		return portal.CurrentQR{}, err
 	}
@@ -105,7 +122,7 @@ func (p proxyPortal) QRForMeal(ctx context.Context, date, meal, accountHash stri
 // ExtraRegistrations lists the proxy meal's extras from the file, and for
 // any other meal reads the portal.
 func (p proxyPortal) ExtraRegistrations(ctx context.Context, date, meal string) ([]portal.ExtraRegistration, error) {
-	m, _, err := p.load(date, meal)
+	m, _, err := p.load(ctx, date, meal)
 	if err != nil {
 		return nil, err
 	}
