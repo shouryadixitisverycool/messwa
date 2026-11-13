@@ -12,6 +12,7 @@
 code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text); background: var(--slot); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; overflow-wrap: anywhere; }
 .account a { color: var(--gold); }
 .account a.nav-link { color: var(--muted); }
+.account a.btn:not(.primary) { color: var(--text); }
 
 .form { display: flex; flex-direction: column; gap: 12px; padding: 4px 2px 2px; }
 .form label { display: flex; flex-direction: column; gap: 5px; font: 700 9px Pixel; letter-spacing: .5px; color: var(--muted); text-transform: uppercase; }
@@ -23,7 +24,7 @@ code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--t
 .form input:focus { border-color: color-mix(in srgb, var(--gold) 60%, transparent); }
 .form .row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
 .form .grow { flex: 1 1 220px; }
-.form .actions { margin-top: 2px; }
+.form .actions { margin-top: 2px; display: flex; gap: 8px; flex-wrap: wrap; }
 .note { margin: 0; color: var(--muted); font-size: 12.5px; }
 .err { margin: 0; color: #ff6b5b; font-size: 13px; }
 .ok { margin: 0; color: #5be37a; font-size: 13px; }
