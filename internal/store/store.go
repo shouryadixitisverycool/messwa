@@ -141,6 +141,7 @@ func Open(path string) (*Store, error) {
 		{"sell_task_offers", "error TEXT NOT NULL DEFAULT ''"},
 		{"sell_task_offers", "revoked_at INTEGER NOT NULL DEFAULT 0"},
 		{"sell_task_offers", "revoke_error TEXT NOT NULL DEFAULT ''"},
+		{"sell_task_offers", "text TEXT NOT NULL DEFAULT ''"},
 		// Accounts made before self sign-up were all made by an admin.
 		{"users", "status TEXT NOT NULL DEFAULT 'active'"},
 		{"users", "status_at INTEGER"},

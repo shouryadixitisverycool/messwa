@@ -53,6 +53,7 @@ func sellActionRoutes(mux *http.ServeMux, cfg *config.Config, srv *mcpserver.Ser
 			Name   string `json:"name"`
 			Price  int    `json:"price"`
 			Note   string `json:"note"`
+			Group  string `json:"group"` // resend: the group's JID
 			// start, prices: the meal and the price range in rupees.
 			Date string `json:"date"`
 			Meal string `json:"meal"`
@@ -104,6 +105,8 @@ func sellActionRoutes(mux *http.ServeMux, cfg *config.Config, srv *mcpserver.Ser
 			err = op.AddBuyer(r.Context(), in.ID, in.Buyer, in.Name)
 		case "mute", "unmute":
 			err = op.MuteBuyer(r.Context(), in.ID, in.Buyer, in.Action == "mute")
+		case "resend":
+			err = op.ResendOffer(r.Context(), in.ID, in.Group)
 		default:
 			jsonError(w, "unknown sell action", http.StatusBadRequest)
 			return

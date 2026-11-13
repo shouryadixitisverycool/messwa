@@ -113,16 +113,15 @@ message_buy_posts = true
 # deliver-qr group offers and sell tasks; a -peer delivery is your own pick.
 buyers = "anyone"
 # Repost the offer in a group once the last copy has dropped out of view,
-# while the sale is still open. A fresh copy goes out when the first of the
-# three triggers below is reached in that group, but never sooner than 5
-# minutes after the last copy and never in the meal's last 15 minutes.
+# while the sale is still open. A fresh copy goes out when either trigger
+# below is reached in that group, but never sooner than 5 minutes after the
+# last copy and never in the meal's last 15 minutes. Time alone never
+# reposts: in a quiet group the copy is still on screen.
 # Replies to every copy count. The defaults come from 11 days of these
 # groups at lunch and dinner, when the busiest get 9 to 14 posts every 10
 # minutes. Flags of the same name override them for one deliver-qr run
-# (-repost, -repost-after, -repost-messages, -repost-listings, -max-reposts).
+# (-repost, -repost-messages, -repost-listings, -max-reposts).
 repost = true
-# Repost once the copy is this old, at least 5m. "0s" turns it off.
-repost_after = "10m"
 # Repost once this many messages came in after the copy, about a phone
 # screen of short posts. 0 turns it off.
 repost_messages = 10

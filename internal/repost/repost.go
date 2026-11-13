@@ -6,6 +6,7 @@ package repost
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"messwa/internal/config"
@@ -14,8 +15,6 @@ import (
 // Rules are the [sell] repost settings after one run's flags.
 type Rules struct {
 	On bool
-	// After reposts once a copy is this old. 0 turns the trigger off.
-	After time.Duration
 	// Messages reposts once this many posts came in after the copy.
 	Messages int
 	// Listings reposts once this many other sellers listed the same meal
@@ -27,7 +26,7 @@ type Rules struct {
 
 // FromConfig reads the rules from [sell].
 func FromConfig(s config.Sell) Rules {
-	return Rules{On: s.Repost, After: s.RepostAfter.Duration, Messages: s.RepostMessages, Listings: s.RepostListings, Max: s.MaxReposts}
+	return Rules{On: s.Repost, Messages: s.RepostMessages, Listings: s.RepostListings, Max: s.MaxReposts}
 }
 
 // Copy states, the same as the store's offer post states.
@@ -49,8 +48,8 @@ type Copy struct {
 
 // Activity is what happened in the group after a copy, read from the group
 // log. Known is false when the copy isn't in the log, as in a group that
-// isn't one of the configured market groups; only the time trigger works
-// there.
+// isn't one of the configured market groups; nothing can be counted there,
+// so it waits and gets no reposts.
 type Activity struct {
 	Known    bool
 	Messages int
@@ -59,7 +58,6 @@ type Activity struct {
 
 // Triggers.
 const (
-	ByTime     = "time"
 	ByMessages = "messages"
 	ByListings = "listings"
 )
@@ -73,12 +71,11 @@ type Next struct {
 	Activity
 	// Due means a fresh copy should go out now.
 	Due bool
-	// Trigger is why it's due, or why it will be due at At. It is empty,
-	// with Stopped empty too, when only a message or listing count can
-	// still bring a repost before the cutoff.
+	// Trigger is the count that was reached. It is empty, with Stopped
+	// empty too, while the group waits for one.
 	Trigger string
-	// At is when the next copy goes out unless a count trigger fires
-	// first; with Due, when it became due. Zero when Stopped.
+	// At is when the next copy goes out once a count was reached: the copy
+	// must be MinRepostGap old first. Zero while waiting or Stopped.
 	At time.Time
 	// Stopped says why the group gets no more copies.
 	Stopped string
@@ -119,26 +116,24 @@ func Plan(r Rules, copies []Copy, act Activity, now, end time.Time) Next {
 	}
 	earliest := n.Current.At.Add(config.MinRepostGap)
 	switch {
-	case act.Known && r.Messages > 0 && act.Messages >= r.Messages:
-		n.Trigger, n.At = ByMessages, earliest
-	case act.Known && r.Listings > 0 && act.Listings >= r.Listings:
-		n.Trigger, n.At = ByListings, earliest
-	case r.After > 0:
-		n.Trigger, n.At = ByTime, n.Current.At.Add(r.After)
-	}
-	if n.Trigger == "" {
+	case r.Messages <= 0 && r.Listings <= 0:
 		n.Stopped = "no repost trigger is set"
 		return n
-	}
-	if !n.At.Before(cutoff) {
-		n.Trigger, n.At = "", time.Time{}
-		if earliest.Before(cutoff) && act.Known && (r.Messages > 0 || r.Listings > 0) {
-			// Only a count can still bring a repost before the cutoff.
-			return n
-		}
+	case !earliest.Before(cutoff):
 		n.Stopped = fmt.Sprintf("the next repost would fall in the last %s before the meal ends", config.RepostCutoff)
 		return n
+	case !act.Known:
+		// Not logged (yet): nothing to count until it is.
+		return n
+	case r.Messages > 0 && act.Messages >= r.Messages:
+		n.Trigger = ByMessages
+	case r.Listings > 0 && act.Listings >= r.Listings:
+		n.Trigger = ByListings
+	default:
+		// Nothing pushed the copy down yet, so it is still in view.
+		return n
 	}
+	n.At = earliest
 	n.Due = !now.Before(n.At)
 	return n
 }
@@ -158,28 +153,15 @@ func (n Next) Why(r Rules) string {
 	case ByListings:
 		return fmt.Sprintf("%d other sellers listed this meal at this mess after the copy (repost_listings = %d)%s", n.Listings, r.Listings, gap)
 	}
-	why := fmt.Sprintf("the copy is %s old (repost_after)", r.After)
-	switch {
-	case n.Trigger == "":
-		why = fmt.Sprintf("repost_after would land in the last %s before the meal ends", config.RepostCutoff)
-	case !n.Due:
-		why = fmt.Sprintf("the copy will be %s old (repost_after)", r.After)
+	if !n.Known {
+		return "the copy isn't in the group log, so messages and listings after it can't be counted and it isn't reposted"
 	}
-	var sooner []string
-	if n.Known && r.Messages > 0 {
-		sooner = append(sooner, fmt.Sprintf("%d messages after it (now %d)", r.Messages, n.Messages))
+	var want []string
+	if r.Messages > 0 {
+		want = append(want, fmt.Sprintf("%d messages after it (now %d)", r.Messages, n.Messages))
 	}
-	if n.Known && r.Listings > 0 {
-		sooner = append(sooner, fmt.Sprintf("%d same-mess listings after it (now %d)", r.Listings, n.Listings))
+	if r.Listings > 0 {
+		want = append(want, fmt.Sprintf("%d same-mess listings after it (now %d)", r.Listings, n.Listings))
 	}
-	switch {
-	case n.Due:
-	case len(sooner) == 2:
-		why += "; sooner at " + sooner[0] + " or " + sooner[1]
-	case len(sooner) == 1:
-		why += "; sooner at " + sooner[0]
-	case !n.Known && (r.Messages > 0 || r.Listings > 0):
-		why += "; the group isn't in the group log, so messages and listings after it can't be counted"
-	}
-	return why
+	return "the copy is still in view; reposts at " + strings.Join(want, " or ")
 }

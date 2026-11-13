@@ -20,6 +20,7 @@ import (
 type operatorCall struct {
 	id                int64
 	buyer, name, note string
+	group             string
 	price             int
 	muted             bool
 }
@@ -58,6 +59,11 @@ func (o *dashboardOperator) MuteBuyer(_ context.Context, id int64, buyer string,
 	return nil
 }
 
+func (o *dashboardOperator) ResendOffer(_ context.Context, id int64, group string) error {
+	o.calls = append(o.calls, operatorCall{id: id, buyer: "+911111111111", group: group})
+	return nil
+}
+
 func TestSellActionsAPI(t *testing.T) {
 	cfg := config.Default()
 	cfg.MCP.SellTasks = true
@@ -67,8 +73,8 @@ func TestSellActionsAPI(t *testing.T) {
 	srv.SetSellTasks(op)
 	d := startDashboard(t, cfg, st, srv, NewHub())
 	admin, member := d.as(t, accounts.Admin), d.as(t, accounts.Member)
-	for _, action := range []string{"sold", "add", "mute", "unmute"} {
-		in := map[string]any{"action": action, "id": 7, "buyer": "+911111111111", "name": "Friend", "price": 55, "note": "cash"}
+	for _, action := range []string{"sold", "add", "mute", "unmute", "resend"} {
+		in := map[string]any{"action": action, "id": 7, "buyer": "+911111111111", "name": "Friend", "price": 55, "note": "cash", "group": "1@g.us"}
 		if res := member.send(t, "POST", "/api/sell-action", in); res.StatusCode != 403 {
 			t.Fatalf("member %s = %d", action, res.StatusCode)
 		}
@@ -82,7 +88,7 @@ func TestSellActionsAPI(t *testing.T) {
 			t.Fatalf("admin %s = %d", action, res.StatusCode)
 		}
 	}
-	if len(op.calls) != 4 || op.calls[0].price != 55 || op.calls[0].note != "cash" || op.calls[1].name != "Friend" || !op.calls[2].muted || op.calls[3].muted {
+	if len(op.calls) != 5 || op.calls[0].price != 55 || op.calls[0].note != "cash" || op.calls[1].name != "Friend" || !op.calls[2].muted || op.calls[3].muted || op.calls[4].group != "1@g.us" {
 		t.Fatalf("calls = %+v", op.calls)
 	}
 	for _, c := range op.calls {

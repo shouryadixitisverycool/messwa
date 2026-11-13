@@ -132,7 +132,6 @@ var settings = []setting{
 			return err
 		}},
 	boolSetting("sell.repost", func(c *Config) *bool { return &c.Sell.Repost }),
-	secondsSetting("sell.repost_after", MinRepostGap, true, func(c *Config) *duration { return &c.Sell.RepostAfter }),
 	intSetting("sell.repost_messages", 0, func(c *Config) *int { return &c.Sell.RepostMessages }),
 	intSetting("sell.repost_listings", 0, func(c *Config) *int { return &c.Sell.RepostListings }),
 	intSetting("sell.max_reposts", 0, func(c *Config) *int { return &c.Sell.MaxReposts }),
@@ -264,6 +263,10 @@ func SameValue(key string, a, b *Config) bool {
 	return bytes.Equal(x, y)
 }
 
+// retired are settings messwa no longer has. A saved value for one is
+// ignored, so an older save doesn't stop messwa starting or saving.
+var retired = map[string]bool{"sell.repost_after": true}
+
 // WithSettings returns a copy of c with saved applied, checked like
 // config.toml. c itself is left alone.
 func (c *Config) WithSettings(saved Settings) (*Config, error) {
@@ -275,6 +278,9 @@ func (c *Config) WithSettings(saved Settings) (*Config, error) {
 	sort.Strings(keys)
 	for _, k := range keys {
 		s, ok := findSetting(k)
+		if !ok && retired[k] {
+			continue
+		}
 		if !ok {
 			return nil, fmt.Errorf("unknown setting %q", k)
 		}
@@ -309,7 +315,7 @@ func (c *Config) ApplySaved(saved Settings) (skipped map[string]error) {
 		}
 	}
 	for k := range saved {
-		if _, ok := findSetting(k); !ok {
+		if _, ok := findSetting(k); !ok && !retired[k] {
 			if skipped == nil {
 				skipped = map[string]error{}
 			}

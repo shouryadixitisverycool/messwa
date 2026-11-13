@@ -125,6 +125,22 @@ func (m *sellManager) messageBuyPost(ctx context.Context, t store.SellTask, s *s
 	if ok, err := m.st.IsSellTaskBuyer(ctx, t.ID, m.peerForms(ctx, peer)...); err != nil || ok {
 		return false
 	}
+	if pooled(t) {
+		pool, err := m.pool(ctx, t.ID)
+		if err != nil {
+			return false
+		}
+		// Buyers may already be paying for another meal, or have bought
+		// one before this task took over the shared posts.
+		for _, mate := range pool.epoch(t.ID) {
+			if mate.ID == t.ID {
+				continue
+			}
+			if ok, err := m.st.IsSellTaskBuyer(ctx, mate.ID, m.peerForms(ctx, peer)...); err != nil || ok {
+				return false
+			}
+		}
+	}
 	if gate.turnsAway(ctx, peer, alt) {
 		return false
 	}

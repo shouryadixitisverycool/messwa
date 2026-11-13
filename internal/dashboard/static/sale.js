@@ -425,37 +425,89 @@ function buyerRow(b, v, l) {
   return r;
 }
 
-// A group's short code from the words that tell groups apart: "Mess Buy
-// Sell" -> "BS", "IIIT Mess Exchange" -> "EX".
+// A group's name without the words most groups share: "IIIT Mess Buy
+// Sell" -> "Buy Sell".
 const FILLER = new Set(['mess', 'iiit', 'iiith', 'the', 'group', 'and', 'of']);
-function groupCode(g) {
-  const w = g.split(/[^A-Za-z0-9]+/).filter((x) => x && !FILLER.has(x.toLowerCase()));
-  return (w.length > 1 ? w.slice(0, 2).map((x) => x[0]) : [(w[0] || '?').slice(0, 2)]).join('').toUpperCase();
+function groupShort(g) {
+  const w = g.split(/\s+/).filter((x) => x && !FILLER.has(x.toLowerCase().replace(/[^a-z0-9]/g, '')));
+  return w.length ? w.join(' ') : g;
 }
 const errCode = (e) => ((e || '').match(/\b(\d{3})\b/) || [, 'ERR'])[1];
 const BURIED = 15;
+const postMark = (p) => (p.state === 'failed' ? '✗' : p.state === 'posted' ? '✓' : '…');
+
+// postGroups gathers the offer's copies by group, oldest copy first, in the
+// order the groups first got one. cur is the copy that counts now.
+function postGroups(v) {
+  const by = new Map();
+  for (const p of v.posts) {
+    const k = p.jid || p.group;
+    if (!by.has(k)) by.set(k, []);
+    by.get(k).push(p);
+  }
+  return [...by.values()].map((copies) => {
+    copies.sort((a, b) => a.seq - b.seq || a.at - b.at);
+    return { name: copies[0].group, copies, cur: copies[copies.length - 1] };
+  });
+}
+
+function copyLine(p, i) {
+  const what = i === 0 ? 'Posted' : 'Reposted';
+  if (p.state === 'failed') return [{ t: `${what} ${hm(p.at)}: failed, ${p.error || 'unknown error'}`, c: 'cc' }];
+  if (p.state === 'posting') return [{ t: `${what} ${hm(p.at)}: sending…`, c: 'c6' }];
+  return [{ t: `${what} ${hm(p.at)}: ${p.after} ${p.after === 1 ? 'listing' : 'listings'} since`, c: p.after > BURIED ? 'cc' : 'c8' }];
+}
+
+// groupPill is one group in the box: how its newest copy is doing, and
+// how many copies it got.
+function groupPill(g, v) {
+  const p = g.cur;
+  const n = el('span', 'ms-post ' + p.state + (p.state === 'posted' && p.after > BURIED ? ' buried' : ''));
+  n.append(el('b', '', postMark(p)), el('span', 'name', groupShort(g.name)));
+  if (g.copies.length > 1) n.append(el('span', 'times', `×${g.copies.length}`));
+  if (p.state === 'failed') {
+    n.append(el('span', 'err', errCode(p.error)));
+    if (p.resend) n.append(resendButton(v, p));
+  } else if (p.state === 'posted') {
+    const bar = el('span', 'depth');
+    const after = el('i', 'after');
+    after.style.setProperty('width', `${Math.min(1, p.after / 25) * 100}%`);
+    bar.append(el('i', 'me'), after);
+    n.append(bar);
+  }
+  tip(n, () => [[{ t: g.name, c: 'nm' }], ...g.copies.map(copyLine),
+    p.resend ? [{ t: '↻ posts it again', c: 'c8' }] : null].filter(Boolean));
+  return n;
+}
+
+// resendButton posts the offer again in a group whose last copy failed.
+// The bot never retries such a group by itself.
+function resendButton(v, p) {
+  const b = el('button', 'resend', '↻');
+  b.type = 'button';
+  b.setAttribute('aria-label', `Post again in ${p.group}`);
+  b.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    b.disabled = true;
+    b.classList.add('busy');
+    try {
+      await send('POST', 'api/sell-action', { action: 'resend', id: v.id, group: p.jid });
+      toast(`Posted again in ${p.group}`);
+    } catch (err) {
+      toast(err.message);
+    }
+    await load();
+  });
+  return b;
+}
 
 function postsRow(v) {
   const r = el('div', 'ms-row');
   r.append(el('span', 'lbl', 'Posted'));
-  for (const p of v.posts) r.append(postPill(p));
+  for (const g of postGroups(v)) r.append(groupPill(g, v));
   if (!v.posts.length) r.append(el('span', 'ms-none', 'not yet'));
   r.addEventListener('click', () => openMealSheet(v));
   return r;
-}
-
-// postPill: ✓ posted, ✗ failed, … posting. A post with more than BURIED
-// listings after it is red, with how far down it sits.
-function postPill(p) {
-  const buried = p.state === 'posted' && p.after > BURIED;
-  const n = el('span', 'ms-post ' + p.state + (buried ? ' buried' : ''));
-  n.append(el('b', '', p.state === 'failed' ? '✗' : p.state === 'posted' ? '✓' : '…'), groupCode(p.group));
-  if (buried) n.append(el('small', '', `↓${p.after}`));
-  tip(n, () => [[{ t: p.group, c: 'nm' }],
-    p.state === 'failed' ? [{ t: `Failed at ${hm(p.at)}: ${p.error || 'unknown error'}`, c: 'cc' }]
-      : [{ t: `Posted ${hm(p.at)}, ${ago(p.at)}`, c: 'c7' }],
-    p.state === 'posted' ? [{ t: `${p.after} listing ${p.after === 1 ? 'post' : 'posts'} since yours`, c: p.after > BURIED ? 'cc' : 'c8' }] : null].filter(Boolean));
-  return n;
 }
 
 // The other open listings for the same meal, cheapest first, yours in gold.
@@ -758,6 +810,33 @@ function payPips(b, v) {
   return box;
 }
 
+// postList is the sheet's POSTS: each group with every copy under it.
+function postList(v) {
+  const posts = el('div', 'mp-posts');
+  for (const g of postGroups(v)) {
+    const h = el('div', 'mp-group');
+    h.append(el('b', g.cur.state === 'failed' ? 'red' : g.cur.state === 'posted' ? 'grn' : '', postMark(g.cur)), el('span', 'name', g.name));
+    if (g.copies.length > 1) h.append(el('span', 'times', `×${g.copies.length}`));
+    posts.append(h);
+    g.copies.forEach((p, i) => {
+      const r = el('div', 'mp-post' + (p === g.cur ? '' : ' old'));
+      r.append(el('span', 'when', hm(p.at)));
+      const bar = el('span', 'mp-bar' + (p.state === 'failed' ? ' failed' : ''));
+      if (p.state === 'posted') {
+        const me = el('i', 'me'), after = el('i', 'after' + (p.after > BURIED ? ' red' : ''));
+        after.style.setProperty('width', `${Math.min(1, p.after / 25) * 96}%`);
+        bar.append(me, after);
+      }
+      r.append(bar, el('span', 'n' + (p.state === 'failed' || p.after > BURIED ? ' red' : ''),
+        p.state === 'failed' ? errCode(p.error) : p.state === 'posting' ? '…' : `${p.after}↑`));
+      if (p.resend) r.append(resendButton(v, p));
+      tip(r, () => [[{ t: g.name, c: 'nm' }], copyLine(p, i)]);
+      posts.append(r);
+    });
+  }
+  return posts;
+}
+
 function openMealSheet(v, _key, keep) {
   saleSheet = { id: v.id, meal: true };
   const restore = sheetFor(v, keep);
@@ -780,21 +859,7 @@ function openMealSheet(v, _key, keep) {
   if (v.state === 'active') sheet.append(saleTaskActions(v));
 
   sheet.append(el('div', 'sec', 'POSTS'));
-  const posts = el('div', 'mp-posts');
-  for (const p of v.posts) {
-    const r = el('div', 'mp-post');
-    r.append(el('b', p.state === 'failed' ? 'red' : 'grn', p.state === 'failed' ? '✗' : '✓'), el('span', 'code', groupCode(p.group)));
-    const bar = el('span', 'mp-bar' + (p.state === 'failed' ? ' failed' : ''));
-    if (p.state !== 'failed') {
-      const me = el('i', 'me'), after = el('i', 'after' + (p.after > BURIED ? ' red' : ''));
-      after.style.setProperty('width', `${Math.min(1, p.after / 25) * 96}%`);
-      bar.append(me, after);
-    }
-    r.append(bar, el('span', 'n' + (p.state === 'failed' || p.after > BURIED ? ' red' : ''), p.state === 'failed' ? errCode(p.error) : `${p.after}↑`));
-    tip(r, () => [[{ t: p.group, c: 'nm' }], [{ t: p.state === 'failed' ? p.error : `posted ${hm(p.at)}`, c: 'c8' }]]);
-    posts.append(r);
-  }
-  sheet.append(posts);
+  sheet.append(postList(v));
 
   sheet.append(el('div', 'sec', `${v.history.length} ${v.history.length === 1 ? 'TRY' : 'TRIES'}`));
   const tries = el('div', 'mp-tries');

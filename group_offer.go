@@ -241,6 +241,14 @@ func (q *offerQueue) restore(peer types.JID, waiting bool) {
 	}
 }
 
+// remove takes peer out of the queue, as when they move to another task.
+// They still count as seen, so replying again doesn't queue them.
+func (q *offerQueue) remove(peer types.JID) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.buyers = slices.DeleteFunc(q.buyers, func(b types.JID) bool { return b == peer })
+}
+
 func (q *offerQueue) closeAndDrain() []types.JID {
 	q.mu.Lock()
 	defer q.mu.Unlock()

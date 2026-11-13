@@ -33,6 +33,7 @@ type saleConn interface {
 	BuildUnavailableMessageRequest(chat, sender types.JID, id string) *waE2E.Message
 	BuildReaction(chat, sender types.JID, id types.MessageID, reaction string) *waE2E.Message
 	BuildRevoke(chat, sender types.JID, id types.MessageID) *waE2E.Message
+	BuildEdit(chat types.JID, id types.MessageID, newContent *waE2E.Message) *waE2E.Message
 	GetJoinedGroups(ctx context.Context) ([]*types.GroupInfo, error)
 	GetGroupInfo(ctx context.Context, jid types.JID) (*types.GroupInfo, error)
 	// PNForLID returns the phone-number JID for a LID, or an empty JID.
@@ -129,6 +130,10 @@ type sale struct {
 	// others, when set, are more buyers to tell "sorry sold" besides the
 	// queue: a negotiating task's buyers who are still talking.
 	others func() []types.JID
+	// keep, when set, runs on the buyers about to hear "sorry sold" and
+	// returns the ones who should: a pool passes the rest to its other
+	// tasks.
+	keep func(ctx context.Context, buyers []types.JID) []types.JID
 	// event, when set, records a step of the sale for the dashboard (see
 	// store.SellEvent). It never holds what a buyer wrote.
 	event func(buyer types.JID, kind string, n int64, text string)
@@ -776,6 +781,9 @@ func (s *sale) sellToQueue(ctx, notifyCtx context.Context, q *offerQueue, j sale
 			waiting := q.closeAndDrain()
 			if s.others != nil {
 				waiting = append(waiting, s.others()...)
+			}
+			if s.keep != nil {
+				waiting = s.keep(notifyCtx, waiting)
 			}
 			s.tellSold(notifyCtx, j, waiting)
 			return nil

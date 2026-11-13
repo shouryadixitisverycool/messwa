@@ -16,6 +16,7 @@ type actionSell struct {
 	action            string
 	id                int64
 	buyer, name, note string
+	group             string
 	price             int
 	muted             bool
 	err               error
@@ -31,6 +32,11 @@ func (f *actionSell) AddBuyer(_ context.Context, id int64, buyer, name string) e
 }
 func (f *actionSell) MuteBuyer(_ context.Context, id int64, buyer string, muted bool) error {
 	f.action, f.id, f.buyer, f.muted = "mute", id, buyer, muted
+	return f.err
+}
+
+func (f *actionSell) ResendOffer(_ context.Context, id int64, group string) error {
+	f.action, f.id, f.group = "resend", id, group
 	return f.err
 }
 
@@ -61,8 +67,11 @@ func TestSellActionTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	for _, name := range []string{"mark_sell_task_sold", "add_sell_task_buyer", "mute_sell_task_buyer", "unmute_sell_task_buyer"} {
+	for _, name := range []string{"mark_sell_task_sold", "add_sell_task_buyer", "mute_sell_task_buyer", "unmute_sell_task_buyer", "resend_sell_task_offer"} {
 		args := map[string]any{"id": id, "buyer": "+911111111111"}
+		if name == "resend_sell_task_offer" {
+			args = map[string]any{"id": id, "group": "Mess Buy Sell"}
+		}
 		if name == "mark_sell_task_sold" || name == "add_sell_task_buyer" {
 			args["name"] = "Friend"
 		}
@@ -73,7 +82,7 @@ func TestSellActionTools(t *testing.T) {
 		if err != nil || result.IsError {
 			t.Fatalf("%s: %+v %v", name, result, err)
 		}
-		if op.id != id || op.buyer != "+911111111111" {
+		if op.id != id || (name != "resend_sell_task_offer" && op.buyer != "+911111111111") {
 			t.Fatalf("operation = %+v", op)
 		}
 		switch name {
@@ -84,6 +93,10 @@ func TestSellActionTools(t *testing.T) {
 		case "add_sell_task_buyer":
 			if op.action != "add" || op.name != "Friend" {
 				t.Fatalf("add = %+v", op)
+			}
+		case "resend_sell_task_offer":
+			if op.action != "resend" || op.group != "Mess Buy Sell" {
+				t.Fatalf("resend = %+v", op)
 			}
 		default:
 			if op.action != "mute" || op.muted != (name == "mute_sell_task_buyer") {

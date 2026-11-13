@@ -351,6 +351,13 @@ type negotiation struct {
 	direct      chan error
 	directBuyer types.JID
 	remove      func()
+	// ownMin is the task's own floor in rupees. In a pool h.min is the
+	// pool's lowest floor, which the bot may quote but this task never
+	// charges below.
+	ownMin int
+	// moved are buyers passed to another task in the pool; their messages
+	// are that task's now.
+	moved map[types.JID]bool
 }
 
 func newNegotiation(ctx context.Context, m *sellManager, t store.SellTask, s *sale, gate *taskGate, join *offerQueue) *negotiation {
@@ -369,6 +376,7 @@ func newNegotiation(ctx context.Context, m *sellManager, t store.SellTask, s *sa
 		h:     newHaggle(int(t.MinPaise/100), int(t.MaxPaise/100), median, have, t.EndsAt, portalMealLabel(s.mess, s.diet, ""), offerDay(m.cfg, t.Date)),
 		slots: make(chan struct{}, maxSessions), sessions: map[types.JID]*session{}, direct: make(chan error, 1),
 		silence: m.cfg.Live().Sell.NegotiationSilence.Duration, revived: make(chan *session, maxSessions),
+		ownMin: int(t.MinPaise / 100), moved: map[types.JID]bool{},
 	}
 	if n.silence <= 0 {
 		n.silence = config.Default().Sell.NegotiationSilence.Duration
@@ -393,7 +401,8 @@ func (n *negotiation) prices() haggle {
 // refreshRange reloads the task's floor and opening price from the store,
 // works out the target again, and records it. Every session's next turn
 // uses them. Calls are serialized and always read the store, so the last
-// edit wins whatever order they arrive in.
+// edit wins whatever order they arrive in. In a pool the range is the
+// pool's (see poolPrices).
 func (n *negotiation) refreshRange(ctx context.Context) error {
 	n.rangeMu.Lock()
 	defer n.rangeMu.Unlock()
@@ -401,9 +410,18 @@ func (n *negotiation) refreshRange(ctx context.Context) error {
 	if err != nil || t == nil {
 		return errors.Join(err, errors.New("sell task is gone"))
 	}
+	lo, hi := t.MinPaise, t.MaxPaise
+	if pooled(*t) && t.State == store.TaskActive {
+		if p, err := n.m.pool(ctx, t.ID); err != nil {
+			n.log.Warn("could not read the task's pool; haggling on its own range", "err", err)
+		} else if len(p.active) > 1 {
+			lo, hi = poolPrices(p.active)
+		}
+	}
 	n.mu.Lock()
 	old := n.h
-	n.h = n.h.withRange(int(t.MinPaise/100), int(t.MaxPaise/100))
+	n.h = n.h.withRange(int(lo/100), int(hi/100))
+	n.ownMin = int(t.MinPaise / 100)
 	h := n.h
 	n.mu.Unlock()
 	if h.min == old.min && h.max == old.max {
@@ -638,7 +656,7 @@ func (n *negotiation) handle(evt any) {
 		return
 	}
 	peer := buyerPeer(n.ctx, n.m.conn, e.Info)
-	if !n.join.has(peer) {
+	if !n.join.has(peer) || n.isMoved(peer) {
 		return
 	}
 	if n.gate.muted(n.ctx, peer) {
@@ -850,8 +868,10 @@ func (n *negotiation) payment(peer types.JID, e *events.Message) {
 	if ss.agreed != "" {
 		amounts = append(amounts, ss.agreed)
 	}
+	// ClaimTaskSale checks this task's floor and its previously valid
+	// quotes before accepting a payment, including prices from the pool.
+	floor := int64(n.ownMin) * 100
 	ended := ss.state == sessionEnded || ss.state == sessionWaiting
-	floor := int64(n.h.min) * 100
 	since := ss.joined.Truncate(time.Second)
 	n.mu.Unlock()
 	if ended {
@@ -1307,6 +1327,33 @@ func (ss *session) agree(st step) handled {
 	if started.IsZero() {
 		started = time.Now()
 	}
+	// In a pool the buyer goes to the task whose floor takes the price.
+	if to, ok := n.m.sellerFor(ctx, n.t, int64(st.agree)*100, 0); ok && to != n.t.ID {
+		if n.passAgreed(ctx, ss, to, amount, next, started) {
+			return handledEnded
+		}
+	}
+	n.mu.Lock()
+	own := n.ownMin
+	n.mu.Unlock()
+	honoured := st.agree >= own
+	if !honoured {
+		var err error
+		honoured, err = n.m.st.BuyerPriceHonoured(ctx, n.t.ID, ss.buyer.String(), int64(st.agree)*100)
+		if err != nil {
+			n.log.Warn("could not check the buyer's earlier quotes", "buyer", ss.buyer, "err", err)
+		}
+	}
+	if !honoured {
+		// No remaining task takes this pool quote. Previously valid
+		// quotes from this task still count after its floor rises.
+		n.mu.Lock()
+		prev := ss.hs
+		n.mu.Unlock()
+		ss.keepOffer(prev, next)
+		n.park(context.WithoutCancel(ctx), ss, fmt.Sprintf("agreed ₹%d, which another meal in the pool took when the bot quoted it; no meal left takes it now, so it's your call", st.agree))
+		return handledEnded
+	}
 	ok, err := n.m.st.AgreeSellTaskBuyer(ctx, n.t.ID, ss.buyer.String(), amount, next.store(started), time.Now())
 	if err != nil || !ok {
 		n.log.Warn("could not record the agreement", "buyer", ss.buyer, "amount", amount, "err", err)
@@ -1458,6 +1505,16 @@ func (m *sellManager) sellNegotiated(ctx context.Context, n *negotiation, s *sal
 		}
 	}
 	s.others = n.others
+	if pooled(n.t) {
+		// The meal sold: buyers still in play move to the rest of the
+		// pool, once their sessions have stopped.
+		s.keep = func(ctx context.Context, buyers []types.JID) []types.JID {
+			n.hush()
+			n.wg.Wait()
+			moved := m.passOn(ctx, n.t)
+			return slices.DeleteFunc(buyers, func(b types.JID) bool { return moved[b.String()] })
+		}
+	}
 	nj := negotiatedJournal{taskJournal: j, n: n}
 	notifyCtx := context.WithoutCancel(ctx)
 	err := s.sellToQueue(n.ctx, notifyCtx, n.pay, nj, 0, resume)
@@ -1470,7 +1527,11 @@ func (m *sellManager) sellNegotiated(ctx context.Context, n *negotiation, s *sal
 			[]string{store.BuyerQueued, store.BuyerNegotiating, store.BuyerAgreed}, store.BuyerBought); err != nil {
 			m.log.Warn("could not record the sale", "err", err)
 		}
-		s.tellSold(notifyCtx, nj, append(n.pay.closeAndDrain(), n.others()...))
+		waiting := append(n.pay.closeAndDrain(), n.others()...)
+		if s.keep != nil {
+			waiting = s.keep(notifyCtx, waiting)
+		}
+		s.tellSold(notifyCtx, nj, waiting)
 		return nil
 	}
 	return err
@@ -1479,4 +1540,97 @@ func (m *sellManager) sellNegotiated(ctx context.Context, n *negotiation, s *sal
 // describeAgreement says what the bot agreed with a buyer it handed over.
 func describeAgreement(amount string) string {
 	return "The bot agreed INR " + strings.TrimSuffix(amount, ".00") + " with them and has not asked them to pay."
+}
+
+// busy reports whether a buyer is paying for the task's meal or waiting
+// to.
+func (n *negotiation) busy() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.sold || !n.holder.IsEmpty() || n.pay.waiting() > 0
+}
+
+func (n *negotiation) isMoved(peer types.JID) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.moved[peer]
+}
+
+// passAgreed hands a buyer who just agreed amount to task to in the pool,
+// which asks them to pay. It reports false, leaving them here, when the
+// store refuses.
+func (n *negotiation) passAgreed(ctx context.Context, ss *session, to int64, amount string, next haggleState, started time.Time) bool {
+	ok, err := n.m.st.PassSellTaskBuyer(ctx, n.t.ID, to, ss.buyer.String(), amount, next.store(started), time.Now())
+	if err != nil || !ok {
+		n.log.Warn("could not pass an agreed buyer to another task in the pool", "to", to, "buyer", ss.buyer, "amount", amount, "err", err)
+		return false
+	}
+	n.drop(ss.buyer)
+	notify := context.WithoutCancel(ctx)
+	n.m.notePassed(notify, n.t.ID, to, ss.buyer.String(), paise(amount))
+	n.m.event(notify, store.SellEvent{TaskID: to, Peer: ss.buyer.String(), Kind: store.EventAgreed, N: paise(amount)})
+	n.m.adoptPassed(notify, to, ss.buyer.String())
+	return true
+}
+
+// drop forgets a buyer passed to another task in the pool.
+func (n *negotiation) drop(peer types.JID) {
+	n.mu.Lock()
+	if ss := n.sessions[peer]; ss != nil {
+		ss.state = sessionEnded
+	}
+	n.moved[peer] = true
+	n.mu.Unlock()
+	n.join.remove(peer)
+	n.pay.remove(peer)
+}
+
+// adopt takes a buyer another task in the pool passed here, as the store
+// has them now: an agreed buyer queues to pay, one who was haggling
+// carries on from the bot's last ask, and one who timed out can be revived
+// by a late reply. A task that is selling to someone else already leaves
+// them in the store, for its own end to pass on again.
+func (n *negotiation) adopt(b store.SellBuyer) {
+	peer, err := types.ParseJID(b.Peer)
+	if err != nil {
+		return
+	}
+	n.join.restore(peer, false)
+	n.mu.Lock()
+	if n.sold || n.talk.Err() != nil {
+		n.mu.Unlock()
+		return
+	}
+	delete(n.moved, peer)
+	ss := n.sessionLocked(peer)
+	ss.joined, ss.started = b.JoinedAt, b.StartedAt
+	ss.hs = haggleFromStore(b.Negotiation, n.h.max)
+	busy := !n.holder.IsEmpty() || n.pay.waiting() > 0
+	switch b.State {
+	case store.BuyerAgreed:
+		ss.state, ss.agreed = sessionAgreed, b.Agreed
+	case store.BuyerQueued, store.BuyerNegotiating:
+		ss.state = sessionNegotiating
+	default:
+		ss.state = sessionEnded
+	}
+	state := ss.state
+	n.mu.Unlock()
+	n.log.Info("took a buyer from another task in the pool", "buyer", peer, "state", b.State)
+	switch state {
+	case sessionAgreed:
+		if busy {
+			if a, err := store.ParsePaise(b.Agreed); err == nil {
+				ss.sayAgreed(sayQueued(int(a / 100)))
+			}
+		}
+		n.pay.requeue(peer)
+	case sessionNegotiating:
+		go func() {
+			select {
+			case n.revived <- ss:
+			case <-n.talk.Done():
+			}
+		}()
+	}
 }

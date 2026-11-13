@@ -57,6 +57,10 @@ type SaleView struct {
 
 type SalePost struct {
 	Group string `json:"group"`
+	JID   string `json:"jid"`
+	// Seq is the copy number in its group: 0 for the first, then one per
+	// repost or resend.
+	Seq   int    `json:"seq"`
 	State string `json:"state"` // posting, posted, failed
 	At    int64  `json:"at"`
 	Error string `json:"error,omitempty"`
@@ -64,6 +68,9 @@ type SalePost struct {
 	Revoked int64 `json:"revoked,omitempty"`
 	// After is how many listing posts went up in the group after yours.
 	After int `json:"after"`
+	// Resend is set on a failed copy that is its group's latest while the
+	// task is active, so you can post it again.
+	Resend bool `json:"resend,omitempty"`
 }
 
 type SaleBuyer struct {
@@ -171,8 +178,13 @@ func (s *Server) saleView(ctx context.Context, t store.SellTask, now time.Time) 
 	if err != nil {
 		return v, err
 	}
+	latest := map[string]int{}
 	for _, o := range offers {
-		p := SalePost{Group: groupName(names, o.Group), State: o.State, At: unix(o.PostedAt), Error: o.Error, Revoked: unix(o.RevokedAt)}
+		latest[o.Group] = max(latest[o.Group], o.Seq)
+	}
+	for _, o := range offers {
+		p := SalePost{Group: groupName(names, o.Group), JID: o.Group, Seq: o.Seq, State: o.State,
+			Resend: t.State == store.TaskActive && o.State == store.OfferFailed && o.Seq == latest[o.Group], At: unix(o.PostedAt), Error: o.Error, Revoked: unix(o.RevokedAt)}
 		if o.State == store.OfferPosted {
 			if p.After, err = s.st.PostsAfter(ctx, o.Group, o.ID, o.PostedAt); err != nil {
 				return v, err

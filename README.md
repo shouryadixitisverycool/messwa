@@ -139,7 +139,7 @@ While a [sell task](#sell-tasks) runs, users get a MY SALE box above the board, 
 - **Glow.** Green: a buyer's pay window is open. Red: a buyer needs you, or sent a picture instead of paying. No glow: the bot has it.
 - **Clock.** Minutes until the meal ends. A ✓ or ✕ once the task is over.
 - **Price bar.** Your floor on the left, the opening price on the right. The green part is every price the bot takes right now, the arrow is its lowest, and the gold tick is the target it picked from the market's median ask. The lowest slides left over the last three hours; 🔒 means it's held at the target because two buyers are active. Dots are buyers' offers, hollow when the buyer needs you.
-- **Posts.** One pill per group. Gold is your post and the bar after it is the listings posted in that group since, red once more than 15 have buried it. A dashed red pill failed, with WhatsApp's error code (479 and the like).
+- **Posts.** One pill per group, showing its newest copy, with ×3 when the bot posted there three times. Gold is your post and the bar after it is the listings posted in that group since, red once more than 15 have buried it. A dashed red pill failed, with WhatsApp's error code (479 and the like). While the task runs, ↻ on a failed pill posts the offer in that group again; if it fails again, the new pill gets its own ↻.
 - **Buyers.** Pixel heads in reply order, the same heads as on the sales page. The border is their state: blue haggling, gold agreed and waiting, green paying (the ring is their two minutes), red needs you (!), amber check (?, usually a screenshot instead of a WhatsApp Pay payment), grey gone. ♥ marks a saved contact. The chip under a head is their price.
 - **Squares, top right.** Every task for this meal, so a restart doesn't lose the story: grey crossed cancelled, green live or sold.
 - **Market.** Every open listing for the same meal and mess, cheapest first, yours in gold. Your listing also gets a gold outline on the board.
@@ -148,7 +148,7 @@ Tap a buyer for the negotiation as a tug of war: each row is one round, their of
 
 Users can use **MARK SOLD** to record a sale made outside the bot (pick a buyer or enter a phone/name, price and optional note). Confirming stops negotiation, records paid/sent timestamps with payment kind `manual`, marks posts ✅ and gives other eligible buyers the usual sold handling; the chosen buyer gets no message. **ADD BUYER** queues a phone/JID with an optional name and sends the opening quote. Buyer sheets offer **MUTE** (with confirmation) and **UNMUTE**. Muted buyers keep their records and get no task messages, including sold notices or automatic QR delivery. Unmuting resumes handling their next message. Each action appears in the task event log.
 
-The MCP tools are `mark_sell_task_sold`, `add_sell_task_buyer`, `mute_sell_task_buyer` and `unmute_sell_task_buyer`. They require your own linked WhatsApp account and sell tasks enabled for your account. The dashboard uses the same operations with session and CSRF protection. Live updates preserve forms while you type.
+The MCP tools are `mark_sell_task_sold`, `add_sell_task_buyer`, `mute_sell_task_buyer`, `unmute_sell_task_buyer` and `resend_sell_task_offer`. They require your own linked WhatsApp account and sell tasks enabled for your account. The dashboard uses the same operations with session and CSRF protection. Live updates preserve forms while you type.
 
 ### Settings page
 
@@ -159,7 +159,7 @@ Everyone edits their own selling settings on the OFFER, REPOST and BUYERS tabs: 
 | Tab | Settings |
 | --- | --- |
 | OFFER | `[mcp] sell_tasks`, `[sell] groups` or `group_count`, `post_gap`, `show_price`, `mention_extras`, `[sales] monthly_fee`, with a preview of the group post |
-| REPOST | `[sell] repost`, `repost_after`, `repost_messages`, `repost_listings`, `max_reposts` |
+| REPOST | `[sell] repost`, `repost_messages`, `repost_listings`, `max_reposts` |
 | BUYERS | `[sell] buyers`, `handoff`, `accept_plain_dms`, `message_buy_posts`, `accept_payment_images`, `[dms] retention` |
 | MARKET | `[sold]` emojis, closed emojis, words and `admins_count`, `[dedupe] window` |
 | CALENDAR | meal times, `[[seasons]]`, each mess's `veg_only` |
@@ -432,7 +432,6 @@ isn't today's.
 | `message_buy_posts` | none | `true` | Sell tasks only: message open buy posts for the meal and queue the posters, see [Sell tasks](#sell-tasks) |
 | `buyers` | `-buyers` | `anyone` | Who may buy. `unsaved_only` skips saved contacts, see below |
 | `repost` | `-repost` | `true` | Post a fresh copy in a group once the last one has dropped out of view, see below |
-| `repost_after` | `-repost-after` | `10m` | Repost once a copy is this old. `0s` turns it off |
 | `repost_messages` | `-repost-messages` | `10` | Repost once this many messages came in after a copy. 0 turns it off |
 | `repost_listings` | `-repost-listings` | `3` | Repost once this many other sellers listed the same meal at the same mess after a copy. 0 turns it off |
 | `max_reposts` | `-max-reposts` | `6` | Most fresh copies per group for one offer, 0 to 12 |
@@ -478,9 +477,8 @@ group keep failing, rerun with `MESSWA_WA_LOG=debug` (see
 
 **Reposts.** In these groups a post scrolls out of view within minutes at
 lunch and dinner. While the meal is unsold, messwa puts a fresh copy in a
-group when the first of these happens there:
+group when either of these happens there:
 
-- the latest copy is `repost_after` old (10 minutes);
 - `repost_messages` posts (10) came in after it, about a phone screen of
   short posts;
 - `repost_listings` other people (3) listed the same meal at the same mess
@@ -492,13 +490,18 @@ from, tagged by the same mess and meal rules. messwa writes its own posts
 into the log when it sends them, so "after ours" means after that row:
 later by timestamp, or the same second and logged later. History that
 syncs late still lands in timestamp order. A group that isn't one of the
-top-level `groups` has no log, so only the time trigger works there.
+top-level `groups` has no log, so nothing can be counted and it gets no
+reposts.
+
+Time alone never brings a repost. In a quiet group the copy is still on
+screen, and a fresh one only adds noise. (`repost_after` was removed; an
+old config.toml or saved setting that still has it is ignored.)
 
 The defaults come from 11 days of the four IIITH groups. In the busiest
 two, a sell post in the last four hours before a meal ends is followed by
 a median of 8 to 11 messages and 2 to 3 same-mess listings within 10
 minutes, so those groups often repost after 6 to 9 minutes. The quietest
-gets about 2 messages in 10 minutes and reposts on the timer.
+gets about 2 messages in 10 minutes, so a copy there usually stays up.
 
 Limits that hold whatever the settings say:
 
@@ -507,7 +510,9 @@ Limits that hold whatever the settings say:
 - No reposts in the meal's last 15 minutes. About 2.5% of these groups'
   sales happen in the last 10 minutes, too late to haggle and pay.
 - A group whose copy failed to send gets no more copies from that offer, so
-  a group that always refuses (WhatsApp error 479, say) costs one send.
+  a group that always refuses (WhatsApp error 479, say) costs one send. You
+  can still post it again by hand with ↻ on the dashboard or
+  `resend_sell_task_offer`; reposting there resumes once a copy goes up.
 - Reposting stops when the meal sells, is handed off, the task is
   cancelled or the meal ends.
 
@@ -852,6 +857,10 @@ What a task does:
 5. Asks the first buyer in the pay queue to pay their price within two minutes. They can drop out with `not interested`, `nvm` and the like. Then the next buyer gets a turn, as in `deliver-qr -group`.
 6. Sends the QR after a matching WhatsApp Pay payment (or, with `[sell] accept_payment_images = true`, an unverified image from that buyer after the prompt; see [Payment images](#offer-settings)), stops posting copies, tells everyone else who replied `sold sorry`, reacts ✅ to the meal's offer posts, and ends as `sold`.
 
+Tasks on the same account for the same date, meal, mess and diet share a pool when they negotiate with `handoff = "never"`. Fixed-price and handoff tasks sell separately. The oldest active task posts for the pool, for example `sell bakul non-veg lunch x2 55`. With `show_price`, the shared price is the average of the active tasks' `max_price`, rounded to the price unit; negotiation opens there and can go down to the pool's lowest floor.
+
+A buyer who agrees goes to the oldest task whose own floor accepts the price, preferring a task without a buyer already paying or waiting to pay. That task requests payment and sends its own QR. When one meal sells or is cancelled, remaining buyers move to the other tasks where their prices fit. Shared posts stay up; while a copy is under 15 minutes old, the bot edits its count and price. Older copies keep their text until a repost. When the last task ends and a meal sold, the pool's posts get ✅. Cancelling with deletion keeps shared posts while another task still needs them.
+
 `sell_task_status` lists every copy with its copy number (0 for the first in a group, then one per repost), marks each group's current copy, and under `reposts` says per group how many messages and same-mess listings came in after the current copy, when the next copy goes out and why, or why that group gets no more.
 
 `[sell] handoff` doesn't apply to tasks. Instead `start_sell_task` takes `handoff`, `never` by default:
@@ -875,7 +884,7 @@ Until the meal ends, a private reply to a cancelled task's post goes to another 
 - Nothing is sent unless a task is active. The one exception is a QR for a payment that came in while the task was active. It still goes out if you cancel a moment later, and the task then ends as `sold`.
 - Besides one claimed post per group, a task messages only people its posts queued: those who replied privately to one, to a cancelled task's post for the same meal, with `accept_plain_dms`, DMed about it, or with `message_buy_posts`, posted a buy request for the meal. After the QR goes out it may also react ✅ to the meal's recorded offer posts, and to nothing else. After a cancel it may delete its own posts.
 - With `[sell] buyers = "unsaved_only"`, a task never queues or messages a saved contact. If you switch to it while a task is running, the restart skips saved contacts still waiting in the queue. A buyer already asked to pay keeps their turn, and gets the QR if they pay.
-- No buyer is quoted, agreed with or asked for less than `min_price`. The store checks this itself on every quote, agreement, reservation and sale, whatever the negotiation decided. The one exception is a price the bot already quoted or agreed with that buyer before `set_sell_task_prices` raised the floor: that price stands. A payment must match exactly the price agreed with that buyer, or a higher one the bot quoted them.
+- A task never sells below its own `min_price`. A pooled negotiation may quote down to the pool's lowest floor, then routes the buyer to a task whose floor accepts the price. The store checks the pool floor for quotes and the task floor for agreements, reservations and sales. The one exception is a price the bot already quoted or agreed with that buyer before `set_sell_task_prices` raised the floor: that price stands. A payment must match exactly the price agreed with that buyer, or a higher one the bot quoted them.
 - A task sends at most 12 messages a minute and 80 in total. Reposts count toward both, and a task stops reposting when it has 20 sends left, keeping those for buyers. All tasks together send at most 15 a minute. One buyer gets at most 6 negotiation messages. The ✅ reactions after a sale skip the per-minute wait, so they don't time out behind the sale's own sends.
 - A task stops at the meal's end time.
 
@@ -883,7 +892,7 @@ Each send is written to the database before it goes out: each group post, each n
 
 #### Changing prices
 
-`set_sell_task_prices` takes a task id, `min_price` and `max_price` and changes them while the task runs. The posts stay up, nobody is messaged, and every buyer keeps their place. Use it instead of cancelling and starting a new task, which reposts in every group and drops every haggle.
+`set_sell_task_prices` takes a task id, `min_price` and `max_price` and changes them while the task runs. The posts stay up, nobody is messaged, and every buyer keeps their place. Pooled posts within the edit window update their shown price. Use it instead of cancelling and starting a new task, which reposts in every group and drops every haggle.
 
 - Buyers mid-haggle get the new range on their next message. The target (the meal's usual price, clamped to the range) is worked out again, and `sell_task_status` shows it as `target_price`.
 - A price the bot already said stays said. A raised floor stops the bot going lower than a buyer's current ask but never raises it, and a buyer who agreed below the new floor still gets their turn at that price. A lower `max_price` lowers asks above it.

@@ -114,6 +114,9 @@ type SellOffer struct {
 	Seq              int
 	PostedAt         time.Time
 	Error            string // why a failed post failed
+	// Text is what the copy shows now, after any edit; empty for copies
+	// posted before it was recorded.
+	Text string
 	// RevokedAt is when the copy was deleted for everyone after the task
 	// was cancelled; zero if it wasn't. RevokeError is why the last
 	// attempt to delete it failed or was skipped.
@@ -334,7 +337,7 @@ func (s *Store) OfferClaimed(ctx context.Context, id int64, group, offerID strin
 }
 
 func (s *Store) SellTaskOffers(ctx context.Context, id int64) ([]SellOffer, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT group_jid,seq,offer_id,state,posted_at,error,revoked_at,revoke_error FROM sell_task_offers WHERE task_id=? ORDER BY posted_at, rowid`, id)
+	rows, err := s.db.QueryContext(ctx, `SELECT group_jid,seq,offer_id,state,posted_at,error,revoked_at,revoke_error,text FROM sell_task_offers WHERE task_id=? ORDER BY posted_at, rowid`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -343,7 +346,7 @@ func (s *Store) SellTaskOffers(ctx context.Context, id int64) ([]SellOffer, erro
 	for rows.Next() {
 		var o SellOffer
 		var at, revoked int64
-		if err := rows.Scan(&o.Group, &o.Seq, &o.ID, &o.State, &at, &o.Error, &revoked, &o.RevokeError); err != nil {
+		if err := rows.Scan(&o.Group, &o.Seq, &o.ID, &o.State, &at, &o.Error, &revoked, &o.RevokeError, &o.Text); err != nil {
 			return nil, err
 		}
 		o.PostedAt = time.Unix(at, 0)
@@ -392,7 +395,7 @@ func (s *Store) IsSellTaskBuyer(ctx context.Context, id int64, peers ...string) 
 			continue
 		}
 		var ok bool
-		if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sell_task_buyers WHERE task_id=? AND ? IN (peer, alt))`, id, p).Scan(&ok); err != nil || ok {
+		if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sell_task_buyers WHERE task_id=? AND ? IN (peer, alt) AND state!='moved')`, id, p).Scan(&ok); err != nil || ok {
 			return ok, err
 		}
 	}

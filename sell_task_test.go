@@ -36,6 +36,8 @@ type sentMessage struct {
 	reaction, target string
 	// revoked is the message a revoke deletes for everyone.
 	revoked string
+	// edited is the message an edit changes; text is its new text.
+	edited string
 	// quoted is the message a reply quotes.
 	quoted string
 }
@@ -112,6 +114,11 @@ func (f *fakeConn) BuildRevoke(chat, _ types.JID, id types.MessageID) *waE2E.Mes
 		Key: &waCommon.MessageKey{RemoteJID: proto.String(chat.String()), FromMe: proto.Bool(true), ID: proto.String(id)}}}
 }
 
+func (f *fakeConn) BuildEdit(chat types.JID, id types.MessageID, newContent *waE2E.Message) *waE2E.Message {
+	return &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{Type: waE2E.ProtocolMessage_MESSAGE_EDIT.Enum(),
+		Key: &waCommon.MessageKey{RemoteJID: proto.String(chat.String()), FromMe: proto.Bool(true), ID: proto.String(id)}, EditedMessage: newContent}}
+}
+
 func (f *fakeConn) GetJoinedGroups(context.Context) ([]*types.GroupInfo, error) { return f.groups, nil }
 
 func (f *fakeConn) GetGroupInfo(_ context.Context, jid types.JID) (*types.GroupInfo, error) {
@@ -181,6 +188,9 @@ func (f *fakeConn) send(ctx context.Context, to types.JID, msg *waE2E.Message, e
 		reaction: msg.GetReactionMessage().GetText(), target: msg.GetReactionMessage().GetKey().GetID()}
 	if pm := msg.GetProtocolMessage(); pm.GetType() == waE2E.ProtocolMessage_REVOKE {
 		m.revoked = pm.GetKey().GetID()
+	}
+	if pm := msg.GetProtocolMessage(); pm.GetType() == waE2E.ProtocolMessage_MESSAGE_EDIT {
+		m.edited, m.text = pm.GetKey().GetID(), pm.GetEditedMessage().GetConversation()
 	}
 	if len(extra) > 0 {
 		m.id = extra[0].ID

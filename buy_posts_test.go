@@ -168,3 +168,44 @@ func countOf(xs []string, x string) int {
 	}
 	return n
 }
+
+func TestPoolMessagesBuyPostOnceAcrossLeaderChange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m := f.negotiatingManager(ctx, 40)
+		first, err := m.Start(ctx, 0, f.date, "lunch", 30, 60, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		second, err := m.Start(ctx, 0, f.date, "lunch#2", 30, 60, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		f.buyPost(buyerA, "lunch", "bakul", "", "need bakul lunch")
+		time.Sleep(buyPostSweep)
+		settle()
+		if got := texts(sentTo(f.conn.messages(), buyerA)); countOf(got, "have bakul non-veg lunch") != 1 {
+			t.Fatalf("poster got %q", got)
+		}
+		if err := m.Cancel(ctx, first, false); err != nil {
+			t.Fatal(err)
+		}
+		settle()
+		f.buyPost(buyerB, "lunch", "bakul", "", "need bakul lunch too")
+		time.Sleep(buyPostSweep)
+		settle()
+		for _, peer := range []types.JID{buyerA, buyerB} {
+			if got := texts(sentTo(f.conn.messages(), peer)); countOf(got, "have bakul non-veg lunch") != 1 {
+				t.Fatalf("poster %s got %q", peer, got)
+			}
+		}
+		if b := buyerState(t, f, second, buyerB); b.State != store.BuyerNegotiating {
+			t.Fatalf("new poster = %+v", b)
+		}
+	})
+}

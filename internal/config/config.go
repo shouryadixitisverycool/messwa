@@ -170,7 +170,6 @@ func Default() *Config {
 			// buyer there is.
 			MessageBuyPosts: true,
 			Repost:          true,
-			RepostAfter:     duration{10 * time.Minute},
 			RepostMessages:  10,
 			RepostListings:  3,
 			MaxReposts:      6,
@@ -221,12 +220,12 @@ func (c *Config) validateSell() error {
 	if d := s.NegotiationSilence.Duration; d < MinNegotiationSilence || d > MaxNegotiationSilence {
 		return fmt.Errorf("sell.negotiation_silence must be between %s and %s", MinNegotiationSilence, MaxNegotiationSilence)
 	}
-	return ValidateRepost(s.RepostAfter.Duration, s.RepostMessages, s.RepostListings, s.MaxReposts, "sell.")
+	return ValidateRepost(s.RepostMessages, s.RepostListings, s.MaxReposts, "sell.")
 }
 
 // ValidateRepost checks the repost thresholds. prefix names them in the
 // error: "sell." for config.toml, "-" for flags.
-func ValidateRepost(after time.Duration, messages, listings, maxReposts int, prefix string) error {
+func ValidateRepost(messages, listings, maxReposts int, prefix string) error {
 	name := func(n string) string {
 		if prefix == "-" {
 			return "-" + strings.ReplaceAll(n, "_", "-")
@@ -234,8 +233,6 @@ func ValidateRepost(after time.Duration, messages, listings, maxReposts int, pre
 		return prefix + n
 	}
 	switch {
-	case after != 0 && after < MinRepostGap:
-		return fmt.Errorf("%s must be 0 (off) or at least %s", name("repost_after"), MinRepostGap)
 	case messages < 0:
 		return fmt.Errorf("%s must be 0 (off) or more", name("repost_messages"))
 	case listings < 0:
