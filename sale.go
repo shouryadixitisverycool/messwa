@@ -71,6 +71,9 @@ type mealPortal interface {
 var errBuyerPassed = errors.New("buyer passed on the meal")
 var errBuyerTimedOut = errors.New("buyer payment window expired")
 
+// errBuyerOutbid ends a turn that a higher offer took before any payment.
+var errBuyerOutbid = errors.New("another buyer agreed a higher price")
+
 // errHandedOff ends a sale whose first buyer was handed to you.
 var errHandedOff = errors.New("sale handed off to you")
 
@@ -287,12 +290,16 @@ type turn struct {
 	// claimLine claims a once-per-buyer line such as the screenshot reply
 	// before it is sent. Nil keeps the claim for this turn only.
 	claimLine func(ctx context.Context, kind string) (bool, error)
+	// outbid fires when another buyer agrees a higher price. The turn ends
+	// with errBuyerOutbid unless a payment is already being handled; then
+	// the payment wins.
+	outbid <-chan struct{}
 }
 
 // takeTurn arms the meal for buyer and delivers the QR after a matching
-// payment. It returns nil once the QR is sent, errBuyerPassed or
-// errBuyerTimedOut when a queued buyer's turn ends without one, or another
-// error that stops the sale.
+// payment. It returns nil once the QR is sent, errBuyerPassed,
+// errBuyerTimedOut or errBuyerOutbid when a queued buyer's turn ends
+// without one, or another error that stops the sale.
 func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, t turn) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -511,10 +518,29 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 		finish(e, false, paidAmount, false)
 	})
 	defer s.conn.RemoveEventHandler(handler)
+	// yield gives the turn up to a higher offer, unless a payment is
+	// already being handled.
+	yield := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if attempted || pending > 0 {
+			return false
+		}
+		attempted = true
+		return true
+	}
 	if t.listening != nil {
 		if err := t.listening(); err != nil {
 			return err
 		}
+	}
+	select {
+	case <-t.outbid:
+		// Outbid before the prompt went out: don't ask this buyer to pay.
+		if yield() {
+			return errBuyerOutbid
+		}
+	default:
 	}
 	if len(t.prompt) > 0 {
 		send := true
@@ -556,10 +582,19 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 		}
 		return fallback
 	}
-	select {
-	case err := <-done:
-		return err
-	case <-deadline:
+	for {
+		select {
+		case err := <-done:
+			return err
+		case <-t.outbid:
+			if yield() {
+				return errBuyerOutbid
+			}
+			continue
+		case <-deadline:
+		case <-ctx.Done():
+			return waitDelivery(ctx.Err())
+		}
 		for {
 			mu.Lock()
 			expired := pending == 0 && !attempted
@@ -578,8 +613,6 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 			case <-recoveryDone:
 			}
 		}
-	case <-ctx.Done():
-		return waitDelivery(ctx.Err())
 	}
 }
 
@@ -612,6 +645,16 @@ type quoteJournal interface {
 	reprice(ctx context.Context, d store.Delivery, amount string) (store.Delivery, error)
 }
 
+// outbidJournal is a journal whose buyers can lose their turn to a higher
+// offer.
+type outbidJournal interface {
+	// watchOutbid fires when another buyer agrees more than buyer, who
+	// holds the turn.
+	watchOutbid(buyer types.JID) <-chan struct{}
+	// outbid records that buyer lost their turn and puts them back in line.
+	outbid(ctx context.Context, buyer types.JID) error
+}
+
 // resumedTurn is a buyer whose turn was under way when run stopped.
 type resumedTurn struct {
 	buyer    types.JID
@@ -621,9 +664,10 @@ type resumedTurn struct {
 	listening func()
 }
 
-// sellToQueue gives each buyer from q a turn, in reply order, until one
-// pays, or hands the first buyer over when s.handoff is set. firstWait limits how long to wait for the first reply; zero waits
-// until ctx ends. notifyCtx outlives ctx for the "sorry sold" messages.
+// sellToQueue gives each buyer from q a turn, in q's order, until one
+// pays, or hands the first buyer over when s.handoff is set. A turn lost to
+// a higher offer puts its buyer back in q. firstWait limits how long to
+// wait for the first reply; zero waits until ctx ends. notifyCtx outlives ctx for the "sorry sold" messages.
 func (s *sale) sellToQueue(ctx, notifyCtx context.Context, q *offerQueue, j saleJournal, firstWait time.Duration, resume *resumedTurn) error {
 	wait := ctx
 	if firstWait > 0 && resume == nil {
@@ -686,6 +730,9 @@ func (s *sale) sellToQueue(ctx, notifyCtx context.Context, q *offerQueue, j sale
 				t.amounts, t.reprice = qj.accepts(buyer, amount), qj.reprice
 			}
 		}
+		if oj, ok := j.(outbidJournal); ok {
+			t.outbid = oj.watchOutbid(buyer)
+		}
 		if lj, ok := j.(lineJournal); ok {
 			who := buyer
 			t.claimLine = func(ctx context.Context, kind string) (bool, error) { return lj.claimLine(ctx, who, kind) }
@@ -705,11 +752,19 @@ func (s *sale) sellToQueue(ctx, notifyCtx context.Context, q *offerQueue, j sale
 			s.tellSold(notifyCtx, j, waiting)
 			return nil
 		}
-		if !errors.Is(err, errBuyerPassed) && !errors.Is(err, errBuyerTimedOut) {
+		if !errors.Is(err, errBuyerPassed) && !errors.Is(err, errBuyerTimedOut) && !errors.Is(err, errBuyerOutbid) {
 			return err
 		}
 		if err := s.st.ReleaseUnpaidDelivery(ctx, d); err != nil {
 			return err
+		}
+		if errors.Is(err, errBuyerOutbid) {
+			// Only an outbidJournal's turns watch for outbids.
+			if err := j.(outbidJournal).outbid(ctx, buyer); err != nil {
+				return err
+			}
+			s.log.Info("buyer outbid; offering the meal to the higher offer")
+			continue
 		}
 		state, kind := store.BuyerTimedOut, store.EventTimedOut
 		if errors.Is(err, errBuyerPassed) {

@@ -302,6 +302,7 @@ func sentTo(msgs []sentMessage, to types.JID) []sentMessage {
 var (
 	buyerA   = types.NewJID("911111111111", types.DefaultUserServer)
 	buyerB   = types.NewJID("912222222222", types.DefaultUserServer)
+	buyerC   = types.NewJID("914444444444", types.DefaultUserServer)
 	stranger = types.NewJID("913333333333", types.DefaultUserServer)
 )
 
