@@ -83,7 +83,9 @@ func withSession(acc *accounts.Accounts, next http.Handler) http.Handler {
 				jsonError(w, "cross-site request refused", http.StatusForbidden)
 				return
 			}
-			if sess != nil && r.URL.Path != "/api/login" {
+			// Signing in or up replaces the session, and the pages that do it
+			// have no token to send.
+			if sess != nil && r.URL.Path != "/api/login" && r.URL.Path != "/api/signup" {
 				got := r.Header.Get("X-CSRF-Token")
 				if subtle.ConstantTimeCompare([]byte(got), []byte(sess.CSRF)) != 1 {
 					jsonError(w, "missing or stale CSRF token; reload the page", http.StatusForbidden)

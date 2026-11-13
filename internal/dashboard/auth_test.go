@@ -378,6 +378,16 @@ func TestSignUpAndApproval(t *testing.T) {
 		t.Errorf("taken name: %d", res.StatusCode)
 	}
 
+	// A browser that's already signed in can sign up as someone else,
+	// without the old session's CSRF token, like it can sign in.
+	other := d.as(t, accounts.Member)
+	other.csrf = ""
+	res = other.send(t, "POST", "/api/signup", map[string]string{"name": "meera", "password": "meera's password"})
+	res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Errorf("sign up while signed in: %d", res.StatusCode)
+	}
+
 	// Until approved, pages go to the welcome page and the API refuses.
 	expectStatus := func(who *testClient, method, path string, want int) {
 		t.Helper()
@@ -426,7 +436,7 @@ func TestSignUpAndApproval(t *testing.T) {
 	expectStatus(member, "POST", "/api/signups/asha/approve", http.StatusForbidden)
 	var waiting []struct{ Name, Status string }
 	admin.get(t, "/api/signups", &waiting)
-	if len(waiting) != 1 || waiting[0].Name != "asha" || waiting[0].Status != "requested" {
+	if len(waiting) != 2 || waiting[0].Name != "asha" || waiting[0].Status != "requested" {
 		t.Fatalf("signups: %+v", waiting)
 	}
 	expectStatus(admin, "POST", "/api/signups/asha/approve", http.StatusNoContent)
