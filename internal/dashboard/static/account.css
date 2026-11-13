@@ -50,3 +50,10 @@ code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--t
 }
 
 .pairing-qr { max-width: 280px; background: white; padding: 12px; }
+
+.step.done .chest-head .head-name { color: var(--veg); }
+
+.signups { width: 100%; border-collapse: collapse; font-size: 13px; }
+.signups td { padding: 8px; border-bottom: 1px solid #1c2230; vertical-align: middle; }
+.signups td:last-child { text-align: right; white-space: nowrap; }
+.signups td:last-child .btn + .btn { margin-left: 6px; }

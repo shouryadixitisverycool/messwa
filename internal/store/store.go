@@ -99,7 +99,7 @@ func Open(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	os.Chmod(path, 0o600)
-	if _, err := db.Exec(schema + logSchema + deliverySchema + priceSchema + accountSchema + factSchema + sellTaskSchema + sellEventSchema + settingsSchema); err != nil {
+	if _, err := db.Exec(schema + logSchema + deliverySchema + priceSchema + accountSchema + factSchema + sellTaskSchema + sellEventSchema + settingsSchema + friendMealSchema); err != nil {
 		return nil, fmt.Errorf("schema: %w", err)
 	}
 	if _, err := db.Exec(`INSERT OR IGNORE INTO account_ids SELECT id FROM users`); err != nil {
@@ -138,6 +138,9 @@ func Open(path string) (*Store, error) {
 		{"sell_task_offers", "error TEXT NOT NULL DEFAULT ''"},
 		{"sell_task_offers", "revoked_at INTEGER NOT NULL DEFAULT 0"},
 		{"sell_task_offers", "revoke_error TEXT NOT NULL DEFAULT ''"},
+		// Accounts made before self sign-up were all made by an admin.
+		{"users", "status TEXT NOT NULL DEFAULT 'active'"},
+		{"users", "status_at INTEGER"},
 	} {
 		if _, err := db.Exec("ALTER TABLE " + c.table + " ADD COLUMN " + c.col); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return nil, fmt.Errorf("migrate: %w", err)

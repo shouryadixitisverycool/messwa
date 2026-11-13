@@ -104,10 +104,10 @@ func Handler(cfg *config.Config, srv *mcpserver.Server, hub *Hub, acc *accounts.
 	mux.Handle("GET /", pages(http.FileServerFS(files)))
 	member := func(h http.HandlerFunc) http.Handler { return requireRole(accounts.Member, h) }
 	regs := newRegCache(acc)
-	authRoutes(mux, acc, regs, "http://"+cfg.MCP.Listen+"/mcp")
+	authRoutes(mux, acc, srv, regs, "http://"+cfg.MCP.Listen+"/mcp")
 	settingsRoutes(mux, cfg, srv)
 	deviceRoutes(mux, srv)
-	sellActionRoutes(mux, srv)
+	sellActionRoutes(mux, cfg, srv)
 
 	mux.Handle("GET /api/events", member(hub.events))
 
@@ -210,7 +210,8 @@ func mineToday(ctx context.Context, cfg *config.Config, srv *mcpserver.Server) (
 	now := srv.Now()
 	today := now.In(cfg.Location()).Format("2006-01-02")
 	for _, d := range ds {
-		if d.Date != today {
+		// Friends' meals ("dinner#f1") aren't yours to track.
+		if d.Date != today || strings.Contains(d.Meal, "#") {
 			continue
 		}
 		state := map[string]string{"sent": "sold", "sending": "sending", "armed": "armed", "handed_off": "handoff"}[d.State]

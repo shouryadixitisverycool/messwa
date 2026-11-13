@@ -88,7 +88,7 @@ func TestLegacyOwnershipSurvivesRoleChangesAndDeletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	admin, err := st.AddUser(ctx, "original", "admin", "hash", time.Now())
+	admin, err := st.AddUser(ctx, "original", "admin", "hash", "active", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestLegacyOwnershipSurvivesRoleChangesAndDeletion(t *testing.T) {
 	if task, err := st.GetSellTask(ctx, legacyTask); err != nil || task.UserID != admin {
 		t.Fatalf("legacy task owner: %+v %v", task, err)
 	}
-	other, err := st.AddUser(ctx, "other", "admin", "hash", time.Now())
+	other, err := st.AddUser(ctx, "other", "admin", "hash", "active", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestLegacyOwnershipSurvivesRoleChangesAndDeletion(t *testing.T) {
 	if err := st.RemoveUser(ctx, other); err != nil {
 		t.Fatal(err)
 	}
-	newID, err := st.AddUser(ctx, "new", "admin", "hash", time.Now())
+	newID, err := st.AddUser(ctx, "new", "admin", "hash", "active", time.Now())
 	if err != nil || newID <= other {
 		t.Fatalf("reused account ID: %d %v", newID, err)
 	}

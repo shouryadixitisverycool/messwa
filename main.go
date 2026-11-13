@@ -401,6 +401,7 @@ func run(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	hub := dashboard.NewHub()
 	manager := &deviceAccounts{ctx: ctx, cfg: cfg, log: log, st: st, acc: acc, hub: hub, users: map[int64]*deviceAccount{}}
 	defer manager.close()
+	acc.OnDecision(manager.decided)
 	users, err := acc.List(ctx)
 	if err != nil {
 		return err

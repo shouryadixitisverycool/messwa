@@ -56,6 +56,21 @@ func TestSales(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Ravi's lunch, sold for him through your WhatsApp for 45.
+	if _, err := st.AddFriendMeal(ctx, store.FriendMeal{Date: "2026-11-03", Slot: "lunch", Mess: "kadamba-nonveg", Friend: "Ravi", QR: []byte("png")}); err != nil {
+		t.Fatal(err)
+	}
+	friend := store.Delivery{Date: "2026-11-03", Meal: "lunch#f1", Peer: "919811112222@s.whatsapp.net", Amount: "45.00", ImageHash: "h", ArmedAt: time.Date(2026, 11, 3, 12, 40, 0, 0, loc)}
+	if _, err := st.ArmDelivery(ctx, friend); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ClaimDelivery(ctx, friend, store.Payment{ID: "p9", At: friend.ArmedAt.Add(time.Minute), BuyerName: "Asha"}, "m9"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishDelivery(ctx, friend, "m9"); err != nil {
+		t.Fatal(err)
+	}
+
 	str := func(s string) *string { return &s }
 	orig := readRegistrations
 	defer func() { readRegistrations = orig }()
@@ -72,6 +87,7 @@ func TestSales(t *testing.T) {
 			{Date: "2026-11-02", Meal: "lunch", Mess: "kadamba-nonveg", Category: "registered"},
 			{Date: "2026-11-02", Meal: "dinner", Mess: "palash", Category: "registered"},
 			{Date: "2026-11-03", Meal: "lunch", Mess: "palash", Category: "registered"},
+			{Date: "2026-11-03", Meal: "snacks", Mess: "palash", Category: "registered"},
 			{Date: "2026-11-03", Meal: "dinner", Mess: "bakul-veg", Category: "registered"},
 			{Date: "2026-11-01", Meal: "snacks", Mess: "palash", Category: "registered", CancelledAt: str("2026-11-01T08:00:00Z")},
 		}, nil
@@ -157,6 +173,56 @@ func TestSales(t *testing.T) {
 
 	if !s.Owner {
 		t.Error("admin is not the owner")
+	}
+	// The friend's sale is listed on its own and stays out of every total
+	// above (two sales, 55 earned).
+	if len(s.Friends) != 1 {
+		t.Fatalf("friends %+v", s.Friends)
+	}
+	if f := s.Friends[0]; f.Slot != "lunch#f1" || f.Meal != "lunch" || f.Mess != "kadamba" || f.Diet != "nonveg" || f.Friend != "Ravi" || f.State != "sold" || f.Amount != 45 || f.Buyer != "Asha" || f.End == 0 {
+		t.Errorf("friend %+v", f)
+	}
+	// Lunch is being served: snacks and dinner are left today, and the
+	// next meal is snacks, already listed.
+	if len(s.FriendSlots) != 3 || s.FriendSlots[0].Meal != "lunch" || s.FriendSlots[2].Meal != "dinner" {
+		t.Errorf("friend slots %+v", s.FriendSlots)
+	}
+
+	// Lunch is being served, so snacks is the next meal and the only open
+	// one the ledger offers to sell. Sell tasks are off here.
+	if c := cellAt(s, "2026-11-03", "snacks"); c.State != "open" || !c.Sellable {
+		t.Errorf("next meal snacks %+v, want open and sellable", c)
+	}
+	if c := cellAt(s, "2026-11-03", "dinner"); c.Sellable {
+		t.Errorf("dinner is two meals away but sellable")
+	}
+	if s.SellOff == "" {
+		t.Error("sell tasks are off but the ledger isn't told")
+	}
+
+	// A running sell task turns its open meal into selling, with its range.
+	tid, err := st.CreateSellTask(ctx, store.SellTask{Date: "2026-11-03", Meal: "dinner", MinPaise: 5000, MaxPaise: 8000,
+		CreatedAt: time.Date(2026, 11, 3, 12, 50, 0, 0, loc), EndsAt: time.Date(2026, 11, 3, 21, 30, 0, 0, loc)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddSellTaskBuyer(ctx, tid, "919811111111@s.whatsapp.net", "", time.Date(2026, 11, 3, 12, 52, 0, 0, loc)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RecordBuyerOffer(ctx, tid, "919811111111@s.whatsapp.net", 6500); err != nil {
+		t.Fatal(err)
+	}
+	s = get()
+	c := cellAt(s, "2026-11-03", "dinner")
+	if c.State != "selling" || c.Task == nil || c.Task.ID != tid || c.Task.Min != 50 || c.Task.Max != 80 {
+		t.Fatalf("dinner with a running task %+v", c)
+	}
+	// The buyer's key is what mark-sold takes; their offer prefills the price.
+	if bs := c.Task.Buyers; len(bs) != 1 || bs[0].Key != "+919811111111" || bs[0].Price != 65 {
+		t.Errorf("task buyers %+v", bs)
+	}
+	if _, err := st.EndSellTask(ctx, tid, store.TaskCancelled, "test", time.Date(2026, 11, 3, 12, 55, 0, 0, loc)); err != nil {
+		t.Fatal(err)
 	}
 
 	// The board's day track gets today's armed lunch.
