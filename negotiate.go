@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -26,8 +27,12 @@ import (
 // each reply with the fixed rules in negotiate_parse.go and answers from
 // templates. A buyer who agrees joins the pay queue, and buyers pay one at
 // a time through the same turns as before (sellToQueue), so two of them
-// never both think they can pay. Whatever a session decides, the store
-// refuses to quote, agree or arm below the task's floor.
+// never both think they can pay. The other sessions keep haggling while a
+// buyer holds the turn. A buyer who agrees more than the holder takes the
+// turn from them, unless their payment is already in; the holder hears not
+// to pay and waits in line behind. The pay queue serves the highest agreed
+// price first. Whatever a session decides, the store refuses to quote,
+// agree or arm below the task's floor.
 
 const (
 	maxSessions    = 10              // buyers negotiating at once
@@ -338,7 +343,9 @@ type negotiation struct {
 	sessions map[types.JID]*session
 	resumed  []*session
 	holder   types.JID // the buyer whose payment turn is under way
-	sold     bool
+	// outbidC fires when someone agrees more than holder; see outbidLocked.
+	outbidC chan struct{}
+	sold    bool
 	// direct gets the outcome of a sale claimed outside a turn: a buyer
 	// paid a quoted price while nobody held the reservation.
 	direct      chan error
@@ -444,8 +451,9 @@ func (n *negotiation) restoreBuyer(b store.SellBuyer, holder bool) {
 	ss.hs = haggleFromStore(b.Negotiation, n.h.max)
 	switch {
 	case holder:
-		ss.state, ss.agreed = sessionAgreed, b.Amount
-		n.holder = peer
+		// A handed-off buyer was never asked to pay an amount.
+		ss.state, ss.agreed = sessionAgreed, cmp.Or(b.Amount, b.Agreed)
+		n.setHolderLocked(peer)
 		n.pay.restore(peer, false)
 	case b.State == store.BuyerAgreed:
 		ss.state, ss.agreed = sessionAgreed, b.Agreed
@@ -479,6 +487,9 @@ func (n *negotiation) start() {
 	sort.SliceStable(agreed, func(i, j int) bool { return agreed[i].AgreedAt.Before(agreed[j].AgreedAt) })
 	for _, b := range agreed {
 		if peer, err := types.ParseJID(b.Peer); err == nil {
+			if p, err := store.ParsePaise(b.Agreed); err == nil {
+				n.pay.setPriority(peer, p)
+			}
 			n.pay.add(peer)
 		}
 	}
@@ -705,8 +716,83 @@ func (n *negotiation) agreedPrice(buyer types.JID) (string, bool) {
 	if ss == nil || ss.state != sessionAgreed {
 		return "", false
 	}
-	n.holder = buyer
+	n.setHolderLocked(buyer)
 	return ss.agreed, true
+}
+
+// setHolderLocked makes buyer the one holding the turn, with a fresh
+// outbid signal. n.mu must be held.
+func (n *negotiation) setHolderLocked(buyer types.JID) {
+	n.holder = buyer
+	n.outbidC = make(chan struct{}, 1)
+}
+
+// watchOutbid is the signal for buyer's turn: it fires when someone agrees
+// more than them. It is nil unless buyer holds the turn.
+func (n *negotiation) watchOutbid(buyer types.JID) <-chan struct{} {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.holder != buyer {
+		return nil
+	}
+	return n.outbidC
+}
+
+// outbidLocked reports whether paise beats the price the turn holder
+// agreed, and if so tells their turn. n.mu must be held.
+func (n *negotiation) outbidLocked(buyer types.JID, paise int64) bool {
+	if n.holder.IsEmpty() || n.holder == buyer {
+		return false
+	}
+	h := n.sessions[n.holder]
+	if h == nil {
+		return false
+	}
+	held, err := store.ParsePaise(h.agreed)
+	if err != nil || paise <= held {
+		return false
+	}
+	select {
+	case n.outbidC <- struct{}{}:
+	default:
+	}
+	return true
+}
+
+// lostTurn puts buyer, whose turn a higher offer took, back in line at
+// their agreed price. If they had been asked to pay, or handed to you,
+// they hear not to pay.
+func (n *negotiation) lostTurn(ctx context.Context, buyer types.JID, handedOff bool) error {
+	n.mu.Lock()
+	if n.holder == buyer {
+		n.holder, n.outbidC = types.EmptyJID, nil
+	}
+	ss := n.sessions[buyer]
+	var agreed string
+	if ss != nil {
+		agreed = ss.agreed
+	}
+	n.mu.Unlock()
+	prompted, err := n.m.st.OutbidSellTaskBuyer(ctx, n.t.ID, buyer.String())
+	if err != nil {
+		return err
+	}
+	n.log.Info("buyer outbid; their turn ends", "buyer", buyer, "agreed", agreed)
+	n.event(buyer, store.EventOutbid, int(paise(agreed)/100), "")
+	if prompted {
+		// It goes out whatever the message limit: they must not pay now.
+		r := sayOutbid(handedOff)
+		if err := n.send(ctx, buyer, r); err != nil {
+			n.log.Warn("could not tell an outbid buyer not to pay", "buyer", buyer, "err", err)
+		} else {
+			n.event(buyer, store.EventBotSaid, 0, strings.Join(r, "\n"))
+		}
+	}
+	if p, err := store.ParsePaise(agreed); err == nil {
+		n.pay.setPriority(buyer, p)
+	}
+	n.pay.requeue(buyer)
+	return nil
 }
 
 // turnOver ends buyer's payment turn.
@@ -714,7 +800,7 @@ func (n *negotiation) turnOver(buyer types.JID) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.holder == buyer {
-		n.holder = types.EmptyJID
+		n.holder, n.outbidC = types.EmptyJID, nil
 	}
 	if ss := n.sessions[buyer]; ss != nil {
 		ss.state = sessionEnded
@@ -1226,16 +1312,24 @@ func (ss *session) agree(st step) handled {
 		n.log.Warn("could not record the agreement", "buyer", ss.buyer, "amount", amount, "err", err)
 		return handledEnded
 	}
+	paise := int64(st.agree) * 100
 	n.mu.Lock()
 	ss.state, ss.agreed, ss.hs, ss.started = sessionAgreed, amount, next, started
+	outbid := n.outbidLocked(ss.buyer, paise)
 	busy := !n.holder.IsEmpty() || n.pay.waiting() > 0
 	n.mu.Unlock()
-	n.log.Info("buyer agreed", "buyer", ss.buyer, "amount", amount)
+	n.log.Info("buyer agreed", "buyer", ss.buyer, "amount", amount, "outbids_holder", outbid)
 	n.event(ss.buyer, store.EventAgreed, st.agree, "")
-	if busy && n.t.Handoff != string(config.HandoffOnAgreement) {
+	switch {
+	case !busy || outbid:
+	case n.t.Handoff == string(config.HandoffOnAgreement):
+		ss.sayAgreed(sayQueuedHandoff(st.agree))
+	default:
 		ss.sayAgreed(sayQueued(st.agree))
 	}
-	// A revived buyer whose earlier payment turn lapsed queues again.
+	// Highest price pays first. A revived buyer whose earlier payment turn
+	// lapsed queues again.
+	n.pay.setPriority(ss.buyer, paise)
 	n.pay.requeue(ss.buyer)
 	return handledAgreed
 }
@@ -1333,6 +1427,14 @@ func (j negotiatedJournal) turnEnded(ctx context.Context, buyer types.JID, state
 	j.n.turnOver(buyer)
 	_, err := j.st.MoveSellTaskBuyer(ctx, j.t.ID, buyer.String(), store.BuyerOffered, state, "", time.Time{})
 	return err
+}
+
+func (j negotiatedJournal) watchOutbid(buyer types.JID) <-chan struct{} {
+	return j.n.watchOutbid(buyer)
+}
+
+func (j negotiatedJournal) outbid(ctx context.Context, buyer types.JID, handedOff bool) error {
+	return j.n.lostTurn(ctx, buyer, handedOff)
 }
 
 func (j negotiatedJournal) accepts(buyer types.JID, agreed string) []string {

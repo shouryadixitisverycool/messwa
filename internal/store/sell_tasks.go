@@ -453,6 +453,19 @@ func (s *Store) MoveSellTaskBuyer(ctx context.Context, id int64, peer, from, to,
 	return n == 1, err
 }
 
+// OutbidSellTaskBuyer puts a buyer whose payment turn or handoff was taken
+// by a higher offer back to agreed, so they can buy later if the meal frees
+// up. It reports false unless the buyer was asked to pay or handed off.
+func (s *Store) OutbidSellTaskBuyer(ctx context.Context, id int64, peer string) (bool, error) {
+	r, err := s.db.ExecContext(ctx, `UPDATE sell_task_buyers SET state='agreed',amount='',pay_until=NULL
+ WHERE task_id=? AND peer=? AND state IN ('offered','handed_off')`, id, peer)
+	if err != nil {
+		return false, err
+	}
+	n, err := r.RowsAffected()
+	return n == 1, err
+}
+
 // ArmTaskDelivery reserves the meal for one buyer of an active task at a
 // price no lower than the task's floor, or one the bot already quoted or
 // agreed with them before a range edit raised it. Like ArmNewDelivery, it fails when

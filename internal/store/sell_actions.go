@@ -152,10 +152,10 @@ func (s *Store) RecordTaskManualSale(ctx context.Context, taskID int64, m TaskMa
 		_, err = tx.ExecContext(ctx, `INSERT INTO qr_deliveries(date,meal,peer,amount,image_hash,armed_at,state,mess,diet,buyer_name,paid_at,sent_at,payment_kind,task_id)
  VALUES(?,?,?,?,'manual',?,'sent',?,?,?,?,?,?,?)`, date, meal, m.Peer, m.Amount, m.At.Unix(), mess, diet, m.BuyerName, m.At.Unix(), m.At.Unix(), PaidManual, taskID)
 	case err != nil:
-	case dstate == "armed" && dtask.Valid && dtask.Int64 == taskID:
+	case (dstate == "armed" || dstate == "handed_off") && dtask.Valid && dtask.Int64 == taskID:
 		var result sql.Result
 		result, err = tx.ExecContext(ctx, `UPDATE qr_deliveries SET state='sent',peer=?,amount=?,image_hash='manual',payment_kind=?,paid_at=?,sent_at=?,buyer_name=?
- WHERE date=? AND meal=? AND state='armed' AND payment_id IS NULL`, m.Peer, m.Amount, PaidManual, m.At.Unix(), m.At.Unix(), m.BuyerName, date, meal)
+ WHERE date=? AND meal=? AND state IN ('armed','handed_off') AND payment_id IS NULL`, m.Peer, m.Amount, PaidManual, m.At.Unix(), m.At.Unix(), m.BuyerName, date, meal)
 		if err == nil {
 			n, rowsErr := result.RowsAffected()
 			if rowsErr != nil {
