@@ -123,9 +123,11 @@ While a [sell task](#sell-tasks) runs, admins get a MY SALE box above the board,
 - **Squares, top right.** Every task for this meal, so a restart doesn't lose the story: grey crossed cancelled, green live or sold.
 - **Market.** Every open listing for the same meal and mess, cheapest first, yours in gold. Your listing also gets a gold outline on the board.
 
-Tap a buyer for the negotiation as a tug of war: each row is one round, their offer in red and the bot's answer in green, with the bot's lowest at the bottom and the gap between them in red. Below it, the payment steps (armed, paid, read, QR, ✅), with the attempts to read an unreadable payment from your phone. CHAT opens their chat in WhatsApp or Beeper. For a buyer who needs you, COPY SELL copies the `deliver-qr -peer` command at their offer; cancel the task and stop `run` before you use it. Tap the clock or the posts for the lowest price over time, each post, and the meal's tries.
+Tap a buyer for the negotiation as a tug of war: each row is one round, their offer in red and the bot's answer in green, with the bot's lowest at the bottom and the gap between them in red. Below it, the payment steps (armed, paid, read, QR, ✅), with the attempts to read an unreadable payment from your phone. CHAT opens their chat in WhatsApp or Beeper. Tap the clock or the posts for the lowest price over time, each post, and the meal's tries.
 
-The box only reads. Nothing on the dashboard sends anything. It updates over the same event stream as the board: every step a task records wakes it.
+Admins can use **MARK SOLD** to record a sale made outside the bot (pick a buyer or enter a phone/name, price and optional note). Confirming stops negotiation, records paid/sent timestamps with payment kind `manual`, marks posts ✅ and gives other eligible buyers the usual sold handling; the chosen buyer gets no message. **ADD BUYER** queues a phone/JID with an optional name and sends the opening quote. Buyer sheets offer **MUTE** (with confirmation) and **UNMUTE**. Muted buyers keep their records and get no task messages, including sold notices or automatic QR delivery. Unmuting resumes handling their next message. Each action appears in the task event log.
+
+The MCP tools are `mark_sell_task_sold`, `add_sell_task_buyer`, `mute_sell_task_buyer` and `unmute_sell_task_buyer`. They require admin access and sell tasks enabled. The dashboard uses the same operations with session and CSRF protection. Live updates preserve forms while you type.
 
 ### Settings page
 

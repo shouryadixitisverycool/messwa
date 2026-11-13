@@ -51,6 +51,14 @@ const (
 	EventPrices = "prices"
 )
 
+// Event kinds for what you did by hand. Peer is the buyer.
+const (
+	EventSoldByYou  = "sold_by_you" // N: paise; Text: your note
+	EventAddedByYou = "added"       // Text: the name you gave
+	EventMuted      = "muted"
+	EventUnmuted    = "unmuted"
+)
+
 type SellEvent struct {
 	TaskID int64
 	At     time.Time

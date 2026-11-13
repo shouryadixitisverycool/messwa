@@ -40,6 +40,7 @@ func (s *Server) addSellTools(srv *mcp.Server) {
 		Description: "One sell task by id, or every active task plus those started in the last 24 hours: state, every copy of the offer posted (reposts included, marking each group's current one), when each group gets its next fresh copy and why, buyers who replied, and the sale. Admins only."}, s.sellTaskStatus)
 	mcp.AddTool(srv, &mcp.Tool{Name: "cancel_sell_task", Annotations: write,
 		Description: "Stop a sell task. A QR already being delivered for a payment still goes out, and the task then shows as sold. Admins only."}, s.cancelSellTask)
+	s.addSellActionTools(srv, write)
 	mcp.AddTool(srv, &mcp.Tool{Name: "set_sell_task_prices", Annotations: write,
 		Description: "Change an active sell task's min_price and max_price without reposting or restarting it. Buyers mid-negotiation get the new range on their next message; prices already quoted or agreed stand. A negotiating task must keep max_price above min_price, and a fixed-price task must keep them equal. Lowering the floor lists buyers whose last offer now meets it under needs_you. Prices are whole rupees. Admins only."}, s.setSellTaskPrices)
 	mcp.AddTool(srv, &mcp.Tool{Name: "sell_task_events", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
@@ -111,6 +112,7 @@ type SellBuyerOut struct {
 	Rounds    int    `json:"rounds,omitempty" jsonschema:"counter-offers the bot made"`
 	Agreed    string `json:"agreed,omitempty" jsonschema:"price agreed, INR"`
 	Note      string `json:"note,omitempty" jsonschema:"why the buyer needs the user"`
+	Muted     bool   `json:"muted,omitempty" jsonschema:"the bot sends this buyer nothing for the task; see mute_sell_task_buyer"`
 }
 
 // SellNeedsYouOut is a buyer the bot stopped talking to.
@@ -341,9 +343,9 @@ func (s *Server) sellTaskOut(ctx context.Context, t store.SellTask) (SellTaskOut
 		return store.FormatPaise(paise)
 	}
 	for _, b := range buyers {
-		p := s.person(ctx, b.Peer, b.Alt, "")
+		p := s.person(ctx, b.Peer, b.Alt, b.Name)
 		bo := SellBuyerOut{Person: p, State: b.State, Asked: b.Amount, PayUntil: s.fmt(b.PayUntil),
-			Rounds: b.Rounds, Agreed: b.Agreed, Note: b.Note, LastOffer: inr(b.LastOffer)}
+			Rounds: b.Rounds, Agreed: b.Agreed, Note: b.Note, LastOffer: inr(b.LastOffer), Muted: b.Muted}
 		if b.BotMsgs > 0 {
 			bo.Ask = inr(b.Ask)
 		}
