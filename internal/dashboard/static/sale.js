@@ -28,6 +28,10 @@ const C = { red: '#ff6b5b', egg: '#f2b51b', veg: '#34c463', gold: '#ffc53d', blu
 const LIVE_PAY = ['armed', 'sending'];
 const won = (v) => v.state === 'sold' || (v.pay && v.pay.state === 'sent');
 const rup = (x) => '₹' + (Number.isInteger(x) ? x : x.toFixed(2));
+// A friend's meal is stored under a slot like "dinner#f1"; show "dinner"
+// and whose it is.
+const mealOf = (v) => v.base_meal || v.meal.split('#')[0];
+const mealLabel = (v) => (v.for_friend ? `${mealOf(v)} · for ${v.friend || 'a friend'}` : mealOf(v));
 
 // ---------- reading a buyer ----------
 
@@ -108,7 +112,7 @@ function chest(v) {
   // A live pay window outranks the rest: it's over in two minutes.
   const paying = v.state === 'active' && v.buyers.some((b) => b.state === 'offered') || (v.pay && LIVE_PAY.includes(v.pay.state) && v.pay.paid);
   const c = el('section', 'mysale' + (won(v) ? ' sold' : paying ? ' pay' : needs ? ' hot' : v.state !== 'active' ? ' over' : ''));
-  c.setAttribute('aria-label', `Your ${v.meal} sale`);
+  c.setAttribute('aria-label', v.for_friend ? `Your sale of ${mealLabel(v)}` : `Your ${mealOf(v)} sale`);
 
   const top = el('div', 'ms-top');
   const dot = el('span', 'ms-mess');
@@ -116,7 +120,7 @@ function chest(v) {
   const diet = el('span', 'ms-diet');
   diet.append(svgEl(dietMark(v.diet)));
   const day = v.date === ymd(now()) ? '' : ' ' + dayWord(v.date).toUpperCase();
-  top.append(dot, diet, el('span', 'ms-meal', v.meal.toUpperCase() + day), historyPips(v));
+  top.append(dot, diet, el('span', 'ms-meal', mealLabel(v).toUpperCase() + day), historyPips(v));
   c.append(top);
 
   const hero = el('div', 'ms-hero');
@@ -234,7 +238,7 @@ function railSVG(v, W) {
 }
 
 function heroTip(v) {
-  const lines = [[{ t: `${cap(v.mess)} ${v.meal}`, c: 'nm', color: messColor(v.mess) }, { t: `  #${v.id}`, c: 'c8' }]];
+  const lines = [[{ t: `${cap(v.mess)} ${mealLabel(v)}`, c: 'nm', color: messColor(v.mess) }, { t: `  #${v.id}`, c: 'c8' }]];
   if (v.state === 'active') lines.push([{ t: `Ends ${hm(v.ends)}, in ${dur(v.ends - now())}`, c: 'c7' }]);
   else lines.push([{ t: `${cap(v.state.replace('_', ' '))}${v.detail ? ': ' + v.detail : ''}`, c: won(v) ? 'ca' : 'c8' }]);
   lines.push(0, [{ t: `Opens ${rup(v.max)}, floor ${rup(v.min)}`, c: 'c7' }]);
@@ -306,7 +310,7 @@ function buyerTile(b, v) {
 function marketRow(v) {
   if (!D || v.state !== 'active') return null;
   const mine = new Set(v.listings);
-  const ls = D.listings.filter((l) => l.kind !== 'buy' && l.mess === v.mess && l.meal === v.meal && l.meal_date === v.date
+  const ls = D.listings.filter((l) => l.kind !== 'buy' && l.mess === v.mess && l.meal === mealOf(v) && l.meal_date === v.date
     && l.status === 'available' && (!v.diet || !l.diet || l.diet === v.diet) && (l.price != null || mine.has(l.id)));
   if (ls.length < 2) return null;
   ls.sort((a, b) => (a.price ?? 1e9) - (b.price ?? 1e9));
@@ -532,7 +536,7 @@ function openMealSheet(v, _key, keep) {
   dot.style.setProperty('--m', messColor(v.mess));
   const diet = el('span', 'ms-diet');
   diet.append(svgEl(dietMark(v.diet)));
-  top.append(dot, diet, el('span', 'ms-meal', `${v.mess.toUpperCase()} ${v.meal.toUpperCase()}`));
+  top.append(dot, diet, el('span', 'ms-meal', `${v.mess.toUpperCase()} ${mealLabel(v).toUpperCase()}`));
   if (v.state === 'active') {
     const cd = el('b', 'sb-count small');
     cd.dataset.until = v.ends;

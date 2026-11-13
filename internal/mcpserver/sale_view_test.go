@@ -112,3 +112,40 @@ func TestSaleViews(t *testing.T) {
 		t.Fatalf("lowest = %v held = %v", vs[0].Lowest, vs[0].Held)
 	}
 }
+
+func TestSaleViewFriend(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := time.Date(2026, 11, 13, 20, 0, 0, 0, time.UTC)
+	s := New(config.Default(), st, nil)
+	s.SetClock(func() time.Time { return now })
+	slot, err := st.AddFriendMeal(ctx, store.FriendMeal{Date: "2026-11-13", Slot: "dinner", Mess: "kadamba-nonveg", Friend: "Ravi", QR: []byte("png")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, meal := range []string{slot, "lunch"} {
+		if _, err := st.CreateSellTask(ctx, store.SellTask{Date: "2026-11-13", Meal: meal, MinPaise: 5000, MaxPaise: 5000, CreatedAt: now, EndsAt: now.Add(time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	vs, err := s.SaleViews(ctx)
+	if err != nil || len(vs) != 2 {
+		t.Fatalf("views %+v %v", vs, err)
+	}
+	for _, v := range vs {
+		switch v.Meal {
+		case slot:
+			if v.BaseMeal != "dinner" || !v.ForFriend || v.Friend != "Ravi" {
+				t.Errorf("friend's view %+v", v)
+			}
+		case "lunch":
+			if v.BaseMeal != "lunch" || v.ForFriend || v.Friend != "" {
+				t.Errorf("own view %+v", v)
+			}
+		}
+	}
+}
