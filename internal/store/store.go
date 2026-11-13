@@ -133,6 +133,9 @@ func Open(path string) (*Store, error) {
 	if err := migrateSellOffers(db); err != nil {
 		return nil, fmt.Errorf("migrate sell_task_offers: %w", err)
 	}
+	if err := migratePrices(db); err != nil {
+		return nil, fmt.Errorf("migrate market_prices: %w", err)
+	}
 	for _, c := range []struct{ table, col string }{
 		{"sell_tasks", "target_paise INTEGER NOT NULL DEFAULT 0"},
 		{"sell_task_offers", "error TEXT NOT NULL DEFAULT ''"},

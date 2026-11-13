@@ -29,8 +29,9 @@ import (
 //
 //   - nothing is sent unless the task is active;
 //   - besides the group post, messages go only to people who replied
-//     privately to that post, or with [sell] accept_plain_dms, DMed about
-//     it (see plain_dm.go);
+//     privately to that post, with [sell] accept_plain_dms DMed about it
+//     (see plain_dm.go), or with [sell] message_buy_posts posted that they
+//     want the meal (see buy_posts.go);
 //   - with [sell] buyers = "unsaved_only", saved contacts never join the
 //     queue and get nothing;
 //   - no buyer is quoted, agreed with, asked, or armed for below the floor
@@ -543,6 +544,9 @@ func (m *sellManager) end(t store.SellTask, state, detail string) string {
 			detail = "a payment was claimed but the QR send is uncertain; check the buyer's chat: " + detail
 		case d != nil && dstate == "sent":
 			state, detail = store.TaskSold, "QR delivered after a matching payment"
+		case d != nil && dstate == "handed_off" && state == store.TaskExpired:
+			// A task that kept selling after a handoff ran out the meal.
+			state, detail = store.TaskHandedOff, fmt.Sprintf("the meal ended while %s was handed to you at INR %s", describeBuyer(d.Peer, ""), strings.TrimSuffix(d.Amount, ".00"))
 		}
 	}
 	if _, err := m.st.EndSellTask(ctx, t.ID, state, detail, time.Now()); err != nil {
@@ -662,7 +666,15 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, rt
 		if settings.AcceptPlainDMs {
 			posting.acceptPlainDMs(newPlainDMs(m.cfg, m.st, m.log.With("task", t.ID), s.mess, baseMeal(t.Meal), ""))
 		}
-		return m.postCopies(ctx, syncCtx, t, s, rt, posting, settings, claimed)
+		if err := m.postCopies(ctx, syncCtx, t, s, rt, posting, settings, claimed); err != nil {
+			return err
+		}
+		// The pool has one stream of buyers, including people with buy
+		// posts. Only its leader approaches them.
+		if m.buyPostsWanted(t) {
+			go m.messageBuyPosts(syncCtx, t, s, gate, queue)
+		}
+		return nil
 	}
 	m.mu.Lock()
 	rt.startLead = func() {
@@ -697,8 +709,13 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, rt
 	}
 	var detail string
 	if t.Handoff == string(config.HandoffOnReply) || t.Handoff == string(config.HandoffOnAgreement) {
+		// A negotiating task that hands off on agreement keeps posting and
+		// haggling, so a higher offer can still take the handoff.
+		s.holdHandoff = n != nil && t.Handoff == string(config.HandoffOnAgreement)
 		s.handoff = func(ctx context.Context, buyer types.JID, d store.Delivery, others []types.JID) error {
-			posting.stop()
+			if !s.holdHandoff {
+				posting.stop()
+			}
 			var err error
 			detail, err = m.handOff(ctx, t, buyer, d, queue.name(buyer), others)
 			return err
@@ -892,6 +909,7 @@ func (m *sellManager) handOff(ctx context.Context, t store.SellTask, buyer types
 		detail += fmt.Sprintf(" %d other buyer(s) replied too.", len(others))
 	}
 	m.log.Info("sell task handed the sale to you", "task", t.ID, "buyer", d.Peer, "name", name, "asked", d.Amount)
+	m.event(ctx, store.SellEvent{TaskID: t.ID, Peer: buyer.String(), Kind: store.EventHandedOff, N: paise(d.Amount), Text: detail})
 	return detail, nil
 }
 
@@ -946,6 +964,14 @@ func (m *sellManager) restore(ctx context.Context, t store.SellTask, queue *offe
 				return nil, err
 			} else if n != nil {
 				n.restoreBuyer(b, false) // ended, with their haggle
+			}
+		case store.BuyerHandedOff:
+			// A task that keeps selling after a handoff: the buyer still
+			// holds it.
+			if n != nil && d != nil && dstate == "handed_off" && d.Peer == b.Peer {
+				resume = &resumedTurn{buyer: peer, d: *d, handedOff: true}
+				d = nil
+				n.restoreBuyer(b, true)
 			}
 		case store.BuyerNegotiating, store.BuyerAgreed, store.BuyerTimedOut:
 			// A timed-out buyer comes back ended, ready to be revived by

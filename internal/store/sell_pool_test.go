@@ -71,11 +71,11 @@ func TestSellTaskPool(t *testing.T) {
 	if ok, err := s.PassSellTaskBuyer(ctx, own, friend, "buyer", "35.00", Negotiation{}, now); err != nil || ok {
 		t.Fatalf("passed under the floor: %v %v", ok, err)
 	}
-	if ok, err := s.PassSellTaskBuyer(ctx, own, friend, "buyer", "45.00", Negotiation{Ask: 4500, Quoted: []int64{6000, 4500, 3000}, BotMsgs: 2}, now); err != nil || !ok {
+	if ok, err := s.PassSellTaskBuyer(ctx, own, friend, "buyer", "45.00", Negotiation{Ask: 4500, Quoted: []int64{6000, 4500, 3000}, BotMsgs: 2, Nudges: 1}, now); err != nil || !ok {
 		t.Fatalf("pass failed: %v %v", ok, err)
 	}
 	buyers, _ := s.SellTaskBuyers(ctx, friend)
-	if len(buyers) != 1 || buyers[0].State != BuyerAgreed || buyers[0].Agreed != "45.00" || buyers[0].BotMsgs != 2 || len(buyers[0].Quoted) != 2 {
+	if len(buyers) != 1 || buyers[0].State != BuyerAgreed || buyers[0].Agreed != "45.00" || buyers[0].BotMsgs != 2 || buyers[0].Nudges != 1 || len(buyers[0].Quoted) != 2 {
 		t.Fatalf("friend's buyers = %+v", buyers)
 	}
 	left, _ := s.SellTaskBuyers(ctx, own)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -26,18 +27,27 @@ import (
 // each reply with the fixed rules in negotiate_parse.go and answers from
 // templates. A buyer who agrees joins the pay queue, and buyers pay one at
 // a time through the same turns as before (sellToQueue), so two of them
-// never both think they can pay. Whatever a session decides, the store
-// refuses to quote, agree or arm below the task's floor.
+// never both think they can pay. The other sessions keep haggling while a
+// buyer holds the turn. A buyer who agrees more than the holder takes the
+// turn from them, unless their payment is already in; the holder hears not
+// to pay and waits in line behind. The pay queue serves the highest agreed
+// price first. Whatever a session decides, the store refuses to quote,
+// agree or arm below the task's floor.
 
 const (
-	maxSessions    = 10               // buyers negotiating at once
-	maxCounters    = 2                // counter-offers before "the lowest I can do"
-	maxBotMsgs     = 6                // replies a session sends one buyer; a two-message reply counts once
-	replyDebounce  = 2 * time.Second  // a burst of messages gets one reply
-	sessionLimit   = 6 * time.Minute  // one negotiation, start to agreement; never shorter than the silence
+	maxSessions    = 10              // buyers negotiating at once
+	maxCounters    = 2               // counter-offers before "the lowest I can do"
+	maxBotMsgs     = 6               // replies a session sends one buyer; a two-message reply counts once
+	replyDebounce  = 2 * time.Second // a burst of messages gets one reply
+	sessionLimit   = config.NegotiationLimit
 	paidGrace      = 60 * time.Second // "paid" with no WhatsApp Pay payment yet
 	maxOfferFactor = 3                // an "offer" above 3x max_price is not a price
 )
+
+// nudgeAfter is how long a buyer may stay quiet after the bot's first
+// message before it asks "yes or no?", and again after that before it
+// drops the price once and times them out. A reply to either revives them.
+var nudgeAfter = time.Minute
 
 var errSoldDirect = errors.New("a buyer paid before their turn and got the meal")
 
@@ -87,11 +97,12 @@ type haggleState struct {
 	quoted                                    []int
 	saidLowest                                bool
 	passCountered                             bool // see passCounter
+	nudges                                    int  // see quietNudge
 }
 
 func (s haggleState) store(started time.Time) store.Negotiation {
 	n := store.Negotiation{Ask: int64(s.ask) * 100, Rounds: s.rounds, BotMsgs: s.botMsgs, Unknowns: s.unknowns,
-		LastOffer: int64(s.lastOffer) * 100, SaidLowest: s.saidLowest, PassCountered: s.passCountered, StartedAt: started}
+		LastOffer: int64(s.lastOffer) * 100, SaidLowest: s.saidLowest, PassCountered: s.passCountered, Nudges: s.nudges, StartedAt: started}
 	for _, q := range s.quoted {
 		n.Quoted = append(n.Quoted, int64(q)*100)
 	}
@@ -100,7 +111,7 @@ func (s haggleState) store(started time.Time) store.Negotiation {
 
 func haggleFromStore(n store.Negotiation, maxRupees int) haggleState {
 	s := haggleState{ask: int(n.Ask / 100), rounds: n.Rounds, botMsgs: n.BotMsgs, unknowns: n.Unknowns,
-		lastOffer: int(n.LastOffer / 100), saidLowest: n.SaidLowest, passCountered: n.PassCountered}
+		lastOffer: int(n.LastOffer / 100), saidLowest: n.SaidLowest, passCountered: n.PassCountered, nudges: n.Nudges}
 	if s.ask == 0 {
 		s.ask = maxRupees
 	}
@@ -133,6 +144,21 @@ func (h haggle) passCounter(st haggleState) (int, bool) {
 	// Capped like decide's ask, after a range edit lowered max.
 	a := min(st.ask, h.max)
 	if st.passCountered || st.botMsgs == 0 || st.botMsgs >= maxBotMsgs || st.saidLowest || a <= h.min {
+		return 0, false
+	}
+	if a > h.target {
+		return h.target, true
+	}
+	return max(h.min, min(a-h.unit, h.round(float64(a+h.min)/2))), true
+}
+
+// quietDrop is the lower price a buyer hears after staying quiet through
+// the bot's first message and the nudge: the same price passCounter would
+// give, but a later pass still gets its own counter. It reports false when
+// the ask is already at the floor.
+func (h haggle) quietDrop(st haggleState) (int, bool) {
+	a := min(st.ask, h.max)
+	if a <= h.min || st.saidLowest {
 		return 0, false
 	}
 	if a > h.target {
@@ -269,6 +295,9 @@ type session struct {
 	inbox   chan buyerMsg
 	firstID string // the reply that queued them; it may also reach inbox
 	first   string // the text to answer first when a revived session starts
+	// heard is set once the buyer writes after the session started, which
+	// stops the nudges. A revived buyer has written.
+	heard bool
 
 	// Guarded by n.mu.
 	state   string
@@ -314,7 +343,9 @@ type negotiation struct {
 	sessions map[types.JID]*session
 	resumed  []*session
 	holder   types.JID // the buyer whose payment turn is under way
-	sold     bool
+	// outbidC fires when someone agrees more than holder; see outbidLocked.
+	outbidC chan struct{}
+	sold    bool
 	// direct gets the outcome of a sale claimed outside a turn: a buyer
 	// paid a quoted price while nobody held the reservation.
 	direct      chan error
@@ -337,7 +368,7 @@ func newNegotiation(ctx context.Context, m *sellManager, t store.SellTask, s *sa
 		if ps, err := m.prices(ctx, from, t.Date); err != nil {
 			m.log.Warn("could not read market prices; negotiating toward max_price", "task", t.ID, "err", err)
 		} else {
-			median, have = market.MedianAsk(ps, t.Date, baseMeal(t.Meal), s.mess)
+			median, have = market.MedianAsk(ps, t.Date, baseMeal(t.Meal), s.mess, s.diet)
 		}
 	}
 	n := &negotiation{
@@ -438,8 +469,9 @@ func (n *negotiation) restoreBuyer(b store.SellBuyer, holder bool) {
 	ss.hs = haggleFromStore(b.Negotiation, n.h.max)
 	switch {
 	case holder:
-		ss.state, ss.agreed = sessionAgreed, b.Amount
-		n.holder = peer
+		// A handed-off buyer was never asked to pay an amount.
+		ss.state, ss.agreed = sessionAgreed, cmp.Or(b.Amount, b.Agreed)
+		n.setHolderLocked(peer)
 		n.pay.restore(peer, false)
 	case b.State == store.BuyerAgreed:
 		ss.state, ss.agreed = sessionAgreed, b.Agreed
@@ -473,6 +505,9 @@ func (n *negotiation) start() {
 	sort.SliceStable(agreed, func(i, j int) bool { return agreed[i].AgreedAt.Before(agreed[j].AgreedAt) })
 	for _, b := range agreed {
 		if peer, err := types.ParseJID(b.Peer); err == nil {
+			if p, err := store.ParsePaise(b.Agreed); err == nil {
+				n.pay.setPriority(peer, p)
+			}
 			n.pay.add(peer)
 		}
 	}
@@ -699,8 +734,83 @@ func (n *negotiation) agreedPrice(buyer types.JID) (string, bool) {
 	if ss == nil || ss.state != sessionAgreed {
 		return "", false
 	}
-	n.holder = buyer
+	n.setHolderLocked(buyer)
 	return ss.agreed, true
+}
+
+// setHolderLocked makes buyer the one holding the turn, with a fresh
+// outbid signal. n.mu must be held.
+func (n *negotiation) setHolderLocked(buyer types.JID) {
+	n.holder = buyer
+	n.outbidC = make(chan struct{}, 1)
+}
+
+// watchOutbid is the signal for buyer's turn: it fires when someone agrees
+// more than them. It is nil unless buyer holds the turn.
+func (n *negotiation) watchOutbid(buyer types.JID) <-chan struct{} {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.holder != buyer {
+		return nil
+	}
+	return n.outbidC
+}
+
+// outbidLocked reports whether paise beats the price the turn holder
+// agreed, and if so tells their turn. n.mu must be held.
+func (n *negotiation) outbidLocked(buyer types.JID, paise int64) bool {
+	if n.holder.IsEmpty() || n.holder == buyer {
+		return false
+	}
+	h := n.sessions[n.holder]
+	if h == nil {
+		return false
+	}
+	held, err := store.ParsePaise(h.agreed)
+	if err != nil || paise <= held {
+		return false
+	}
+	select {
+	case n.outbidC <- struct{}{}:
+	default:
+	}
+	return true
+}
+
+// lostTurn puts buyer, whose turn a higher offer took, back in line at
+// their agreed price. If they had been asked to pay, or handed to you,
+// they hear not to pay.
+func (n *negotiation) lostTurn(ctx context.Context, buyer types.JID, handedOff bool) error {
+	n.mu.Lock()
+	if n.holder == buyer {
+		n.holder, n.outbidC = types.EmptyJID, nil
+	}
+	ss := n.sessions[buyer]
+	var agreed string
+	if ss != nil {
+		agreed = ss.agreed
+	}
+	n.mu.Unlock()
+	prompted, err := n.m.st.OutbidSellTaskBuyer(ctx, n.t.ID, buyer.String())
+	if err != nil {
+		return err
+	}
+	n.log.Info("buyer outbid; their turn ends", "buyer", buyer, "agreed", agreed)
+	n.event(buyer, store.EventOutbid, int(paise(agreed)/100), "")
+	if prompted {
+		// It goes out whatever the message limit: they must not pay now.
+		r := sayOutbid(handedOff)
+		if err := n.send(ctx, buyer, r); err != nil {
+			n.log.Warn("could not tell an outbid buyer not to pay", "buyer", buyer, "err", err)
+		} else {
+			n.event(buyer, store.EventBotSaid, 0, strings.Join(r, "\n"))
+		}
+	}
+	if p, err := store.ParsePaise(agreed); err == nil {
+		n.pay.setPriority(buyer, p)
+	}
+	n.pay.requeue(buyer)
+	return nil
 }
 
 // turnOver ends buyer's payment turn.
@@ -708,7 +818,7 @@ func (n *negotiation) turnOver(buyer types.JID) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.holder == buyer {
-		n.holder = types.EmptyJID
+		n.holder, n.outbidC = types.EmptyJID, nil
 	}
 	if ss := n.sessions[buyer]; ss != nil {
 		ss.state = sessionEnded
@@ -910,7 +1020,15 @@ func (ss *session) run(first string, slot bool) {
 	var batch []string
 	n.mu.Lock()
 	fresh := ss.hs.botMsgs == 0
+	if !ss.revived.IsZero() {
+		ss.heard = true
+	}
 	n.mu.Unlock()
+	// nudge fires while the buyer is quiet after the bot's first message.
+	var nudge <-chan time.Time
+	if ss.nudgeDue() {
+		nudge = time.After(nudgeAfter)
+	}
 	if state == sessionNegotiating && (fresh || strings.TrimSpace(first) != "") {
 		// Restored sessions have no in-memory first message. Open with
 		// the price instead of counting the missing text as unreadable.
@@ -929,6 +1047,10 @@ func (ss *session) run(first string, slot bool) {
 		if ss.current() == sessionNegotiating {
 			limitC, silenceC = limit.C, silence.C
 		}
+		if nudge != nil {
+			// The nudges decide when a quiet buyer times out.
+			silenceC = nil
+		}
 		select {
 		case <-n.talk.Done():
 			return
@@ -938,6 +1060,10 @@ func (ss *session) run(first string, slot bool) {
 			}
 			batch = append(batch, m.text)
 			debounce = time.After(replyDebounce)
+			n.mu.Lock()
+			ss.heard = true
+			n.mu.Unlock()
+			nudge = nil
 		case <-debounce:
 			debounce = nil
 			texts := batch
@@ -949,9 +1075,23 @@ func (ss *session) run(first string, slot bool) {
 				release()
 			case handledReplied:
 				silence.Reset(n.silence)
+				if ss.nudgeDue() {
+					nudge = time.After(nudgeAfter)
+				}
 			case handledPaidClaim:
 				if paidWait == nil {
 					paidWait = time.After(paidGrace)
+				}
+			}
+		case <-nudge:
+			nudge = nil
+			switch ss.quietNudge() {
+			case handledEnded:
+				return
+			case handledReplied:
+				silence.Reset(n.silence)
+				if ss.nudgeDue() {
+					nudge = time.After(nudgeAfter)
 				}
 			}
 		case <-silenceC:
@@ -973,6 +1113,54 @@ func (ss *session) run(first string, slot bool) {
 			}
 		}
 	}
+}
+
+// nudgeDue reports whether the buyer has said nothing since the bot's
+// first message and has a follow-up left: the bot has sent only that
+// message and its nudges.
+func (ss *session) nudgeDue() bool {
+	ss.n.mu.Lock()
+	defer ss.n.mu.Unlock()
+	hs := ss.hs
+	return ss.state == sessionNegotiating && !ss.heard && hs.nudges < 2 && hs.botMsgs == 1+hs.nudges
+}
+
+// quietNudge follows up on a buyer who stayed quiet after the bot's first
+// message. The first time it asks "yes or no?" at the same price. The
+// second time it offers one lower price and times them out, so a late
+// reply revives them at that price.
+func (ss *session) quietNudge() handled {
+	n := ss.n
+	if !ss.nudgeDue() || n.gate.muted(n.talk, ss.buyer) {
+		return handledNothing
+	}
+	n.mu.Lock()
+	hs := ss.hs
+	n.mu.Unlock()
+	next := hs
+	next.quoted = slices.Clone(hs.quoted)
+	next.nudges++
+	if hs.nudges == 0 {
+		if !ss.say(next, sayNudge()) {
+			return handledEnded
+		}
+		n.event(ss.buyer, store.EventNudged, next.ask, "quiet after the first message; asked if they're buying")
+		return handledReplied
+	}
+	k, ok := n.prices().quietDrop(hs)
+	if ok {
+		next.ask = k
+		next.rounds++
+		if !slices.Contains(next.quoted, k) {
+			next.quoted = append(next.quoted, k)
+		}
+		if !ss.say(next, sayQuietDrop(k)) {
+			return handledEnded
+		}
+		n.event(ss.buyer, store.EventNudged, k, fmt.Sprintf("still quiet; dropped from ₹%d to ₹%d", min(hs.ask, n.prices().max), k))
+	}
+	ss.timeOut("went quiet after the first message and a follow-up")
+	return handledEnded
 }
 
 func (ss *session) current() string {
@@ -1171,16 +1359,24 @@ func (ss *session) agree(st step) handled {
 		n.log.Warn("could not record the agreement", "buyer", ss.buyer, "amount", amount, "err", err)
 		return handledEnded
 	}
+	paise := int64(st.agree) * 100
 	n.mu.Lock()
 	ss.state, ss.agreed, ss.hs, ss.started = sessionAgreed, amount, next, started
+	outbid := n.outbidLocked(ss.buyer, paise)
 	busy := !n.holder.IsEmpty() || n.pay.waiting() > 0
 	n.mu.Unlock()
-	n.log.Info("buyer agreed", "buyer", ss.buyer, "amount", amount)
+	n.log.Info("buyer agreed", "buyer", ss.buyer, "amount", amount, "outbids_holder", outbid)
 	n.event(ss.buyer, store.EventAgreed, st.agree, "")
-	if busy && n.t.Handoff != string(config.HandoffOnAgreement) {
+	switch {
+	case !busy || outbid:
+	case n.t.Handoff == string(config.HandoffOnAgreement):
+		ss.sayAgreed(sayQueuedHandoff(st.agree))
+	default:
 		ss.sayAgreed(sayQueued(st.agree))
 	}
-	// A revived buyer whose earlier payment turn lapsed queues again.
+	// Highest price pays first. A revived buyer whose earlier payment turn
+	// lapsed queues again.
+	n.pay.setPriority(ss.buyer, paise)
 	n.pay.requeue(ss.buyer)
 	return handledAgreed
 }
@@ -1278,6 +1474,14 @@ func (j negotiatedJournal) turnEnded(ctx context.Context, buyer types.JID, state
 	j.n.turnOver(buyer)
 	_, err := j.st.MoveSellTaskBuyer(ctx, j.t.ID, buyer.String(), store.BuyerOffered, state, "", time.Time{})
 	return err
+}
+
+func (j negotiatedJournal) watchOutbid(buyer types.JID) <-chan struct{} {
+	return j.n.watchOutbid(buyer)
+}
+
+func (j negotiatedJournal) outbid(ctx context.Context, buyer types.JID, handedOff bool) error {
+	return j.n.lostTurn(ctx, buyer, handedOff)
 }
 
 func (j negotiatedJournal) accepts(buyer types.JID, agreed string) []string {

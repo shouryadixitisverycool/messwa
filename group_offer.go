@@ -91,6 +91,10 @@ type offerQueue struct {
 	join func(peer, chat types.JID) bool
 	// firsts holds each buyer's first reply, for a negotiation to answer.
 	firsts map[types.JID]buyerMsg
+	// prio orders the queue: next returns the waiting buyer with the
+	// highest one, first come first served among equals. A negotiation's
+	// pay queue sets it to the agreed price.
+	prio map[types.JID]int64
 }
 
 func newOfferQueue() *offerQueue {
@@ -102,6 +106,14 @@ func (q *offerQueue) add(peer types.JID) { q.addFrom(peer, peer, "") }
 // addFrom queues peer, who replied from chat (their LID chat, say), and
 // remembers the push name from their first reply.
 func (q *offerQueue) addFrom(peer, chat types.JID, name string) bool {
+	return q.addAfter(peer, chat, name, nil)
+}
+
+// addAfter is addFrom with a step between recording peer and queueing
+// them, such as a first message to someone who never wrote. before runs
+// with peer recorded by join and seen, so their replies already count; if
+// it fails, peer stays seen but never reaches the queue.
+func (q *offerQueue) addAfter(peer, chat types.JID, name string, before func() bool) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.closed || q.seen[peer] {
@@ -111,13 +123,21 @@ func (q *offerQueue) addFrom(peer, chat types.JID, name string) bool {
 		return false
 	}
 	q.seen[peer] = true
-	q.buyers = append(q.buyers, peer)
 	if name != "" {
 		if q.names == nil {
 			q.names = make(map[types.JID]string)
 		}
 		q.names[peer] = name
 	}
+	if before != nil {
+		q.mu.Unlock()
+		ok := before()
+		q.mu.Lock()
+		if !ok || q.closed {
+			return false
+		}
+	}
+	q.buyers = append(q.buyers, peer)
 	select {
 	case q.ready <- struct{}{}:
 	default:
@@ -159,6 +179,13 @@ func (q *offerQueue) joined() bool {
 	return len(q.seen) > 0
 }
 
+// isClosed reports whether the queue stopped taking buyers.
+func (q *offerQueue) isClosed() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.closed
+}
+
 // waiting is how many buyers are queued.
 func (q *offerQueue) waiting() int {
 	q.mu.Lock()
@@ -187,6 +214,16 @@ func (q *offerQueue) requeue(peer types.JID) {
 	case q.ready <- struct{}{}:
 	default:
 	}
+}
+
+// setPriority sets peer's place in line; see prio.
+func (q *offerQueue) setPriority(peer types.JID, p int64) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.prio == nil {
+		q.prio = make(map[types.JID]int64)
+	}
+	q.prio[peer] = p
 }
 
 // restore puts back a buyer who was queued before a restart, without
@@ -225,8 +262,14 @@ func (q *offerQueue) next(ctx context.Context) (types.JID, error) {
 	for ctx.Err() == nil {
 		q.mu.Lock()
 		if len(q.buyers) > 0 {
-			peer := q.buyers[0]
-			q.buyers = q.buyers[1:]
+			best := 0
+			for i, b := range q.buyers {
+				if q.prio[b] > q.prio[q.buyers[best]] {
+					best = i
+				}
+			}
+			peer := q.buyers[best]
+			q.buyers = slices.Delete(q.buyers, best, best+1)
 			q.mu.Unlock()
 			return peer, nil
 		}

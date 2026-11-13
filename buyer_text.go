@@ -43,6 +43,16 @@ func sayOpening(price int, day string) reply {
 	return r
 }
 
+// sayHave opens a chat with someone whose buy post asked for this meal,
+// as a private reply to that post. what is the mess, diet and meal, e.g.
+// "bakul non-veg lunch". The price follows separately.
+func sayHave(what, day string) reply {
+	if day != "" {
+		what += " for " + day
+	}
+	return oneOf(msg("have "+what), msg("i have "+what), msg(what+" available"))
+}
+
 // sayCounter comes down to price. The first counter offers it, later ones
 // ask.
 func sayCounter(price, round int) reply {
@@ -50,6 +60,18 @@ func sayCounter(price, round int) reply {
 		return oneOf(msg(fmt.Sprintf("how about %d", price)), msg(fmt.Sprintf("can do %d", price)), msg(fmt.Sprintf("%d works?", price)), msg(fmt.Sprintf("i can do %d", price)))
 	}
 	return oneOf(msg(fmt.Sprintf("%d?", price)), msg(fmt.Sprintf("%d then?", price)), msg(fmt.Sprintf("ok %d?", price)), msg(fmt.Sprintf("would %d work?", price)))
+}
+
+// sayNudge follows up once on a buyer who said nothing after the bot's
+// first message.
+func sayNudge() reply {
+	return oneOf(msg("yes or no?"), msg("are you buying?"), msg("interested?"))
+}
+
+// sayQuietDrop is the lower price a buyer gets when they stay quiet after
+// the nudge too. The bot stops waiting on them after it.
+func sayQuietDrop(price int) reply {
+	return oneOf(msg(fmt.Sprintf("can do %d if you want it", price)), msg(fmt.Sprintf("ok %d for you", price)), msg(fmt.Sprintf("%d if you take it now", price)))
 }
 
 // sayLowest is the floor.
@@ -76,6 +98,22 @@ func sayRestate(price int) reply {
 // sayQueued tells a buyer who agreed that someone else holds the turn.
 func sayQueued(price int) reply {
 	return msg(fmt.Sprintf("ok %d", price), "someone else is paying rn, if they dont in 2 min its yours")
+}
+
+// sayOutbid tells a buyer asked to pay that someone offered more, so they
+// don't pay now. If the meal frees up, their next turn asks them again. A
+// buyer handed to you has no 2 minute window.
+func sayOutbid(handedOff bool) reply {
+	if handedOff {
+		return msg("wait dont pay yet", "someone offered more, ill msg u if it falls through")
+	}
+	return msg("wait dont pay yet", "someone offered more, if they dont pay in 2 min ill msg u")
+}
+
+// sayQueuedHandoff tells a buyer who agreed that someone else is buying
+// from you by hand, with no deadline.
+func sayQueuedHandoff(price int) reply {
+	return msg(fmt.Sprintf("ok %d", price), "someone else is buying rn, ill msg u if it falls through")
 }
 
 // sayPayOther answers a buyer who wants to pay some way the bot can't see.

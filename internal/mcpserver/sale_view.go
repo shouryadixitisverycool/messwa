@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"messwa/internal/config"
 	"messwa/internal/market"
 	"messwa/internal/store"
 )
@@ -75,22 +76,25 @@ type SalePost struct {
 type SaleBuyer struct {
 	// Key is their phone number when known, else their JID, like the sales
 	// page, so a buyer has the same pixel head on both.
-	Key      string      `json:"key"`
-	Name     string      `json:"name,omitempty"` // untrusted
-	Phone    string      `json:"phone,omitempty"`
-	Saved    bool        `json:"saved"`
-	State    string      `json:"state"`
-	Joined   int64       `json:"joined"`
-	Ask      float64     `json:"ask,omitempty"`
-	Offer    float64     `json:"offer,omitempty"`
-	Agreed   float64     `json:"agreed,omitempty"`
-	Asked    float64     `json:"asked,omitempty"`
-	PayUntil int64       `json:"pay_until,omitempty"`
-	BotMsgs  int         `json:"bot_msgs"`
-	Note     string      `json:"note,omitempty"`
-	Refund   float64     `json:"refund,omitempty"`
-	Muted    bool        `json:"muted,omitempty"` // the bot sends them nothing
-	Events   []SaleEvent `json:"events"`
+	Key      string  `json:"key"`
+	Name     string  `json:"name,omitempty"` // untrusted
+	Phone    string  `json:"phone,omitempty"`
+	Saved    bool    `json:"saved"`
+	State    string  `json:"state"`
+	Joined   int64   `json:"joined"`
+	Ask      float64 `json:"ask,omitempty"`
+	Offer    float64 `json:"offer,omitempty"`
+	Agreed   float64 `json:"agreed,omitempty"`
+	Asked    float64 `json:"asked,omitempty"`
+	PayUntil int64   `json:"pay_until,omitempty"`
+	// QuietUntil is when a haggling buyer times out if they stay quiet.
+	// See quietUntil.
+	QuietUntil int64       `json:"quiet_until,omitempty"`
+	BotMsgs    int         `json:"bot_msgs"`
+	Note       string      `json:"note,omitempty"`
+	Refund     float64     `json:"refund,omitempty"`
+	Muted      bool        `json:"muted,omitempty"` // the bot sends them nothing
+	Events     []SaleEvent `json:"events"`
 }
 
 type SaleEvent struct {
@@ -223,6 +227,9 @@ func (s *Server) saleView(ctx context.Context, t store.SellTask, now time.Time) 
 			}
 			sb.Events = append(sb.Events, SaleEvent{At: e.At.Unix(), Kind: e.Kind, N: n, Text: e.Text})
 		}
+		if b.State == store.BuyerNegotiating {
+			sb.QuietUntil = quietUntil(sb.Events, s.cfg.Live().Sell.NegotiationSilence.Duration)
+		}
 		keys[b.Peer] = sb.Key
 		switch b.State {
 		case store.BuyerNegotiating, store.BuyerAgreed, store.BuyerOffered:
@@ -282,6 +289,31 @@ func (s *Server) saleView(ctx context.Context, t store.SellTask, now time.Time) 
 		v.History = append(v.History, SaleTry{ID: x.ID, State: x.State, Started: unix(x.CreatedAt), Ended: unix(x.EndedAt), Buyers: len(bs)})
 	}
 	return v, nil
+}
+
+// quietUntil works out from a haggling buyer's events when negotiate.go
+// will end their session: negotiation_silence after the bot's last message,
+// or config.NegotiationLimit after the session began (never less than the
+// silence), whichever comes first. A revived buyer's session begins again
+// at the revival. It returns 0 before the bot has said anything.
+func quietUntil(events []SaleEvent, silence time.Duration) int64 {
+	var start, lastBot int64
+	for _, e := range events {
+		switch e.Kind {
+		case store.EventRevived:
+			start, lastBot = e.At, e.At
+		case store.EventBotSaid:
+			if start == 0 {
+				start = e.At
+			}
+			lastBot = e.At
+		}
+	}
+	if start == 0 {
+		return 0
+	}
+	sec := int64(silence / time.Second)
+	return min(lastBot+sec, start+max(int64(config.NegotiationLimit/time.Second), sec))
 }
 
 func firstOf(ss ...string) string {

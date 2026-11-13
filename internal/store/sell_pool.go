@@ -145,8 +145,8 @@ func (s *Store) PassSellTaskBuyer(ctx context.Context, from, to int64, peer, agr
 			}
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE sell_task_buyers SET state='agreed',agreed=?,agreed_at=?,ask=?,rounds=?,bot_msgs=?,unknowns=?,last_offer=?,
- quoted=?,said_lowest=?,pass_countered=? WHERE task_id=? AND peer=?`,
-			agreed, at.UnixNano(), n.Ask, n.Rounds, n.BotMsgs, n.Unknowns, n.LastOffer, joinPaise(dedupe(kept)), n.SaidLowest, n.PassCountered,
+ quoted=?,said_lowest=?,pass_countered=?,nudges=? WHERE task_id=? AND peer=?`,
+			agreed, at.UnixNano(), n.Ask, n.Rounds, n.BotMsgs, n.Unknowns, n.LastOffer, joinPaise(dedupe(kept)), n.SaidLowest, n.PassCountered, n.Nudges,
 			to, peer)
 	} else {
 		_, err = tx.ExecContext(ctx, `UPDATE sell_task_buyers SET quoted=? WHERE task_id=? AND peer=?`, joinPaise(dedupe(kept)), to, peer)

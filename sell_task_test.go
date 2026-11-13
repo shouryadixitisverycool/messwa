@@ -38,6 +38,8 @@ type sentMessage struct {
 	revoked string
 	// edited is the message an edit changes; text is its new text.
 	edited string
+	// quoted is the message a reply quotes.
+	quoted string
 }
 
 // fakeConn stands in for the WhatsApp connection. Events are delivered by
@@ -181,7 +183,8 @@ func (f *fakeConn) send(ctx context.Context, to types.JID, msg *waE2E.Message, e
 		f.tried[to]++
 		return whatsmeow.SendResponse{}, errors.New("server returned error 479")
 	}
-	m := sentMessage{to: to, text: msg.GetConversation(), qr: msg.GetImageMessage() != nil,
+	m := sentMessage{to: to, text: messageText(msg), qr: msg.GetImageMessage() != nil,
+		quoted:   msg.GetExtendedTextMessage().GetContextInfo().GetStanzaID(),
 		reaction: msg.GetReactionMessage().GetText(), target: msg.GetReactionMessage().GetKey().GetID()}
 	if pm := msg.GetProtocolMessage(); pm.GetType() == waE2E.ProtocolMessage_REVOKE {
 		m.revoked = pm.GetKey().GetID()
@@ -312,6 +315,7 @@ func sentTo(msgs []sentMessage, to types.JID) []sentMessage {
 var (
 	buyerA   = types.NewJID("911111111111", types.DefaultUserServer)
 	buyerB   = types.NewJID("912222222222", types.DefaultUserServer)
+	buyerC   = types.NewJID("914444444444", types.DefaultUserServer)
 	stranger = types.NewJID("913333333333", types.DefaultUserServer)
 )
 
