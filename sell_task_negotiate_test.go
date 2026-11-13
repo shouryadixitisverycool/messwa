@@ -604,7 +604,7 @@ func TestNegotiationNoReviveAfterCancel(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		m, id := timeOutA(t, f, ctx)
-		if err := m.Cancel(ctx, id); err != nil {
+		if err := m.Cancel(ctx, id, false); err != nil {
 			t.Fatal(err)
 		}
 		synctest.Wait()

@@ -34,6 +34,8 @@ type sentMessage struct {
 	id   string
 	// reaction and target are set for a reaction to target.
 	reaction, target string
+	// revoked is the message a revoke deletes for everyone.
+	revoked string
 }
 
 // fakeConn stands in for the WhatsApp connection. Events are delivered by
@@ -56,6 +58,9 @@ type fakeConn struct {
 	info      map[types.JID]*types.GroupInfo
 	infoErr   error
 	infoAsked []types.JID
+	// hold, when set, keeps each group post waiting until it is closed or
+	// the send's context ends, like a slow send through whatsmeow.
+	hold chan struct{}
 }
 
 func newFakeConn(group types.JID) *fakeConn {
@@ -98,6 +103,11 @@ func (f *fakeConn) BuildUnavailableMessageRequest(types.JID, types.JID, string) 
 
 func (f *fakeConn) BuildReaction(chat, _ types.JID, id types.MessageID, reaction string) *waE2E.Message {
 	return &waE2E.Message{ReactionMessage: &waE2E.ReactionMessage{Text: proto.String(reaction), Key: &waCommon.MessageKey{RemoteJID: proto.String(chat.String()), ID: proto.String(id)}}}
+}
+
+func (f *fakeConn) BuildRevoke(chat, _ types.JID, id types.MessageID) *waE2E.Message {
+	return &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{Type: waE2E.ProtocolMessage_REVOKE.Enum(),
+		Key: &waCommon.MessageKey{RemoteJID: proto.String(chat.String()), FromMe: proto.Bool(true), ID: proto.String(id)}}}
 }
 
 func (f *fakeConn) GetJoinedGroups(context.Context) ([]*types.GroupInfo, error) { return f.groups, nil }
@@ -145,8 +155,17 @@ func (f *fakeConn) SavedContact(_ context.Context, jids ...types.JID) bool {
 	return false
 }
 
-func (f *fakeConn) send(_ context.Context, to types.JID, msg *waE2E.Message, extra ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error) {
+func (f *fakeConn) send(ctx context.Context, to types.JID, msg *waE2E.Message, extra ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error) {
 	f.mu.Lock()
+	if hold := f.hold; hold != nil && to.Server == types.GroupServer && msg.GetConversation() != "" {
+		f.mu.Unlock()
+		select {
+		case <-hold:
+		case <-ctx.Done():
+			return whatsmeow.SendResponse{}, ctx.Err()
+		}
+		f.mu.Lock()
+	}
 	defer f.mu.Unlock()
 	if f.refuse[to] {
 		if f.tried == nil {
@@ -157,6 +176,9 @@ func (f *fakeConn) send(_ context.Context, to types.JID, msg *waE2E.Message, ext
 	}
 	m := sentMessage{to: to, text: msg.GetConversation(), qr: msg.GetImageMessage() != nil,
 		reaction: msg.GetReactionMessage().GetText(), target: msg.GetReactionMessage().GetKey().GetID()}
+	if pm := msg.GetProtocolMessage(); pm.GetType() == waE2E.ProtocolMessage_REVOKE {
+		m.revoked = pm.GetKey().GetID()
+	}
 	if len(extra) > 0 {
 		m.id = extra[0].ID
 	}
@@ -517,7 +539,7 @@ func TestCancelSellTaskReleasesReservation(t *testing.T) {
 		synctest.Wait()
 		f.conn.emit(f.reply(buyerA, "interested"))
 		synctest.Wait()
-		if err := m.Cancel(ctx, id); err != nil {
+		if err := m.Cancel(ctx, id, false); err != nil {
 			t.Fatal(err)
 		}
 		if task := f.task(id); task.State != store.TaskCancelled {

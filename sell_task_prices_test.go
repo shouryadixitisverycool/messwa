@@ -285,7 +285,7 @@ func TestSetPricesValidates(t *testing.T) {
 			t.Fatalf("fixed = %+v", task)
 		}
 
-		if err := m.Cancel(ctx, id); err != nil {
+		if err := m.Cancel(ctx, id, false); err != nil {
 			t.Fatal(err)
 		}
 		if err := m.SetPrices(ctx, id, 40, 60); err == nil || !strings.Contains(err.Error(), "not active") {

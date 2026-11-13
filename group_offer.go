@@ -389,6 +389,9 @@ type groupOffer struct {
 	// while the offer was up. See plain_dm.go.
 	plain  *plainDMs
 	sentDM map[types.JID]time.Time
+	// adopt, when set, takes private replies to posts that aren't this
+	// offer's: a cancelled task's posts for the same meal.
+	adopt func(*events.Message) bool
 
 	stopPosting   context.CancelFunc
 	donePosting   chan struct{}
@@ -448,6 +451,14 @@ func (o *groupOffer) acceptPlainDMs(p *plainDMs) {
 	o.plain = p
 }
 
+// adoptReplies lets adopt claim private replies to posts that aren't this
+// offer's. Call it before posting.
+func (o *groupOffer) adoptReplies(adopt func(*events.Message) bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.adopt = adopt
+}
+
 // buyer decides whether e makes its sender a buyer, and returns them by
 // phone number when WhatsApp tells us one. Every way into the queue comes
 // through here: a private reply quoting a copy of the offer, or, with plain
@@ -457,8 +468,11 @@ func (o *groupOffer) buyer(ctx context.Context, conn saleConn, e *events.Message
 	o.noteSent(e)
 	quoted := o.quotesCopy(e)
 	plain := !quoted && o.plainCandidate(e)
-	p := o.plain
+	p, adopt := o.plain, o.adopt
 	o.mu.Unlock()
+	if !quoted && !plain && adopt != nil && adopt(e) {
+		quoted = true
+	}
 	if !quoted && !plain || buyerPassed(e.Message) {
 		return types.EmptyJID, false
 	}

@@ -197,7 +197,7 @@ To preview without the live service, `messwa dashboard -at "2026-11-02 12:45"` s
 | `start_sell_task` | Only with `[mcp] sell_tasks = true`. Sells one of your registered meals: date, meal, `min_price`, `max_price` in rupees, negotiating in between. Admins only |
 | `sell_task_status` | Only with `sell_tasks` on. One task by id, or the active and last 24 hours' tasks: state, posts, buyers and where each stands in the haggle, buyers who need you, sale. Admins only |
 | `sell_task_events` | Only with `sell_tasks` on. Sell task events in a time window (`since`, `until`) or for one task (`id`), to the second: copies posted or failed, buyers joining, what the bot read and said, prices, payments, QRs, the end. Also each task in the window and its current state. For reviewing a sale or a test run afterwards. Admins only |
-| `cancel_sell_task` | Only with `sell_tasks` on. Stops a task. Admins only |
+| `cancel_sell_task` | Only with `sell_tasks` on. Stops a task and deletes its group posts, unless `keep_posts` is set. Admins only |
 | `set_sell_task_prices` | Only with `sell_tasks` on. Changes an active task's `min_price` and `max_price` in place, without reposting (see [Changing prices](#changing-prices)). Admins only |
 
 Every tool except `start_sell_task`, `cancel_sell_task` and `set_sell_task_prices` is read-only, and those three don't exist unless you turn them on.
@@ -838,10 +838,14 @@ With `on_reply` or `on_agreement` the copies stop and the task ends as `handed_o
 
 A task also ends when you cancel it (`cancelled`), when the meal ends (`expired`), or on an error (`failed`, with the reason in `detail`). Ending without a sale releases the unpaid reservation, so you can start a new task for that meal. One meal can have only one active task, and none once it has a delivery record.
 
+Cancelling deletes the task's group posts for everyone, unless you pass `keep_posts`. A post still being sent when you cancel gets to finish (or time out after a minute) and is then deleted with the rest. The bot only deletes copies the task claimed, so never anyone else's message. A copy that never went out, one older than 48 hours, or one WhatsApp refuses to delete stays up: `sell_task_status` shows its `revoke_error`, and the log says to delete it by hand. Sold posts keep their ✅, and expired tasks keep their posts.
+
+Until the meal ends, a private reply to a cancelled task's post goes to another active task selling the same meal at the same mess and diet (`dinner#2` counts as `dinner`), as if the buyer had replied to that task's post. With two such tasks, the older one takes it. With none, the reply gets nothing, the same as a reply to a post whose meal already sold. This holds across a restart.
+
 `run` enforces these rules on every message, so the agent can't get around them:
 
 - Nothing is sent unless a task is active. The one exception is a QR for a payment that came in while the task was active. It still goes out if you cancel a moment later, and the task then ends as `sold`.
-- Besides one claimed post per group, a task messages only people its posts queued: those who replied privately to one, or with `accept_plain_dms`, DMed about it. After the QR goes out it may also react ✅ to the meal's recorded offer posts, and to nothing else.
+- Besides one claimed post per group, a task messages only people its posts queued: those who replied privately to one, to a cancelled task's post for the same meal, or with `accept_plain_dms`, DMed about it. After the QR goes out it may also react ✅ to the meal's recorded offer posts, and to nothing else. After a cancel it may delete its own posts.
 - With `[sell] buyers = "unsaved_only"`, a task never queues or messages a saved contact. If you switch to it while a task is running, the restart skips saved contacts still waiting in the queue. A buyer already asked to pay keeps their turn, and gets the QR if they pay.
 - No buyer is quoted, agreed with or asked for less than `min_price`. The store checks this itself on every quote, agreement, reservation and sale, whatever the negotiation decided. The one exception is a price the bot already quoted or agreed with that buyer before `set_sell_task_prices` raised the floor: that price stands. A payment must match exactly the price agreed with that buyer, or a higher one the bot quoted them.
 - A task sends at most 12 messages a minute and 80 in total. Reposts count toward both, and a task stops reposting when it has 20 sends left, keeping those for buyers. All tasks together send at most 15 a minute. One buyer gets at most 6 negotiation messages. The ✅ reactions after a sale skip the per-minute wait, so they don't time out behind the sale's own sends.

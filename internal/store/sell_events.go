@@ -46,6 +46,13 @@ const (
 	EventToldSold      = "told_sold"
 	EventTicked        = "ticked" // N: posts ticked ✅
 	EventEnded         = "ended"  // Text: the task's final state
+	// After a cancel, each copy of the offer deleted for everyone, or not.
+	// Peer: the group; Text: the copy's message ID, or why it stayed up.
+	EventRevoked      = "revoked"
+	EventRevokeFailed = "revoke_failed"
+	// A private reply to a cancelled task's post that this task took over.
+	// Peer: the buyer; Text: the cancelled task's ID.
+	EventAdopted = "adopted"
 	// EventPrices is a range edit on a running task. N: the new floor,
 	// paise; Text: "min-max was min-max", INR.
 	EventPrices = "prices"

@@ -419,6 +419,13 @@ func (s *Store) OfferPosts(ctx context.Context, date, meal string) ([]OfferPost,
 	return out, rows.Err()
 }
 
+// DropOfferPost forgets an offer post that was deleted for everyone, so a
+// later sale of the meal doesn't try to tick it.
+func (s *Store) DropOfferPost(ctx context.Context, chat, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM offer_posts WHERE chat=? AND message_id=?`, chat, id)
+	return err
+}
+
 func (s *Store) MarkOfferReacted(ctx context.Context, chat, id string, at time.Time) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE offer_posts SET reacted_at=? WHERE chat=? AND message_id=?`, at.Unix(), chat, id)
 	return err

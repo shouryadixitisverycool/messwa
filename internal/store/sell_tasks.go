@@ -114,6 +114,11 @@ type SellOffer struct {
 	Seq              int
 	PostedAt         time.Time
 	Error            string // why a failed post failed
+	// RevokedAt is when the copy was deleted for everyone after the task
+	// was cancelled; zero if it wasn't. RevokeError is why the last
+	// attempt to delete it failed or was skipped.
+	RevokedAt   time.Time
+	RevokeError string
 }
 
 type SellBuyer struct {
@@ -329,7 +334,7 @@ func (s *Store) OfferClaimed(ctx context.Context, id int64, group, offerID strin
 }
 
 func (s *Store) SellTaskOffers(ctx context.Context, id int64) ([]SellOffer, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT group_jid,seq,offer_id,state,posted_at,error FROM sell_task_offers WHERE task_id=? ORDER BY posted_at, rowid`, id)
+	rows, err := s.db.QueryContext(ctx, `SELECT group_jid,seq,offer_id,state,posted_at,error,revoked_at,revoke_error FROM sell_task_offers WHERE task_id=? ORDER BY posted_at, rowid`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -337,14 +342,30 @@ func (s *Store) SellTaskOffers(ctx context.Context, id int64) ([]SellOffer, erro
 	var out []SellOffer
 	for rows.Next() {
 		var o SellOffer
-		var at int64
-		if err := rows.Scan(&o.Group, &o.Seq, &o.ID, &o.State, &at, &o.Error); err != nil {
+		var at, revoked int64
+		if err := rows.Scan(&o.Group, &o.Seq, &o.ID, &o.State, &at, &o.Error, &revoked, &o.RevokeError); err != nil {
 			return nil, err
 		}
 		o.PostedAt = time.Unix(at, 0)
+		if revoked != 0 {
+			o.RevokedAt = time.Unix(revoked, 0)
+		}
 		out = append(out, o)
 	}
 	return out, rows.Err()
+}
+
+// SetOfferRevoked records that a cancelled task deleted its copy for
+// everyone.
+func (s *Store) SetOfferRevoked(ctx context.Context, id int64, offerID string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE sell_task_offers SET revoked_at=?,revoke_error='' WHERE task_id=? AND offer_id=?`, at.Unix(), id, offerID)
+	return err
+}
+
+// SetOfferRevokeError records why a cancelled task's copy is still up.
+func (s *Store) SetOfferRevokeError(ctx context.Context, id int64, offerID, why string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE sell_task_offers SET revoke_error=? WHERE task_id=? AND offer_id=?`, why, id, offerID)
+	return err
 }
 
 // AddSellTaskBuyer queues someone who replied privately to the task's
