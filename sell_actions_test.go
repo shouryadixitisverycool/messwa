@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -345,6 +346,71 @@ func TestMutedFixedPricePayment(t *testing.T) {
 		synctest.Wait()
 		if task := f.task(id); task.State != store.TaskSold {
 			t.Fatalf("task = %+v", task)
+		}
+	})
+}
+
+func TestResendOfferToFailedGroup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		refused := types.NewJID("120363000000000002", types.GroupServer)
+		f.cfg.Groups = []string{f.group.String(), refused.String()}
+		f.conn.groups = append(f.conn.groups, &types.GroupInfo{JID: refused, GroupName: types.GroupName{Name: "Mess 2"}})
+		f.conn.refuse = map[types.JID]bool{refused: true}
+		f.cfg.Sell.GroupCount = 2
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m := f.manager(ctx)
+		id, err := m.Start(ctx, 0, f.date, "lunch", 1, 1, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		time.Sleep(f.cfg.Sell.PostGap.Duration)
+		synctest.Wait()
+		if f.conn.tried[refused] != 1 {
+			t.Fatalf("refused group tried %d times", f.conn.tried[refused])
+		}
+
+		if err := m.ResendOffer(ctx, id, f.group.String()); err == nil || !strings.Contains(err.Error(), "already up") {
+			t.Fatalf("resend to a posted group: %v", err)
+		}
+		if err := m.ResendOffer(ctx, id, "120363000000000099@g.us"); err == nil {
+			t.Fatal("resend to a group the task doesn't post in worked")
+		}
+		// Still refused: the try is recorded as a failed copy, and the
+		// group can be tried again.
+		if err := m.ResendOffer(ctx, id, "Mess 2"); err == nil || f.conn.tried[refused] != 2 {
+			t.Fatalf("resend while refused: %v, tried %d", err, f.conn.tried[refused])
+		}
+		f.conn.mu.Lock()
+		f.conn.refuse = nil
+		f.conn.mu.Unlock()
+		if err := m.ResendOffer(ctx, id, refused.String()); err != nil {
+			t.Fatal(err)
+		}
+		if p := groupPosts(f.conn, refused); len(p) != 1 {
+			t.Fatalf("refused group got %+v", p)
+		}
+		offers, _ := f.st.SellTaskOffers(ctx, id)
+		var states []string
+		for _, o := range offers {
+			if o.Group == refused.String() {
+				states = append(states, fmt.Sprintf("%d:%s", o.Seq, o.State))
+			}
+		}
+		if fmt.Sprint(states) != "[0:failed 1:failed 2:posted]" {
+			t.Fatalf("copies in the refused group: %v", states)
+		}
+		if err := m.ResendOffer(ctx, id, refused.String()); err == nil {
+			t.Fatal("resent a copy that is up")
+		}
+		// A reply to the resent copy reaches the task.
+		f.conn.emit(replyTo(buyerA, refused, groupPosts(f.conn, refused)[0].id, "interested"))
+		synctest.Wait()
+		if got := sentTo(f.conn.messages(), buyerA); len(got) == 0 {
+			t.Fatal("the buyer who replied to the resent copy got nothing")
 		}
 	})
 }

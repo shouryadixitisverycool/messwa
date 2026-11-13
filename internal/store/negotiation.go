@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -98,26 +99,71 @@ func priceHonoured(ctx context.Context, q interface {
 	return ok, err
 }
 
+// BuyerPriceHonoured includes quotes made while this task's own floor
+// allowed them, even if its floor has since risen.
+func (s *Store) BuyerPriceHonoured(ctx context.Context, id int64, peer string, paise int64) (bool, error) {
+	return priceHonoured(ctx, s.db, id, peer, paise)
+}
+
 // ClaimNegotiationMessage records n and claims the bot's next message to
 // peer, which may then be sent once. A queued buyer becomes negotiating; an
 // agreed one stays agreed (the message tells them someone else is paying). It reports false when the message
 // was already claimed (before a restart), the buyer has moved on, the task
-// ended, or n.Ask is below the task's floor and was never quoted to peer.
+// ended, or n.Ask is below the floor and was never quoted to peer. In a
+// pool the floor is the pool's lowest (see SellTaskPool).
 func (s *Store) ClaimNegotiationMessage(ctx context.Context, id int64, peer string, sent int, n Negotiation) (bool, error) {
 	if n.BotMsgs != sent+1 {
 		return false, errors.New("a claim adds exactly one message")
 	}
-	r, err := s.db.ExecContext(ctx, `UPDATE sell_task_buyers SET state=CASE WHEN state='queued' THEN 'negotiating' ELSE state END,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	n, found, err := taskQuotes(ctx, tx, id, peer, n)
+	if err != nil || !found {
+		return false, err
+	}
+	r, err := tx.ExecContext(ctx, `UPDATE sell_task_buyers SET state=CASE WHEN state='queued' THEN 'negotiating' ELSE state END,
  ask=?,rounds=?,bot_msgs=?,unknowns=?,last_offer=?,quoted=?,said_lowest=?,pass_countered=?,started_at=coalesce(started_at,?)
  WHERE task_id=? AND peer=? AND bot_msgs=? AND state IN ('queued','negotiating','agreed') AND `+activeTask+`
- AND `+honoured,
+ AND `+poolHonoured,
 		append([]any{n.Ask, n.Rounds, n.BotMsgs, n.Unknowns, n.LastOffer, joinPaise(n.Quoted), n.SaidLowest, n.PassCountered, n.StartedAt.Unix(),
 			id, peer, sent, id}, honouredArgs(id, peer, n.Ask)...)...)
 	if err != nil {
 		return false, err
 	}
 	c, err := r.RowsAffected()
-	return c == 1, err
+	if err != nil {
+		return false, err
+	}
+	return c == 1, tx.Commit()
+}
+
+// taskQuotes keeps quotes this task may honour, while preserving earlier
+// valid quotes across a raised floor. It must run in the write transaction.
+func taskQuotes(ctx context.Context, tx *sql.Tx, id int64, peer string, n Negotiation) (Negotiation, bool, error) {
+	var floor int64
+	var quoted string
+	err := tx.QueryRowContext(ctx, `SELECT t.min_paise,b.quoted FROM sell_tasks t JOIN sell_task_buyers b ON b.task_id=t.id WHERE t.id=? AND b.peer=?`, id, peer).Scan(&floor, &quoted)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Negotiation{}, false, nil
+	}
+	if err != nil {
+		return Negotiation{}, false, err
+	}
+	// A pool may quote below this task's floor for another seller. Such
+	// quotes cannot authorize this task to sell below its own floor.
+	// Previously valid quotes survive a later increase to the floor.
+	previous := splitPaise(quoted)
+	kept := make([]int64, 0, len(n.Quoted))
+	for _, price := range n.Quoted {
+		if price >= floor || slices.Contains(previous, price) {
+			kept = append(kept, price)
+		}
+	}
+	n.Quoted = kept
+	return n, true, nil
 }
 
 // ClaimBuyerLine claims a line the bot says to peer at most once per task,
@@ -145,7 +191,16 @@ func (s *Store) AgreeSellTaskBuyer(ctx context.Context, id int64, peer, amount s
 	if err != nil {
 		return false, err
 	}
-	r, err := s.db.ExecContext(ctx, `UPDATE sell_task_buyers SET state='agreed',agreed=?,agreed_at=?,ask=?,rounds=?,bot_msgs=?,unknowns=?,last_offer=?,quoted=?,said_lowest=?,pass_countered=?
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	n, found, err := taskQuotes(ctx, tx, id, peer, n)
+	if err != nil || !found {
+		return false, err
+	}
+	r, err := tx.ExecContext(ctx, `UPDATE sell_task_buyers SET state='agreed',agreed=?,agreed_at=?,ask=?,rounds=?,bot_msgs=?,unknowns=?,last_offer=?,quoted=?,said_lowest=?,pass_countered=?
  WHERE task_id=? AND peer=? AND state IN ('queued','negotiating') AND `+activeTask+`
  AND `+honoured,
 		append([]any{amount, at.UnixNano(), n.Ask, n.Rounds, n.BotMsgs, n.Unknowns, n.LastOffer, joinPaise(n.Quoted), n.SaidLowest, n.PassCountered,
@@ -154,7 +209,10 @@ func (s *Store) AgreeSellTaskBuyer(ctx context.Context, id int64, peer, amount s
 		return false, err
 	}
 	c, err := r.RowsAffected()
-	return c == 1, err
+	if err != nil {
+		return false, err
+	}
+	return c == 1, tx.Commit()
 }
 
 // RecordBuyerOffer sets the buyer's latest offer, in paise, for a step

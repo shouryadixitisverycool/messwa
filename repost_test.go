@@ -17,11 +17,35 @@ import (
 	"messwa/internal/store"
 )
 
+// buryCopy logs the copy id as posted in group now, with n messages after
+// it, as the group log would have them.
+func buryCopy(t *testing.T, st *store.Store, group types.JID, id string, n int) {
+	t.Helper()
+	ctx := context.Background()
+	at := time.Now()
+	if _, err := st.AppendLog(ctx, store.LogEntry{Chat: group.String(), ID: id, Type: "post", Sender: "919000000000@s.whatsapp.net", TS: at, Text: "sell bakul lunch"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range n {
+		st.AppendLog(ctx, store.LogEntry{Chat: group.String(), ID: fmt.Sprintf("%s-chat-%d", id, i), Type: "post", Sender: "918000000000@s.whatsapp.net", TS: at, Text: "anyone selling?"})
+	}
+}
+
+func openTestStore(t *testing.T, path string) *store.Store {
+	t.Helper()
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	return st
+}
+
 // groupPosts are the offer copies sent to group, oldest first.
 func groupPosts(f *fakeConn, group types.JID) []sentMessage {
 	var out []sentMessage
 	for _, m := range f.messages() {
-		if m.to == group && m.reaction == "" {
+		if m.to == group && m.reaction == "" && m.edited == "" {
 			out = append(out, m)
 		}
 	}
@@ -51,20 +75,29 @@ func TestSellTaskRepostsUntilSold(t *testing.T) {
 			t.Fatalf("first round: %+v, refused group tried %d times", p, f.conn.tried[refused])
 		}
 
-		// Nothing happens in the group for ten minutes, so the offer goes
-		// up again there. The group that refused it isn't tried again.
+		// Nothing happens in the group for ten minutes: the copy is still
+		// in view, so it stays the only one.
 		time.Sleep(10 * time.Minute)
 		synctest.Wait()
 		p := groupPosts(f.conn, f.group)
+		if len(p) != 1 {
+			t.Fatalf("reposted in a quiet group: %+v", p)
+		}
+		// Ten messages bury it, so the offer goes up again there. The group
+		// that refused it isn't tried again.
+		buryCopy(t, f.st, f.group, p[0].id, 10)
+		time.Sleep(repostCheck)
+		synctest.Wait()
+		p = groupPosts(f.conn, f.group)
 		if len(p) != 2 || p[1].text != p[0].text || p[1].id == p[0].id {
-			t.Fatalf("after ten minutes: %+v", p)
+			t.Fatalf("after ten messages: %+v", p)
 		}
 		if f.conn.tried[refused] != 1 {
 			t.Fatalf("refused group tried %d times", f.conn.tried[refused])
 		}
 
-		// Ten messages bury the repost, so the next one goes up once it is
-		// five minutes old rather than ten.
+		// Ten messages bury the repost too, so the next one goes up once it
+		// is five minutes old.
 		offers, _ := f.st.SellTaskOffers(ctx, id)
 		repostAt := offers[len(offers)-1].PostedAt
 		if _, err := f.st.AppendLog(ctx, store.LogEntry{Chat: f.group.String(), ID: p[1].id, Type: "post", Sender: "919000000000@s.whatsapp.net", TS: repostAt, Text: p[1].text}); err != nil {
@@ -133,14 +166,18 @@ func TestSellTaskRepostsResumeAndCap(t *testing.T) {
 			t.Fatal(err)
 		}
 		started := time.Now()
-		time.Sleep(10*time.Minute + 30*time.Second)
+		time.Sleep(6 * time.Minute)
 		synctest.Wait()
-		if p := groupPosts(f.conn, f.group); len(p) != 2 {
+		buryCopy(t, f.st, f.group, groupPosts(f.conn, f.group)[0].id, 10)
+		time.Sleep(repostCheck)
+		synctest.Wait()
+		p := groupPosts(f.conn, f.group)
+		if len(p) != 2 {
 			t.Fatalf("before the restart: %+v", p)
 		}
 
-		// run restarts: the repost isn't repeated, and the next one is due
-		// ten minutes after it, not after the restart.
+		// run restarts: the repost isn't repeated, and the next one waits
+		// five minutes after it, not after the restart.
 		stopRun()
 		synctest.Wait()
 		second, cancel := context.WithCancel(t.Context())
@@ -149,7 +186,8 @@ func TestSellTaskRepostsResumeAndCap(t *testing.T) {
 			t.Fatal(err)
 		}
 		synctest.Wait()
-		time.Sleep(time.Until(started.Add(19 * time.Minute)))
+		buryCopy(t, f.st, f.group, p[1].id, 10)
+		time.Sleep(time.Until(started.Add(10 * time.Minute)))
 		synctest.Wait()
 		if p := groupPosts(f.conn, f.group); len(p) != 2 {
 			t.Fatalf("resume reposted early: %+v", p)
@@ -161,6 +199,7 @@ func TestSellTaskRepostsResumeAndCap(t *testing.T) {
 		}
 
 		// max_reposts caps the group at two fresh copies.
+		buryCopy(t, f.st, f.group, groupPosts(f.conn, f.group)[2].id, 10)
 		time.Sleep(time.Hour)
 		synctest.Wait()
 		if p := groupPosts(f.conn, f.group); len(p) != 3 {
@@ -180,21 +219,29 @@ func TestSellTaskStopsRepostingNearTheMealsEnd(t *testing.T) {
 		f.cfg.Sell.MaxReposts = 12
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		// Start 50 minutes before lunch ends: copies at 0, 10, 20 and 30
-		// minutes, and none in the last 15.
+		// Start 30 minutes before lunch ends and bury every copy at once:
+		// copies about 30, 25 and 20 minutes before the end, and none in
+		// the last 15.
 		slot, err := findSlot(f.cfg, f.date, "lunch")
 		if err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(time.Until(slot.End.Add(-50 * time.Minute)))
+		time.Sleep(time.Until(slot.End.Add(-30 * time.Minute)))
 		id, err := f.manager(ctx).Start(ctx, 0, f.date, "lunch", 1, 1, "")
 		if err != nil {
 			t.Fatal(err)
 		}
+		synctest.Wait()
+		for range 3 {
+			p := groupPosts(f.conn, f.group)
+			buryCopy(t, f.st, f.group, p[len(p)-1].id, 10)
+			time.Sleep(5*time.Minute + repostCheck)
+			synctest.Wait()
+		}
 		time.Sleep(time.Until(slot.End.Add(time.Minute)))
 		synctest.Wait()
-		if p := groupPosts(f.conn, f.group); len(p) != 4 {
-			t.Fatalf("copies = %d, want 4", len(p))
+		if p := groupPosts(f.conn, f.group); len(p) != 3 {
+			t.Fatalf("copies = %d, want 3", len(p))
 		}
 		if task := f.task(id); task.State != store.TaskExpired {
 			t.Fatalf("task is %s", task.State)
@@ -249,7 +296,9 @@ func TestRepostsKeepSendsForBuyers(t *testing.T) {
 // deliver-qr reposts from the copies it sent this run, and gives up on a
 // first reply ten minutes after the latest copy.
 func TestRepostsFromMemoryAndFirstReplyWait(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
 	synctest.Test(t, func(t *testing.T) {
+		st := openTestStore(t, path)
 		group := types.NewJID("120363000000000001", types.GroupServer)
 		conn := newFakeConn(group)
 		log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -261,7 +310,7 @@ func TestRepostsFromMemoryAndFirstReplyWait(t *testing.T) {
 		send := directCopy(conn, conn.send, "sell bakul lunch")
 		posting.post(ctx, log, targets, 0, 15*time.Second, send, nil)
 		posting.keepInView(ctx, &reposter{
-			log: log, rules: repost.Rules{On: true, After: 10 * time.Minute, Messages: 10, Max: 1}, end: time.Now().Add(3 * time.Hour), gap: 15 * time.Second,
+			log: log, st: st, rules: repost.Rules{On: true, Messages: 10, Max: 1}, end: time.Now().Add(3 * time.Hour), gap: 15 * time.Second,
 			groups: func(context.Context) ([]offerTarget, error) { return targets, nil },
 			copies: posting.memoryCopies, send: send,
 		})
@@ -270,11 +319,19 @@ func TestRepostsFromMemoryAndFirstReplyWait(t *testing.T) {
 			t.Fatal(err)
 		}
 		start := time.Now()
-		time.Sleep(10*time.Minute + repostCheck)
+		// A quiet group gets no repost however long the copy is up.
+		time.Sleep(9 * time.Minute)
+		synctest.Wait()
+		if p := groupPosts(conn, group); len(p) != 1 {
+			t.Fatalf("reposted in a quiet group: %+v", p)
+		}
+		// Ten messages bury it, so the next round reposts.
+		buryCopy(t, st, group, groupPosts(conn, group)[0].id, 10)
+		time.Sleep(repostCheck)
 		synctest.Wait()
 		p := groupPosts(conn, group)
 		if len(p) != 2 || ctx.Err() != nil {
-			t.Fatalf("after ten minutes: %+v, %v", p, context.Cause(ctx))
+			t.Fatalf("after ten messages: %+v, %v", p, context.Cause(ctx))
 		}
 		// A reply to the first copy still matches.
 		if !posting.matches(replyTo(buyerA, group, p[0].id, "interested")) {
@@ -299,7 +356,9 @@ func TestRepostsFromMemoryAndFirstReplyWait(t *testing.T) {
 // A sell task reads its repost rules every round, so reposting switched on
 // from the settings page reaches an offer that is already up.
 func TestRepostFollowsLiveRules(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
 	synctest.Test(t, func(t *testing.T) {
+		st := openTestStore(t, path)
 		group := types.NewJID("120363000000000001", types.GroupServer)
 		conn := newFakeConn(group)
 		log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -311,9 +370,9 @@ func TestRepostFollowsLiveRules(t *testing.T) {
 		send := directCopy(conn, conn.send, "sell bakul lunch")
 		posting.post(ctx, log, targets, 0, 15*time.Second, send, nil)
 		var mu sync.Mutex
-		rules := repost.Rules{After: 10 * time.Minute, Max: 2}
+		rules := repost.Rules{Messages: 10, Max: 2}
 		posting.keepInView(ctx, &reposter{
-			log: log, end: time.Now().Add(3 * time.Hour), gap: 15 * time.Second,
+			log: log, st: st, end: time.Now().Add(3 * time.Hour), gap: 15 * time.Second,
 			live:   func() repost.Rules { mu.Lock(); defer mu.Unlock(); return rules },
 			groups: func(context.Context) ([]offerTarget, error) { return targets, nil },
 			copies: posting.memoryCopies, send: send,
@@ -321,6 +380,7 @@ func TestRepostFollowsLiveRules(t *testing.T) {
 		if err := posting.waitPosted(); err != nil {
 			t.Fatal(err)
 		}
+		buryCopy(t, st, group, groupPosts(conn, group)[0].id, 10)
 		time.Sleep(30 * time.Minute)
 		synctest.Wait()
 		if p := groupPosts(conn, group); len(p) != 1 {

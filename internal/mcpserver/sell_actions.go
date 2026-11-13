@@ -19,6 +19,9 @@ type SellOperator interface {
 	AddBuyer(ctx context.Context, id int64, who, name string) error
 	// MuteBuyer stops or restarts the bot messaging one of the task's buyers.
 	MuteBuyer(ctx context.Context, id int64, who string, muted bool) error
+	// ResendOffer posts a fresh copy of the offer in group (its JID or
+	// name) when the last copy there failed to send.
+	ResendOffer(ctx context.Context, id int64, group string) error
 }
 
 // SellControl returns what starts, reprices and cancels sell tasks, while
@@ -56,6 +59,8 @@ func (s *Server) addSellActionTools(srv *mcp.Server, write *mcp.ToolAnnotations)
 		Description: "Stop the bot messaging one of a running sell task's buyers: no replies, no payment prompt, no \"sold\" message. Their messages are ignored and their record stays. Payments received while muted do not trigger automatic QR delivery. Undo with unmute_sell_task_buyer. Uses your own linked account."}, s.muteSellTaskBuyer)
 	mcp.AddTool(srv, &mcp.Tool{Name: "unmute_sell_task_buyer", Annotations: write,
 		Description: "Let the bot message a muted buyer of a running sell task again. It answers their next message; nothing is sent right away. Uses your own linked account."}, s.unmuteSellTaskBuyer)
+	mcp.AddTool(srv, &mcp.Tool{Name: "resend_sell_task_offer", Annotations: write,
+		Description: "Post a running sell task's offer again in one group where its last copy failed to send (a post shown as failed in sell_task_status). The task never retries a failed group by itself. Fails when the group's last copy is up or still sending. Uses your own linked account."}, s.resendSellTaskOffer)
 }
 
 type MarkSoldIn struct {
@@ -75,6 +80,11 @@ type AddBuyerIn struct {
 type MuteBuyerIn struct {
 	ID    int64  `json:"id" jsonschema:"sell task id"`
 	Buyer string `json:"buyer" jsonschema:"one of the task's buyers: phone number with country code, or WhatsApp JID, as sell_task_status lists them"`
+}
+
+type ResendOfferIn struct {
+	ID    int64  `json:"id" jsonschema:"sell task id"`
+	Group string `json:"group" jsonschema:"the group's name or JID, as sell_task_status lists its posts"`
 }
 
 func (s *Server) sellAction(ctx context.Context, req *mcp.CallToolRequest, id int64, do func(SellOperator) error) (*mcp.CallToolResult, SellTaskOut, error) {
@@ -108,6 +118,10 @@ func (s *Server) muteSellTaskBuyer(ctx context.Context, req *mcp.CallToolRequest
 
 func (s *Server) unmuteSellTaskBuyer(ctx context.Context, req *mcp.CallToolRequest, in MuteBuyerIn) (*mcp.CallToolResult, SellTaskOut, error) {
 	return s.sellAction(ctx, req, in.ID, func(op SellOperator) error { return op.MuteBuyer(ctx, in.ID, in.Buyer, false) })
+}
+
+func (s *Server) resendSellTaskOffer(ctx context.Context, req *mcp.CallToolRequest, in ResendOfferIn) (*mcp.CallToolResult, SellTaskOut, error) {
+	return s.sellAction(ctx, req, in.ID, func(op SellOperator) error { return op.ResendOffer(ctx, in.ID, in.Group) })
 }
 
 // StartFriendSale saves a friend's meal and starts a sell task for it as

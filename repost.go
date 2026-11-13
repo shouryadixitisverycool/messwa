@@ -171,12 +171,3 @@ func groupActivity(ctx context.Context, st *store.Store, c repost.Copy) (repost.
 	}
 	return repost.Activity{Known: known, Messages: a.Messages, Listings: a.Listings}, nil
 }
-
-// storedCopies converts a task's recorded copies.
-func storedCopies(offers []store.SellOffer) []repost.Copy {
-	out := make([]repost.Copy, 0, len(offers))
-	for _, o := range offers {
-		out = append(out, repost.Copy{Group: o.Group, Seq: o.Seq, ID: o.ID, At: o.PostedAt, State: o.State})
-	}
-	return out
-}

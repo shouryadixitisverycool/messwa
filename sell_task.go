@@ -119,9 +119,18 @@ type runningTask struct {
 	// task listens for replies; manual is a sale you recorded by hand.
 	add    func(ctx context.Context, peer types.JID, name string) error
 	manual *manualSale
+	// resend posts a fresh copy of the offer in a group whose last copy
+	// failed; set once the task posts.
+	resend func(ctx context.Context, group string) error
 	// neg is the task's negotiation once it runs, so a range edit reaches
 	// it; nil for a task that doesn't negotiate.
 	neg atomic.Pointer[negotiation]
+	// startLead makes the task post for its pool (see pool.go); set under
+	// sellManager.mu once the task can. leading is set once it does.
+	startLead func()
+	leading   atomic.Bool
+	// kicks wakes the leader's post sync after the pool changed.
+	kicks chan struct{}
 }
 
 func newSellManager(ctx context.Context, cfg *config.Config, log *slog.Logger, st *store.Store, conn saleConn, send sendFunc,
@@ -247,6 +256,7 @@ func (m *sellManager) Start(ctx context.Context, userID int64, date, meal string
 	t.State = store.TaskActive
 	m.launch(t, s, nil)
 	m.log.Info("sell task started", "task", t.ID, "date", date, "meal", meal, "min", minRupees, "max", maxRupees, "handoff", h)
+	m.poolChanged(t)
 	return t.ID, nil
 }
 
@@ -291,12 +301,8 @@ func (m *sellManager) Cancel(ctx context.Context, id int64, revoke bool) error {
 			return fmt.Errorf("sell task %d is not active", id)
 		}
 		m.retire(*t)
-		if m.end(*t, store.TaskCancelled, "cancelled") != store.TaskCancelled {
-			m.forget(t.ID)
-			return nil
-		}
-		if revoke {
-			m.revokeCopies(*t)
+		if final := m.end(*t, store.TaskCancelled, "cancelled"); final != "" {
+			m.endPool(*t, final, revoke)
 		}
 		return nil
 	}
@@ -371,6 +377,7 @@ func (m *sellManager) SetPrices(ctx context.Context, id int64, minRupees, maxRup
 	if minPaise < old.MinPaise {
 		m.flagOffersAtFloor(ctx, id, minPaise)
 	}
+	m.poolChanged(*t)
 	return nil
 }
 
@@ -452,7 +459,7 @@ func (m *sellManager) launch(t store.SellTask, s *sale, ready chan struct{}) {
 	ctx, stop := context.WithDeadline(ctx, t.EndsAt)
 	gate := &taskGate{m: m, id: t.ID}
 	gate.active.Store(true)
-	rt := &runningTask{task: t, cancel: cancel, done: make(chan struct{}), gate: gate}
+	rt := &runningTask{task: t, cancel: cancel, done: make(chan struct{}), gate: gate, kicks: make(chan struct{}, 1)}
 	m.mu.Lock()
 	m.running[t.ID] = rt
 	m.mu.Unlock()
@@ -488,18 +495,8 @@ func (m *sellManager) launch(t store.SellTask, s *sale, ready chan struct{}) {
 			m.log.Info("sell task paused until run restarts", "task", t.ID)
 			return
 		}
-		switch final := m.end(t, state, detail); {
-		case final == store.TaskSold:
-			m.forget(t.ID)
-			m.tickOffers(t, gate)
-		case final == store.TaskCancelled:
-			// Posts claimed since Cancel looked count too.
-			m.retire(t)
-			if rt.revoke.Load() {
-				m.revokeCopies(t)
-			}
-		default:
-			m.forget(t.ID)
+		if final := m.end(t, state, detail); final != "" {
+			m.endPool(t, final, rt.revoke.Load())
 		}
 	}()
 }
@@ -555,25 +552,6 @@ func (m *sellManager) end(t store.SellTask, state, detail string) string {
 	m.log.Info("sell task ended", "task", t.ID, "state", state, "detail", detail)
 	m.event(ctx, store.SellEvent{TaskID: t.ID, Kind: store.EventEnded, Text: state})
 	return state
-}
-
-// tickOffers reacts ✅ to the meal's offer posts once its QR is out, like
-// deliver-qr does, so the board shows the listing as sold. It also ticks
-// posts from an earlier deliver-qr for the same meal.
-func (m *sellManager) tickOffers(t store.SellTask, gate *taskGate) {
-	if !m.connected(30 * time.Second) {
-		m.log.Warn("WhatsApp is not connected; mark the offer posts sold by hand", "task", t.ID)
-		return
-	}
-	ctx, stop := context.WithTimeout(context.WithoutCancel(m.base), time.Minute)
-	defer stop()
-	done, _, err := reactSold(ctx, m.st, m.own, gate.react, m.log, t.Date, t.Meal)
-	if err != nil {
-		m.log.Warn("could not read the offer posts to mark them sold", "task", t.ID, "err", err)
-	}
-	if done > 0 {
-		m.event(ctx, store.SellEvent{TaskID: t.ID, Kind: store.EventTicked, N: int64(done)})
-	}
 }
 
 // runTask posts the offer (unless it already went out) and sells to the
@@ -647,9 +625,6 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, rt
 	posting := watchGroupOffer(ctx, m.conn, queue)
 	defer posting.close()
 	posting.adoptReplies(m.adopter(t))
-	if settings.AcceptPlainDMs {
-		posting.acceptPlainDMs(newPlainDMs(m.cfg, m.st, m.log.With("task", t.ID), s.mess, baseMeal(t.Meal), ""))
-	}
 	claimed := map[string]bool{}
 	for _, o := range offers {
 		claimed[o.Group] = true
@@ -661,16 +636,65 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, rt
 		// it count, as they did before the restart.
 		posting.watch(postedOffer{Chat: group, ID: o.ID, At: o.PostedAt})
 	}
+	// Only the task leading its pool posts and takes replies; the others
+	// wait their turn (see pool.go). The post sync stops when the meal
+	// sells.
+	syncCtx, stopSync := context.WithCancel(ctx)
+	defer stopSync()
+	lead := func() error {
+		copies, err := m.poolCopies(ctx, t)
+		if err != nil {
+			return err
+		}
+		for _, c := range copies {
+			if c.TaskID == t.ID {
+				continue
+			}
+			group, err := types.ParseJID(c.Group)
+			if err != nil {
+				continue
+			}
+			posting.watch(postedOffer{Chat: group, ID: c.ID, At: c.PostedAt})
+			if c.RevokedAt.IsZero() {
+				claimed[c.Group] = true
+			}
+		}
+		if settings.AcceptPlainDMs {
+			posting.acceptPlainDMs(newPlainDMs(m.cfg, m.st, m.log.With("task", t.ID), s.mess, baseMeal(t.Meal), ""))
+		}
+		return m.postCopies(ctx, syncCtx, t, s, rt, posting, settings, claimed)
+	}
+	m.mu.Lock()
+	rt.startLead = func() {
+		m.log.Info("this task now leads its pool and posts for it", "task", t.ID)
+		go func() {
+			if err := lead(); err != nil {
+				m.log.Warn("could not post for the pool", "task", t.ID, "err", err)
+			}
+		}()
+	}
+	m.mu.Unlock()
 	if resume == nil {
 		listening()
 	}
-	if err := m.postCopies(ctx, t, s, gate, posting, settings, claimed); err != nil {
+	leads, err := m.leads(ctx, t)
+	if err != nil {
 		return err
+	}
+	if leads && rt.leading.CompareAndSwap(false, true) {
+		if err := lead(); err != nil {
+			return err
+		}
+	} else if !leads {
+		m.log.Info("pooled with an older task selling the same meal; it posts for both", "task", t.ID)
 	}
 	if resume != nil {
 		resume.listening = listening
 	}
-	s.sold = func() { posting.stop() }
+	s.sold = func() {
+		stopSync()
+		posting.stop()
+	}
 	var detail string
 	if t.Handoff == string(config.HandoffOnReply) || t.Handoff == string(config.HandoffOnAgreement) {
 		s.handoff = func(ctx context.Context, buyer types.JID, d store.Delivery, others []types.JID) error {
@@ -695,12 +719,17 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, rt
 // this task yet, post_gap apart, in the background, then keeps the copies
 // in view with reposts. When no copy went out before, it waits for the
 // first one and fails if none posts.
-func (m *sellManager) postCopies(ctx context.Context, t store.SellTask, s *sale, gate *taskGate, posting *groupOffer, settings sellSettings, claimed map[string]bool) error {
+func (m *sellManager) postCopies(ctx, syncCtx context.Context, t store.SellTask, s *sale, rt *runningTask, posting *groupOffer, settings sellSettings, claimed map[string]bool) error {
+	gate := rt.gate
 	first := len(claimed) == 0
 	var groups []offerTarget
 	var listed bool
-	// targets are the [sell] groups we're in, listed once.
+	var listMu sync.Mutex
+	// targets are the [sell] groups we're in, listed once. The reposter
+	// and ResendOffer call it from their own goroutines.
 	targets := func(ctx context.Context) ([]offerTarget, error) {
+		listMu.Lock()
+		defer listMu.Unlock()
 		if listed {
 			return groups, nil
 		}
@@ -726,24 +755,24 @@ func (m *sellManager) postCopies(ctx context.Context, t store.SellTask, s *sale,
 		}
 		return nil
 	})
-	// Each copy shows the opening price as it is now, after any range edit.
+	// Each copy shows the opening price and the pool's count as they are
+	// now, after any range edit.
 	text := func() string {
-		price := t.MaxPaise
-		if cur, err := m.st.GetSellTask(ctx, t.ID); err == nil && cur != nil {
-			price = cur.MaxPaise
-		}
+		price, count := m.offerShows(ctx, t)
 		return offerText(offerDetails{Mess: s.mess, Diet: s.diet, Meal: t.Meal, Price: rupees(store.FormatPaise(price)),
-			ShowPrice: settings.ShowPrice, Day: offerDay(m.cfg, t.Date), Extras: extras()})
+			ShowPrice: settings.ShowPrice, Day: offerDay(m.cfg, t.Date), Extras: extras(), Count: count})
 	}
 	send := m.taskCopy(t, gate, text)
 	record := func(p postedOffer) { recordOffers(ctx, m.st, m.own, m.log, t.Date, t.Meal, []postedOffer{p}) }
+	m.acceptResend(ctx, t, gate, posting, targets, send, record)
+	go m.syncCopies(syncCtx, t, gate, text, rt.kicks)
 	keepInView := func() {
 		posting.keepInView(ctx, &reposter{
 			log: m.log.With("task", t.ID), st: m.st, live: m.repostRules, end: t.EndsAt, gap: settings.PostGap,
 			groups: targets,
 			copies: func(ctx context.Context) ([]repost.Copy, error) {
-				offers, err := m.st.SellTaskOffers(ctx, t.ID)
-				return storedCopies(offers), err
+				copies, err := m.poolCopies(ctx, t)
+				return repostCopies(copies), err
 			},
 			send: send, record: record,
 			room: func() bool { return m.limits.left(t.ID) > repostReserve },
@@ -795,12 +824,26 @@ func (m *sellManager) postCopies(ctx context.Context, t store.SellTask, s *sale,
 }
 
 // taskCopy claims each copy in the store before the gate sends it, so a
-// restart never posts to the same group twice.
+// restart never posts to the same group twice. seq numbers the copy among
+// the pool's copies in the group; the task claims it under its own number.
 func (m *sellManager) taskCopy(t store.SellTask, gate *taskGate, text func() string) sendCopy {
 	return func(ctx context.Context, o *groupOffer, g offerTarget, seq int) (postedOffer, error) {
 		p := postedOffer{Chat: g.JID, GroupName: g.Name, ID: m.conn.GenerateMessageID(), At: time.Now().Truncate(time.Second), Text: text()}
-		if err := m.st.ClaimOfferPost(ctx, t.ID, g.JID.String(), p.ID, seq, p.At); err != nil {
+		copies, err := m.poolCopies(ctx, t)
+		if err != nil {
 			return p, err
+		}
+		own := seq
+		for _, c := range copies {
+			if c.Group == g.JID.String() && c.TaskID != t.ID {
+				own--
+			}
+		}
+		if err := m.st.ClaimOfferPost(ctx, t.ID, g.JID.String(), p.ID, own, p.At); err != nil {
+			return p, err
+		}
+		if err := m.st.SetOfferText(ctx, t.ID, p.ID, p.Text); err != nil {
+			m.log.Warn("could not record the offer's text", "task", t.ID, "err", err)
 		}
 		o.watch(p)
 		resp, err := gate.send(ctx, g.JID, &waE2E.Message{Conversation: proto.String(p.Text)}, whatsmeow.SendRequestExtra{ID: p.ID})
@@ -820,7 +863,7 @@ func (m *sellManager) taskCopy(t store.SellTask, gate *taskGate, text func() str
 		}
 		m.event(stateCtx, store.SellEvent{TaskID: t.ID, Peer: g.JID.String(), Kind: store.EventPosted})
 		p.At = firstTime(resp.Timestamp, p.At)
-		m.log.Info("sell task offer posted", "task", t.ID, "group", g.Name, "offer_id", p.ID, "copy", seq)
+		m.log.Info("sell task offer posted", "task", t.ID, "group", g.Name, "offer_id", p.ID, "copy", own)
 		return p, nil
 	}
 }
@@ -872,6 +915,9 @@ func (m *sellManager) restore(ctx context.Context, t store.SellTask, queue *offe
 			continue
 		}
 		switch b.State {
+		case store.BuyerMoved:
+			// Passed to another task in the pool; theirs now.
+			continue
 		case store.BuyerQueued:
 			alt, _ := types.ParseJID(b.Alt)
 			if !gate.turnsAway(ctx, peer, alt) {

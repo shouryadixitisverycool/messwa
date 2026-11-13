@@ -289,7 +289,6 @@ function ring(color) {
 }
 
 const TRIGGERS = [
-  { key: 'sell.repost_after', cap: '⏱ Copy age', color: '#ffc53d', step: 5, min: 5, max: 60, zero: true, toUnit: (s) => Math.round(s / 60), fromUnit: (m) => m * 60, fmt: (m) => (m ? `${m}m` : 'Off') },
   { key: 'sell.repost_messages', cap: '💬 New messages', color: '#5aa9ff', step: 1, min: 1, max: 30, zero: true, fmt: (v) => (v ? String(v) : 'Off') },
   { key: 'sell.repost_listings', cap: '🍱 Rival listings', color: '#e2553f', step: 1, min: 1, max: 10, zero: true, fmt: (v) => (v ? String(v) : 'Off') },
 ];

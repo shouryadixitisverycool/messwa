@@ -191,7 +191,7 @@ func TestSellToolsNeedSettingAndAdmin(t *testing.T) {
 		t.Fatalf("offers = %+v", offers)
 	}
 	if len(reposts) != 2 || reposts[0].Group != "Mess Buy Sell" || reposts[0].Reposts != 1 || reposts[0].MessagesAfter != 4 || reposts[0].Due ||
-		reposts[0].NextAt == "" || !strings.Contains(reposts[0].Why, "10 messages after it (now 4)") {
+		reposts[0].NextAt != "" || !strings.Contains(reposts[0].Why, "10 messages after it (now 4)") {
 		t.Fatalf("busy group = %+v", reposts)
 	}
 	if !reposts[1].Stopped || !strings.Contains(reposts[1].Why, "failed") {

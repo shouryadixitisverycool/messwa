@@ -5,16 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 
+	"messwa/internal/mcpserver"
 	"messwa/internal/store"
 )
 
-// Three things you can do to a running sell task by hand, from the
+// Four things you can do to a running sell task by hand, from the
 // dashboard or an MCP tool, instead of editing the database:
 //
 //   - MarkSold: you sold the meal yourself. The task stops, the sale goes
@@ -26,8 +28,12 @@ import (
 //   - MuteBuyer: the bot sends a buyer nothing more for the task, not even
 //     "sorry sold", and ignores what they write. Their record stays;
 //     payments while muted do not trigger an automatic QR.
+//   - ResendOffer: post the offer again in a group whose last copy failed
+//     to send. The reposter never retries such a group by itself.
 //
 // Each one writes an event to the task's log.
+
+var _ mcpserver.SellOperator = (*sellManager)(nil)
 
 var (
 	errBuyerMuted = errors.New("buyer is muted for this task")
@@ -379,4 +385,85 @@ func (m *sellManager) MuteBuyer(ctx context.Context, id int64, who string, muted
 	m.event(ctx, store.SellEvent{TaskID: id, Peer: peer, Kind: kind})
 	m.log.Info("buyer "+kind+" by you", "task", id, "buyer", peer)
 	return nil
+}
+
+// acceptResend lets ResendOffer post a fresh copy in a group whose last
+// copy failed. The reposter skips such a group, since it would most likely
+// refuse a repost too, so trying again is left to you.
+func (m *sellManager) acceptResend(taskCtx context.Context, t store.SellTask, gate *taskGate, posting *groupOffer,
+	targets func(context.Context) ([]offerTarget, error), send sendCopy, record func(postedOffer)) {
+	var mu sync.Mutex // one resend at a time, so two clicks claim one copy
+	resend := func(ctx context.Context, group string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		// The send stops with the task as well as with the request.
+		ctx, stop := context.WithCancel(ctx)
+		defer stop()
+		defer context.AfterFunc(taskCtx, stop)()
+		all, err := targets(ctx)
+		if err != nil {
+			return err
+		}
+		var g offerTarget
+		for _, x := range all {
+			if x.JID.String() == group || x.Name == group {
+				g = x
+			}
+		}
+		if g.JID.IsEmpty() {
+			return errors.New("that group is not one of the groups this task posts in")
+		}
+		// In a pool the last copy may be another task's.
+		copies, err := m.poolCopies(ctx, t)
+		if err != nil {
+			return err
+		}
+		last := poolCopy{SellOffer: store.SellOffer{Seq: -1}}
+		for _, c := range copies {
+			if c.Group == g.JID.String() && c.Seq > last.Seq {
+				last = c
+			}
+		}
+		switch last.State {
+		case "":
+			return errors.New("the offer hasn't been posted in that group yet")
+		case store.OfferPosting:
+			return errors.New("a copy is still sending in that group")
+		case store.OfferPosted:
+			return errors.New("the offer is already up in that group")
+		}
+		if !gate.active.Load() {
+			return errors.New("the task is no longer selling")
+		}
+		g = refreshGroup(ctx, posting.conn, m.log, g)
+		p, err := send(ctx, posting, g, last.Seq+1)
+		if err != nil {
+			return fmt.Errorf("WhatsApp refused the post again: %w", err)
+		}
+		posting.addPosted(p)
+		record(p)
+		m.log.Info("offer resent by you", "task", t.ID, "group", g.Name, "offer_id", p.ID, "copy", last.Seq+1)
+		return nil
+	}
+	m.mu.Lock()
+	if rt := m.running[t.ID]; rt != nil {
+		rt.resend = resend
+	}
+	m.mu.Unlock()
+}
+
+// ResendOffer posts a fresh copy of task id's offer in group (its JID or
+// name) when the last copy there failed to send.
+func (m *sellManager) ResendOffer(ctx context.Context, id int64, group string) error {
+	rt, err := m.runningActive(ctx, id)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	resend := rt.resend
+	m.mu.Unlock()
+	if resend == nil || !rt.gate.active.Load() {
+		return errors.New("the task is not posting right now; try again in a moment")
+	}
+	return resend(ctx, strings.TrimSpace(group))
 }

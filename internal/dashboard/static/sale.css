@@ -41,11 +41,12 @@
 .rail-now { font: 700 11px Pixel; }
 .rail-end { font: 400 7px Pixel; fill: var(--dim); }
 
-.ms-posts { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; margin: 10px 0 8px; cursor: pointer; }
+.ms-posts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; margin: 10px 0 8px; cursor: pointer; }
 .ms-post { display: flex; align-items: center; gap: 5px; padding: 5px 6px; border-radius: 8px; background: var(--slot); border: 1px solid #1e2431; min-width: 0; }
 .ms-post b { font: 700 11px Pixel; color: var(--veg); }
-.ms-post .code { font: 700 7px Pixel; color: var(--muted); }
-.ms-post .depth { flex: 1; display: flex; height: 8px; border-radius: 2px; overflow: hidden; margin-left: 2px; min-width: 20px; }
+.ms-post .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 700 7px Pixel; color: var(--muted); }
+.ms-post .times { flex: none; font: 700 7px Pixel; color: var(--dim); }
+.ms-post .depth { flex: 0 0 34px; display: flex; height: 8px; border-radius: 2px; overflow: hidden; margin-left: 2px; min-width: 20px; }
 .ms-post .depth .me { width: 5px; background: var(--gold); flex: none; }
 .ms-post .depth .after { background: #3a4152; }
 .ms-post.buried { border-color: color-mix(in srgb, var(--red) 55%, transparent); }
@@ -54,6 +55,10 @@
 .ms-post.failed b, .ms-post .err { color: var(--red); }
 .ms-post .err { margin-left: auto; font: 700 8px Pixel; }
 .ms-post.posting b { color: var(--egg); }
+.ms-post .err + .resend { margin-left: 0; }
+.resend { flex: none; margin-left: auto; padding: 0 5px; height: 16px; border-radius: 4px; border: 1px solid var(--red); background: transparent; color: var(--red); font: 700 11px/1 Pixel; cursor: pointer; }
+.resend:hover, .resend:focus-visible { background: var(--red); color: #121620; }
+.resend.busy { opacity: .5; cursor: wait; }
 .ms-none { color: var(--dim); }
 
 .ms-buyers { display: grid; grid-template-columns: repeat(auto-fill, minmax(52px, 1fr)); gap: 10px 6px; padding-bottom: 6px; }
@@ -148,8 +153,14 @@
 svg.chart { display: block; width: 100%; }
 .mp-posts { display: grid; gap: 6px; }
 .mp-post { display: flex; align-items: center; gap: 8px; }
-.mp-post b { font: 700 10px Pixel; }
-.mp-post .code { font: 700 7px Pixel; color: var(--muted); width: 18px; }
+.mp-group { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.mp-group:first-child { margin-top: 0; }
+.mp-group b { font: 700 10px Pixel; }
+.mp-group .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 700 8px Pixel; color: var(--text); }
+.mp-group .times { font: 700 7px Pixel; color: var(--dim); }
+.mp-post { padding-left: 18px; }
+.mp-post.old { opacity: .55; }
+.mp-post .when { font: 700 7px Pixel; color: var(--muted); width: 34px; flex: none; }
 .mp-bar { flex: 1; display: flex; height: 10px; border-radius: 3px; overflow: hidden; }
 .mp-bar .me { width: 4%; background: var(--gold); }
 .mp-bar .after { background: #3a4152; }

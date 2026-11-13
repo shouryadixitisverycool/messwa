@@ -35,6 +35,10 @@ func (a accountConn) BuildRevoke(chat, sender types.JID, id types.MessageID) (ou
 	_ = a.Do(func(c *wa.Client) error { out = c.WA.BuildRevoke(chat, sender, id); return nil })
 	return
 }
+func (a accountConn) BuildEdit(chat types.JID, id types.MessageID, newContent *waE2E.Message) (out *waE2E.Message) {
+	_ = a.Do(func(c *wa.Client) error { out = c.WA.BuildEdit(chat, id, newContent); return nil })
+	return
+}
 func (a accountConn) GetJoinedGroups(ctx context.Context) (out []*types.GroupInfo, err error) {
 	err = a.Do(func(c *wa.Client) error { var e error; out, e = c.WA.GetJoinedGroups(ctx); return e })
 	return

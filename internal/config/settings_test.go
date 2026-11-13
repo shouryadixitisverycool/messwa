@@ -24,7 +24,7 @@ func TestWithSettings(t *testing.T) {
 		"meals.times":        raw(map[string]MealTime{"lunch": {"12:00", "15:00"}}),
 		"messes.veg_only":    raw(map[string]bool{"bakul": true}),
 		"sales.monthly_fee":  raw(3200),
-		"sell.repost_after":  raw(0),
+		"sell.repost_after":  raw(600), // retired, ignored
 		"dedupe.window":      raw(12 * 3600),
 		"sell.max_reposts":   raw(4),
 		"mcp.sell_tasks":     raw(true),
@@ -45,7 +45,7 @@ func TestWithSettings(t *testing.T) {
 	if !n.VegOnly("bakul") || !n.VegOnly("palash") {
 		t.Fatal("veg_only not applied")
 	}
-	if n.Sales.MonthlyFee != 3200 || n.Sell.RepostAfter.Duration != 0 || n.Dedupe.Window.Duration != 12*time.Hour || n.Sell.MaxReposts != 4 || !n.MCP.SellTasks {
+	if n.Sales.MonthlyFee != 3200 || n.Dedupe.Window.Duration != 12*time.Hour || n.Sell.MaxReposts != 4 || !n.MCP.SellTasks {
 		t.Fatalf("config = %+v", n)
 	}
 	// c itself is untouched, including the slices the copy changed.
@@ -65,7 +65,6 @@ func TestWithSettingsRefuses(t *testing.T) {
 		"unknown key":            {"sell.nope": raw(true)},
 		"wrong type":             {"sell.show_price": raw("yes")},
 		"post gap too short":     {"sell.post_gap": raw(1)},
-		"repost too soon":        {"sell.repost_after": raw(60)},
 		"silence too short":      {"sell.negotiation_silence": raw(30)},
 		"silence too long":       {"sell.negotiation_silence": raw(31 * 60)},
 		"too many reposts":       {"sell.max_reposts": raw(13)},
