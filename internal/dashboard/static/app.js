@@ -782,7 +782,7 @@ function renderStats() {
   // Buckets line up with the clock; the last one is still filling.
   const end = Math.ceil(n / (STEP * 60)) * STEP * 60;
   const start = end - SPAN * 60;
-  const ks = markets();
+  const ks = markets().filter((k) => stats(k, win).msgs > 0);
   const series = new Map(ks.map((k) => [marketKey(k), buckets(k, start)]));
   const top = Math.max(1, ...[...series.values()].flat().map((b) => Math.max(b.msgs, b.sales)));
 
