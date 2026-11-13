@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -410,6 +411,9 @@ func TestNegotiationMessageCap(t *testing.T) {
 	})
 }
 
+// silence is how long the fixture's negotiations wait for a buyer.
+func (f *sellFixture) silence() time.Duration { return f.cfg.Sell.NegotiationSilence.Duration }
+
 func TestNegotiationSilenceEndsSession(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data.db")
 	synctest.Test(t, func(t *testing.T) {
@@ -424,16 +428,259 @@ func TestNegotiationSilenceEndsSession(t *testing.T) {
 		synctest.Wait()
 		f.conn.emit(f.reply(buyerA, "price?"))
 		settle()
-		time.Sleep(sessionSilence + time.Second)
+		// Still negotiating just before the silence runs out.
+		time.Sleep(f.silence() - 10*time.Second)
+		synctest.Wait()
+		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerNegotiating {
+			t.Fatalf("A = %+v", b)
+		}
+		time.Sleep(10 * time.Second)
 		synctest.Wait()
 		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerTimedOut {
 			t.Fatalf("A = %+v", b)
 		}
-		// Too late: the session is over and the bot stays quiet.
+	})
+}
+
+func TestNegotiationSilenceSetting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		f.cfg.Sell.NegotiationSilence.Duration = 3 * time.Minute
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m := f.negotiatingManager(ctx, 50)
+		id, err := m.Start(ctx, 0, f.date, "lunch", 30, 60, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		f.conn.emit(f.reply(buyerA, "price?"))
+		settle()
+		time.Sleep(3 * time.Minute)
+		synctest.Wait()
+		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerTimedOut {
+			t.Fatalf("A = %+v", b)
+		}
+	})
+}
+
+// eventsFor are the kinds of a task's events about peer, in order.
+func eventsFor(t *testing.T, f *sellFixture, id int64, peer types.JID) []string {
+	t.Helper()
+	evs, err := f.st.SellTaskEvents(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range evs {
+		if e.Peer == peer.String() {
+			out = append(out, e.Kind)
+		}
+	}
+	return out
+}
+
+// timeOutA starts a negotiating task in which buyer A haggles once and then
+// goes quiet until they time out. The bot's last ask to A was 45.
+func timeOutA(t *testing.T, f *sellFixture, ctx context.Context) (*sellManager, int64) {
+	t.Helper()
+	m := f.negotiatingManager(ctx, 40)
+	id, err := m.Start(ctx, 0, f.date, "lunch", 30, 60, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	synctest.Wait()
+	f.conn.emit(f.reply(buyerA, "30?"))
+	settle()
+	if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 1 || got[0] != "how about 45" {
+		t.Fatalf("A got %q", got)
+	}
+	time.Sleep(f.silence() + time.Second)
+	synctest.Wait()
+	if b := buyerState(t, f, id, buyerA); b.State != store.BuyerTimedOut {
+		t.Fatalf("A = %+v", b)
+	}
+	return m, id
+}
+
+func TestNegotiationRevivesLateReply(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		_, id := timeOutA(t, f, ctx)
+
+		// A comes back with a new offer. The bot carries on from its ask
+		// of 45, down to the usual 40 by now, instead of opening at 60.
+		f.conn.emit(dm(buyerA, "35?"))
+		settle()
+		toA := texts(sentTo(f.conn.messages(), buyerA))
+		if strings.Join(toA, "|") != "how about 45|40 only|thats the least" {
+			t.Fatalf("A got %q", toA)
+		}
+		b := buyerState(t, f, id, buyerA)
+		if b.State != store.BuyerNegotiating {
+			t.Fatalf("A = %+v", b)
+		}
+		if b.LastOffer != 3500 || b.BotMsgs != 2 || b.Rounds != 1 || !b.SaidLowest {
+			t.Fatalf("A's haggle = %+v", b.Negotiation)
+		}
+		evs := eventsFor(t, f, id, buyerA)
+		if !slices.Contains(evs, store.EventRevived) || slices.Index(evs, store.EventRevived) < slices.Index(evs, store.EventTimedOut) {
+			t.Fatalf("events = %q", evs)
+		}
+	})
+}
+
+func TestNegotiationRevivedBuyerAgreesAtLastAsk(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		_, id := timeOutA(t, f, ctx)
+
+		// "Give qr" after timing out: A takes the 45 they were offered and
+		// is asked to pay it.
 		f.conn.emit(dm(buyerA, "ok"))
 		settle()
-		if got := sentTo(f.conn.messages(), buyerA); len(got) != 1 {
-			t.Fatalf("A got %+v", got)
+		toA := texts(sentTo(f.conn.messages(), buyerA))
+		if len(toA) != 3 || toA[1] != "ok 45" {
+			t.Fatalf("A got %q", toA)
+		}
+		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerOffered || b.Amount != "45.00" {
+			t.Fatalf("A = %+v", b)
+		}
+		f.conn.emit(paymentOf(buyerA, "pay-a", "45.00", time.Now()))
+		synctest.Wait()
+		if task := f.task(id); task.State != store.TaskSold {
+			t.Fatalf("task is %s (%s)", task.State, task.Detail)
+		}
+	})
+}
+
+func TestNegotiationNoReviveAfterSold(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		_, id := timeOutA(t, f, ctx)
+
+		// B buys while A is away. A timed out, so the sale doesn't tell them.
+		f.conn.emit(f.reply(buyerB, "60"))
+		settle()
+		f.conn.emit(paymentOf(buyerB, "pay-b", "60.00", time.Now()))
+		synctest.Wait()
+		if task := f.task(id); task.State != store.TaskSold {
+			t.Fatalf("task is %s (%s)", task.State, task.Detail)
+		}
+		before := len(sentTo(f.conn.messages(), buyerA))
+
+		// A writes late and hears it sold, once.
+		f.conn.emit(dm(buyerA, "still there?"))
+		settle()
+		f.conn.emit(dm(buyerA, "hello?"))
+		settle()
+		toA := texts(sentTo(f.conn.messages(), buyerA))[before:]
+		if len(toA) != 1 || toA[0] != "sold sorry" {
+			t.Fatalf("A got %q", toA)
+		}
+		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerToldSold {
+			t.Fatalf("A = %+v", b)
+		}
+		if evs := eventsFor(t, f, id, buyerA); slices.Contains(evs, store.EventRevived) || evs[len(evs)-1] != store.EventToldSold {
+			t.Fatalf("events = %q", evs)
+		}
+	})
+}
+
+func TestNegotiationNoReviveAfterCancel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m, id := timeOutA(t, f, ctx)
+		if err := m.Cancel(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		before := len(sentTo(f.conn.messages(), buyerA))
+
+		// The meal may still be yours to sell by hand: the bot says nothing.
+		f.conn.emit(dm(buyerA, "ok 45"))
+		settle()
+		if got := sentTo(f.conn.messages(), buyerA); len(got) != before {
+			t.Fatalf("A got %q", texts(got[before:]))
+		}
+		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerTimedOut {
+			t.Fatalf("A = %+v", b)
+		}
+		if evs := eventsFor(t, f, id, buyerA); slices.Contains(evs, store.EventRevived) {
+			t.Fatalf("events = %q", evs)
+		}
+	})
+}
+
+func TestNegotiationNoReviveAfterPass(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m := f.negotiatingManager(ctx, 40)
+		id, err := m.Start(ctx, 0, f.date, "lunch", 30, 60, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		f.conn.emit(f.reply(buyerA, "price?"))
+		settle()
+		f.conn.emit(dm(buyerA, "not interested"))
+		settle()
+		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerPassed {
+			t.Fatalf("A = %+v", b)
+		}
+		before := len(sentTo(f.conn.messages(), buyerA))
+		f.conn.emit(dm(buyerA, "ok actually 45?"))
+		settle()
+		if got := sentTo(f.conn.messages(), buyerA); len(got) != before {
+			t.Fatalf("A got %q", texts(got[before:]))
+		}
+		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerPassed {
+			t.Fatalf("A = %+v", b)
+		}
+	})
+}
+
+func TestNegotiationRevivesAfterRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		ctx, stop := context.WithCancel(t.Context())
+		_, id := timeOutA(t, f, ctx)
+		stop()
+		synctest.Wait()
+
+		ctx2, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m2 := f.negotiatingManager(ctx2, 40)
+		if err := m2.Resume(ctx2, true); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		// The restarted task still knows A's last ask was 45.
+		f.conn.emit(dm(buyerA, "ok"))
+		settle()
+		toA := texts(sentTo(f.conn.messages(), buyerA))
+		if len(toA) != 3 || toA[1] != "ok 45" {
+			t.Fatalf("A got %q", toA)
+		}
+		if b := buyerState(t, f, id, buyerA); b.Agreed != "45.00" {
+			t.Fatalf("A = %+v", b)
 		}
 	})
 }

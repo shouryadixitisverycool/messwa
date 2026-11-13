@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
 
 	"messwa/internal/config"
@@ -107,9 +110,82 @@ type runningTask struct {
 
 func newSellManager(ctx context.Context, cfg *config.Config, log *slog.Logger, st *store.Store, conn saleConn, send sendFunc,
 	connected func(time.Duration) bool, portalFor func(context.Context, int64) (mealPortal, error), own ownGroupLog) *sellManager {
-	return &sellManager{
+	m := &sellManager{
 		cfg: cfg, log: log.With("component", "sell"), st: st, conn: conn, send: send, connected: connected,
 		portalFor: portalFor, prices: st.Prices, limits: newSendLimits(), own: own, base: ctx, running: map[int64]*runningTask{},
+	}
+	if conn != nil {
+		id := conn.AddEventHandler(m.lateReply)
+		context.AfterFunc(ctx, func() { conn.RemoveEventHandler(id) })
+	}
+	return m
+}
+
+// lateWindow is how far back lateReply looks for a task the writer timed
+// out of. Only tasks whose meal hasn't ended count anyway.
+const lateWindow = 24 * time.Hour
+
+// lateReply answers a buyer who timed out of a negotiating task and
+// writes after the task stopped. A running task revives them itself (see
+// negotiation.revive). Once the task sold the meal, they hear "sold sorry"
+// once, the line everyone still talking to the bot got at the sale. After
+// a cancelled, expired or failed task the bot stays quiet: the meal may
+// not be gone, and you may be selling it by hand. Nothing is sent once the
+// meal is over, or while the writer is a buyer in any active task, whose
+// own session answers them.
+func (m *sellManager) lateReply(evt any) {
+	e, ok := evt.(*events.Message)
+	if !ok || e.Info.IsFromMe || e.Info.IsGroup {
+		return
+	}
+	if e.Info.Chat.Server != types.DefaultUserServer && e.Info.Chat.Server != types.HiddenUserServer {
+		return
+	}
+	if strings.TrimSpace(messageText(e.Message)) == "" {
+		return
+	}
+	go m.answerLate(e.Info)
+}
+
+func (m *sellManager) answerLate(info types.MessageInfo) {
+	ctx, stop := context.WithTimeout(m.base, 2*time.Minute)
+	defer stop()
+	peer := buyerPeer(ctx, m.conn, info)
+	late, active, err := m.st.TimedOutTasks(ctx, time.Now().Add(-lateWindow), peer.String(), info.Chat.ToNonAD().String())
+	if err != nil {
+		m.log.Warn("could not look up a late reply", "err", err)
+		return
+	}
+	if active {
+		return
+	}
+	for _, lb := range late {
+		t := lb.Task
+		if !negotiates(t) || !time.Now().Before(t.EndsAt) {
+			// A fixed-price task never revives anyone, so its buyers
+			// expect nothing after their turn lapsed.
+			continue
+		}
+		ok, err := m.st.ToldSoldLate(ctx, t.ID, lb.Peer)
+		if err != nil {
+			m.log.Warn("could not claim the sold notice", "task", t.ID, "err", err)
+		}
+		if !ok {
+			m.log.Info("buyer wrote after timing out of a task that ended unsold; leaving them to you", "task", t.ID, "buyer", lb.Peer, "state", t.State)
+			return
+		}
+		to, err := types.ParseJID(lb.Peer)
+		if err != nil {
+			return
+		}
+		gate := &taskGate{m: m, id: t.ID}
+		if err := sendReply(ctx, gate.sendSold, to, saySold()); err != nil {
+			m.log.Warn("could not tell a late buyer the meal sold", "task", t.ID, "err", err)
+			return
+		}
+		m.log.Info("told a buyer who wrote after timing out that the meal sold", "task", t.ID, "buyer", lb.Peer)
+		m.event(ctx, store.SellEvent{TaskID: t.ID, Peer: lb.Peer, Kind: store.EventToldSold, Text: "wrote after timing out"})
+		return
 	}
 }
 
@@ -669,8 +745,12 @@ func (m *sellManager) restore(ctx context.Context, t store.SellTask, queue *offe
 				}
 			} else if _, err := m.st.MoveSellTaskBuyer(ctx, t.ID, b.Peer, store.BuyerOffered, store.BuyerTimedOut, "", time.Time{}); err != nil {
 				return nil, err
+			} else if n != nil {
+				n.restoreBuyer(b, false) // ended, with their haggle
 			}
-		case store.BuyerNegotiating, store.BuyerAgreed:
+		case store.BuyerNegotiating, store.BuyerAgreed, store.BuyerTimedOut:
+			// A timed-out buyer comes back ended, ready to be revived by
+			// a late reply.
 			if n != nil {
 				n.restoreBuyer(b, false)
 			}
@@ -759,6 +839,36 @@ func (g *taskGate) sendPaid(ctx context.Context, to types.JID, msg *waE2E.Messag
 		return whatsmeow.SendResponse{}, errors.New("no claimed payment for this task")
 	}
 	return g.deliver(ctx, true, to, msg, extra...)
+}
+
+// sendSold tells one of the task's buyers that the meal sold. Like
+// sendPaid it skips the active check, and only after the task sold the
+// meal; the message must be one of saySold's lines.
+func (g *taskGate) sendSold(ctx context.Context, to types.JID, msg *waE2E.Message, extra ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error) {
+	if !slices.Contains(soldLines, msg.GetConversation()) {
+		return whatsmeow.SendResponse{}, errors.New("an ended task may only say the meal sold")
+	}
+	t, err := g.m.st.GetSellTask(ctx, g.id)
+	if err != nil {
+		return whatsmeow.SendResponse{}, err
+	}
+	_, state, err := g.m.st.TaskDelivery(ctx, g.id)
+	if err != nil {
+		return whatsmeow.SendResponse{}, err
+	}
+	if t == nil || (t.State != store.TaskSold && state != "sent") {
+		return whatsmeow.SendResponse{}, errors.New("the task did not sell the meal")
+	}
+	if err := g.allowed(ctx, to, extra); err != nil {
+		return whatsmeow.SendResponse{}, err
+	}
+	if g.turnsAway(ctx, to) {
+		return whatsmeow.SendResponse{}, errSavedContact
+	}
+	if err := g.m.limits.wait(ctx, g.id); err != nil {
+		return whatsmeow.SendResponse{}, err
+	}
+	return g.m.send(ctx, to, msg, extra...)
 }
 
 // react sends a ✅ to one of the meal's recorded offer posts. Like sendPaid

@@ -92,8 +92,12 @@ func sayNoScreenshots() reply {
 	return oneOf(msg("cant see screenshots, pay on whatsapp pay here pls"), msg("cant check screenshots, pls pay on whatsapp pay in this chat"))
 }
 
+// soldLines are saySold's variants. A task that has ended may send these
+// and nothing else; see taskGate.sendSold.
+var soldLines = []string{"sold sorry", "sold, sorry"}
+
 // saySold tells a buyer the meal went to someone else.
-func saySold() reply { return oneOf(msg("sold sorry"), msg("sold, sorry")) }
+func saySold() reply { return msg(soldLines[pick(len(soldLines))]) }
 
 // paymentPrompt asks a buyer to pay amount ("30.00"). testImage says the QR
 // is the embedded placeholder. It names WhatsApp Pay and rules out the
