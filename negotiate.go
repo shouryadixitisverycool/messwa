@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -426,7 +427,8 @@ func (n *negotiation) restoreBuyer(b store.SellBuyer, holder bool) {
 	ss.hs = haggleFromStore(b.Negotiation, n.h.max)
 	switch {
 	case holder:
-		ss.state, ss.agreed = sessionAgreed, b.Amount
+		// A handed-off buyer was never asked to pay an amount.
+		ss.state, ss.agreed = sessionAgreed, cmp.Or(b.Amount, b.Agreed)
 		n.setHolderLocked(peer)
 		n.pay.restore(peer, false)
 	case b.State == store.BuyerAgreed:
@@ -734,8 +736,9 @@ func (n *negotiation) outbidLocked(buyer types.JID, paise int64) bool {
 }
 
 // lostTurn puts buyer, whose turn a higher offer took, back in line at
-// their agreed price. If they had been asked to pay, they hear not to.
-func (n *negotiation) lostTurn(ctx context.Context, buyer types.JID) error {
+// their agreed price. If they had been asked to pay, or handed to you,
+// they hear not to pay.
+func (n *negotiation) lostTurn(ctx context.Context, buyer types.JID, handedOff bool) error {
 	n.mu.Lock()
 	if n.holder == buyer {
 		n.holder, n.outbidC = types.EmptyJID, nil
@@ -751,10 +754,10 @@ func (n *negotiation) lostTurn(ctx context.Context, buyer types.JID) error {
 		return err
 	}
 	n.log.Info("buyer outbid; their turn ends", "buyer", buyer, "agreed", agreed)
-	n.event(buyer, store.EventOutbid, 0, "")
+	n.event(buyer, store.EventOutbid, int(paise(agreed)/100), "")
 	if prompted {
 		// It goes out whatever the message limit: they must not pay now.
-		r := sayOutbid()
+		r := sayOutbid(handedOff)
 		if err := n.send(ctx, buyer, r); err != nil {
 			n.log.Warn("could not tell an outbid buyer not to pay", "buyer", buyer, "err", err)
 		} else {
@@ -1215,7 +1218,11 @@ func (ss *session) agree(st step) handled {
 	n.mu.Unlock()
 	n.log.Info("buyer agreed", "buyer", ss.buyer, "amount", amount, "outbids_holder", outbid)
 	n.event(ss.buyer, store.EventAgreed, st.agree, "")
-	if busy && !outbid && n.t.Handoff != string(config.HandoffOnAgreement) {
+	switch {
+	case !busy || outbid:
+	case n.t.Handoff == string(config.HandoffOnAgreement):
+		ss.sayAgreed(sayQueuedHandoff(st.agree))
+	default:
 		ss.sayAgreed(sayQueued(st.agree))
 	}
 	// Highest price pays first. A revived buyer whose earlier payment turn
@@ -1324,8 +1331,8 @@ func (j negotiatedJournal) watchOutbid(buyer types.JID) <-chan struct{} {
 	return j.n.watchOutbid(buyer)
 }
 
-func (j negotiatedJournal) outbid(ctx context.Context, buyer types.JID) error {
-	return j.n.lostTurn(ctx, buyer)
+func (j negotiatedJournal) outbid(ctx context.Context, buyer types.JID, handedOff bool) error {
+	return j.n.lostTurn(ctx, buyer, handedOff)
 }
 
 func (j negotiatedJournal) accepts(buyer types.JID, agreed string) []string {

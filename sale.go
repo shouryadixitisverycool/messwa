@@ -118,6 +118,11 @@ type sale struct {
 	// bot, which sends them nothing. others are the buyers still queued.
 	// sellToQueue then returns errHandedOff.
 	handoff func(ctx context.Context, buyer types.JID, d store.Delivery, others []types.JID) error
+	// holdHandoff keeps selling after a handoff: the handed-off buyer holds
+	// the turn until you sell the meal, the task ends, or someone agrees
+	// more (see outbidJournal). Their chat stays yours; the bot doesn't
+	// watch for their payment.
+	holdHandoff bool
 	// sold, when set, runs once the QR is out, before the queue hears
 	// "sorry sold". Group offers stop posting copies here.
 	sold func()
@@ -652,7 +657,8 @@ type outbidJournal interface {
 	// holds the turn.
 	watchOutbid(buyer types.JID) <-chan struct{}
 	// outbid records that buyer lost their turn and puts them back in line.
-	outbid(ctx context.Context, buyer types.JID) error
+	// handedOff says the turn was a handoff rather than a payment turn.
+	outbid(ctx context.Context, buyer types.JID, handedOff bool) error
 }
 
 // resumedTurn is a buyer whose turn was under way when run stopped.
@@ -660,6 +666,8 @@ type resumedTurn struct {
 	buyer    types.JID
 	d        store.Delivery
 	payUntil time.Time
+	// handedOff marks a buyer handed to you under holdHandoff.
+	handedOff bool
 	// listening runs once the buyer's payments are watched again.
 	listening func()
 }
@@ -679,6 +687,17 @@ func (s *sale) sellToQueue(ctx, notifyCtx context.Context, q *offerQueue, j sale
 		var buyer types.JID
 		var d store.Delivery
 		var t turn
+		if resume != nil && resume.handedOff {
+			buyer, d = resume.buyer, resume.d
+			if resume.listening != nil {
+				resume.listening()
+			}
+			resume = nil
+			if err := s.holdHandedOff(ctx, j, buyer, d); err != nil {
+				return err
+			}
+			continue
+		}
 		if resume != nil {
 			buyer, d = resume.buyer, resume.d
 			// The prompt went out before the restart; only listen again.
@@ -708,6 +727,15 @@ func (s *sale) sellToQueue(ctx, notifyCtx context.Context, q *offerQueue, j sale
 				return err
 			}
 			d = s.reservation(buyer, amount)
+			if s.handoff != nil && s.holdHandoff {
+				if err := s.handoff(ctx, buyer, d, nil); err != nil {
+					return err
+				}
+				if err := s.holdHandedOff(ctx, j, buyer, d); err != nil {
+					return err
+				}
+				continue
+			}
 			if s.handoff != nil {
 				if err := s.handoff(ctx, buyer, d, q.closeAndDrain()); err != nil {
 					return err
@@ -760,7 +788,7 @@ func (s *sale) sellToQueue(ctx, notifyCtx context.Context, q *offerQueue, j sale
 		}
 		if errors.Is(err, errBuyerOutbid) {
 			// Only an outbidJournal's turns watch for outbids.
-			if err := j.(outbidJournal).outbid(ctx, buyer); err != nil {
+			if err := j.(outbidJournal).outbid(ctx, buyer, false); err != nil {
 				return err
 			}
 			s.log.Info("buyer outbid; offering the meal to the higher offer")
@@ -776,6 +804,35 @@ func (s *sale) sellToQueue(ctx, notifyCtx context.Context, q *offerQueue, j sale
 		}
 		s.log.Info("buyer turn ended; checking queue", "reason", err)
 	}
+}
+
+// holdHandedOff waits while buyer, handed to you under holdHandoff, holds
+// the turn. It returns nil once a higher offer took the turn, with the
+// handoff released and buyer back in line, or ctx's error when the task
+// stops (you sold the meal, cancelled, or the meal ended).
+func (s *sale) holdHandedOff(ctx context.Context, j saleJournal, buyer types.JID, d store.Delivery) error {
+	oj, ok := j.(outbidJournal)
+	if !ok {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	select {
+	case <-oj.watchOutbid(buyer):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	freed, err := s.st.ReleaseHandoff(ctx, d.Date, d.Meal)
+	if err != nil {
+		return err
+	}
+	if !freed {
+		return errors.New("the handed-off meal's record changed; check sell_task_status")
+	}
+	if err := oj.outbid(ctx, buyer, true); err != nil {
+		return err
+	}
+	s.log.Info("handed-off buyer outbid; handing you the higher offer")
+	return nil
 }
 
 // tellSold says the meal sold to each buyer the journal lets it claim.

@@ -815,16 +815,105 @@ func TestNegotiationHandsOffOnAgreement(t *testing.T) {
 		}
 		synctest.Wait()
 		f.conn.emit(f.reply(buyerA, "50?"))
+		f.conn.emit(f.reply(buyerB, "price?"))
+		f.conn.emit(f.reply(buyerC, "price?"))
 		settle()
 		if got := sentTo(f.conn.messages(), buyerA); len(got) != 0 {
 			t.Fatalf("A got %+v; the agreement should hand over silently", got)
 		}
-		task := f.task(id)
-		if task.State != store.TaskHandedOff || !strings.Contains(task.Detail, "agreed INR 50") {
+		// The task keeps selling while A is handed to you.
+		if task := f.task(id); task.State != store.TaskActive {
 			t.Fatalf("task is %s (%s)", task.State, task.Detail)
 		}
-		if d, state, _ := f.st.TaskDelivery(ctx, id); state != "handed_off" || d.Amount != "50.00" {
+		if d, state, _ := f.st.TaskDelivery(ctx, id); state != "handed_off" || d.Amount != "50.00" || d.Peer != buyerA.String() {
 			t.Fatalf("delivery = %+v %q", d, state)
+		}
+		if a := buyerState(t, f, id, buyerA); a.State != store.BuyerHandedOff {
+			t.Fatalf("A = %+v", a)
+		}
+
+		// B agrees less: B waits, A stays handed off.
+		f.conn.emit(dm(buyerB, "40"))
+		settle()
+		if toB := texts(sentTo(f.conn.messages(), buyerB)); toB[len(toB)-1] != "someone else is buying rn, ill msg u if it falls through" {
+			t.Fatalf("B got %q", toB)
+		}
+		if d, _, _ := f.st.TaskDelivery(ctx, id); d.Peer != buyerA.String() {
+			t.Fatalf("delivery = %+v", d)
+		}
+
+		// C agrees more: A hears not to pay, and C is handed to you.
+		f.conn.emit(dm(buyerC, "55"))
+		settle()
+		toA := texts(sentTo(f.conn.messages(), buyerA))
+		if len(toA) != 2 || toA[0] != "wait dont pay yet" || toA[1] != "someone offered more, ill msg u if it falls through" {
+			t.Fatalf("A got %q", toA)
+		}
+		if a := buyerState(t, f, id, buyerA); a.State != store.BuyerAgreed || a.Agreed != "50.00" {
+			t.Fatalf("A = %+v", a)
+		}
+		if d, state, _ := f.st.TaskDelivery(ctx, id); state != "handed_off" || d.Amount != "55.00" || d.Peer != buyerC.String() {
+			t.Fatalf("delivery = %+v %q", d, state)
+		}
+		if c := buyerState(t, f, id, buyerC); c.State != store.BuyerHandedOff {
+			t.Fatalf("C = %+v", c)
+		}
+		toC := texts(sentTo(f.conn.messages(), buyerC))
+		if toC[len(toC)-1] == "someone else is buying rn, ill msg u if it falls through" {
+			t.Fatalf("C got %q", toC)
+		}
+
+		// C pays you; you mark it sold. Everyone else hears it sold.
+		if err := m.MarkSold(ctx, id, buyerC.String(), "", 55, ""); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		if task := f.task(id); task.State != store.TaskSold {
+			t.Fatalf("task is %s (%s)", task.State, task.Detail)
+		}
+		for _, b := range []types.JID{buyerA, buyerB} {
+			if got := texts(sentTo(f.conn.messages(), b)); got[len(got)-1] != "sold sorry" {
+				t.Fatalf("%s got %q", b, got)
+			}
+		}
+	})
+}
+
+func TestNegotiationHandoffHoldsAfterRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		ctx, stop := context.WithCancel(t.Context())
+		m := f.negotiatingManager(ctx, 40)
+		id, err := m.Start(ctx, 0, f.date, "lunch", 30, 60, "on_agreement")
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		f.conn.emit(f.reply(buyerA, "45?"))
+		f.conn.emit(f.reply(buyerB, "price?"))
+		settle()
+		stop()
+		synctest.Wait()
+
+		ctx2, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m2 := f.negotiatingManager(ctx2, 40)
+		if err := m2.Resume(ctx2, true); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		if d, state, _ := f.st.TaskDelivery(ctx2, id); state != "handed_off" || d.Peer != buyerA.String() {
+			t.Fatalf("delivery = %+v %q", d, state)
+		}
+		// A still holds the handoff, so B's higher offer takes it.
+		f.conn.emit(dm(buyerB, "60"))
+		settle()
+		if d, state, _ := f.st.TaskDelivery(ctx2, id); state != "handed_off" || d.Peer != buyerB.String() || d.Amount != "60.00" {
+			t.Fatalf("delivery = %+v %q", d, state)
+		}
+		if toA := texts(sentTo(f.conn.messages(), buyerA)); len(toA) != 2 || toA[0] != "wait dont pay yet" {
+			t.Fatalf("A got %q", toA)
 		}
 	})
 }

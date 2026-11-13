@@ -453,12 +453,12 @@ func (s *Store) MoveSellTaskBuyer(ctx context.Context, id int64, peer, from, to,
 	return n == 1, err
 }
 
-// OutbidSellTaskBuyer puts a buyer whose payment turn was taken by a
-// higher offer back to agreed, so they can pay later if the meal frees up.
-// It reports false unless the buyer was asked to pay.
+// OutbidSellTaskBuyer puts a buyer whose payment turn or handoff was taken
+// by a higher offer back to agreed, so they can buy later if the meal frees
+// up. It reports false unless the buyer was asked to pay or handed off.
 func (s *Store) OutbidSellTaskBuyer(ctx context.Context, id int64, peer string) (bool, error) {
 	r, err := s.db.ExecContext(ctx, `UPDATE sell_task_buyers SET state='agreed',amount='',pay_until=NULL
- WHERE task_id=? AND peer=? AND state='offered'`, id, peer)
+ WHERE task_id=? AND peer=? AND state IN ('offered','handed_off')`, id, peer)
 	if err != nil {
 		return false, err
 	}

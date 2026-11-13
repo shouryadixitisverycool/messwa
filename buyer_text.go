@@ -79,9 +79,19 @@ func sayQueued(price int) reply {
 }
 
 // sayOutbid tells a buyer asked to pay that someone offered more, so they
-// don't pay now. If the meal frees up, their next turn asks them again.
-func sayOutbid() reply {
+// don't pay now. If the meal frees up, their next turn asks them again. A
+// buyer handed to you has no 2 minute window.
+func sayOutbid(handedOff bool) reply {
+	if handedOff {
+		return msg("wait dont pay yet", "someone offered more, ill msg u if it falls through")
+	}
 	return msg("wait dont pay yet", "someone offered more, if they dont pay in 2 min ill msg u")
+}
+
+// sayQueuedHandoff tells a buyer who agreed that someone else is buying
+// from you by hand, with no deadline.
+func sayQueuedHandoff(price int) reply {
+	return msg(fmt.Sprintf("ok %d", price), "someone else is buying rn, ill msg u if it falls through")
 }
 
 // sayPayOther answers a buyer who wants to pay some way the bot can't see.
