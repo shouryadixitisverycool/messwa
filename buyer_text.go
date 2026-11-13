@@ -17,7 +17,7 @@ import (
 // meal never named again after the group post, and a "?" to ask. Most
 // replies have a few variants so a buyer who comes back every meal doesn't
 // see the same lines each time. A reply may be two messages, like "25" then
-// "thats the least"; it counts once against the per-buyer limit.
+// "final offer"; it counts once against the per-buyer limit.
 
 // reply is one bot reply: one or more messages sent back to back.
 type reply []string
@@ -36,7 +36,7 @@ func msg(parts ...string) reply { return reply(parts) }
 // or "13 nov". The bot never says the price is negotiable; buyers assume
 // it is.
 func sayOpening(price int, day string) reply {
-	r := oneOf(msg(fmt.Sprint(price)), msg(fmt.Sprintf("its %d", price)), msg(fmt.Sprintf("selling for %d", price)))
+	r := oneOf(msg(fmt.Sprint(price)), msg(fmt.Sprintf("its %d", price)))
 	if day != "" {
 		r = reply{r[0] + ", its for " + day}
 	}
@@ -47,54 +47,56 @@ func sayOpening(price int, day string) reply {
 // ask.
 func sayCounter(price, round int) reply {
 	if round <= 1 {
-		return oneOf(msg(fmt.Sprintf("how about %d", price)), msg(fmt.Sprintf("can do %d", price)))
+		return oneOf(msg(fmt.Sprintf("how about %d", price)), msg(fmt.Sprintf("can do %d", price)), msg(fmt.Sprintf("%d works?", price)), msg(fmt.Sprintf("i can do %d", price)))
 	}
-	return oneOf(msg(fmt.Sprintf("%d?", price)), msg(fmt.Sprintf("%d then?", price)))
+	return oneOf(msg(fmt.Sprintf("%d?", price)), msg(fmt.Sprintf("%d then?", price)), msg(fmt.Sprintf("ok %d?", price)), msg(fmt.Sprintf("would %d work?", price)))
 }
 
 // sayLowest is the floor.
 func sayLowest(price int) reply {
 	return oneOf(
-		msg(fmt.Sprintf("%d only", price), "thats the least"),
-		msg(fmt.Sprint(price), "thats the least"),
+		msg(fmt.Sprint(price), "final offer"),
+		msg(fmt.Sprintf("%d last", price)),
 		msg(fmt.Sprintf("cant go below %d", price)),
+		msg(fmt.Sprintf("%d only", price), "cant do lower sorry"),
 	)
 }
 
 // sayWhich answers "nv?" or "kadamba?". what is the mess and diet, e.g.
 // "kadamba veg".
 func sayWhich(what string, price int) reply {
-	return oneOf(msg(fmt.Sprintf("%s, %d", what, price)), msg(fmt.Sprintf("its %s, %d", what, price)))
+	return oneOf(msg(fmt.Sprintf("%s for %d", what, price)), msg(fmt.Sprintf("its %s, %d", what, price)), msg(what, fmt.Sprint(price)))
 }
 
 // sayRestate answers the first message the bot couldn't read.
 func sayRestate(price int) reply {
-	return oneOf(msg(fmt.Sprintf("%d bro, want it?", price)), msg(fmt.Sprintf("%d, want it?", price)))
+	return oneOf(msg(fmt.Sprintf("%d, want it?", price)), msg(fmt.Sprintf("%d, do you want it?", price)))
 }
 
 // sayQueued tells a buyer who agreed that someone else holds the turn.
 func sayQueued(price int) reply {
-	return oneOf(
-		msg(fmt.Sprintf("ok %d", price), "someone else is paying rn, if they dont in 2 min its yours"),
-		msg(fmt.Sprintf("ok %d", price), "someone else is paying rn, its yours if they dont in 2 min"),
-	)
+	return msg(fmt.Sprintf("ok %d", price), "someone else is paying rn, if they dont in 2 min its yours")
 }
 
 // sayPayOther answers a buyer who wants to pay some way the bot can't see.
 // The bot says it once; asking again hands the buyer to you.
 func sayPayOther() reply {
-	return oneOf(msg("only whatsapp pay sorry"), msg("only whatsapp pay here sorry"))
+	return oneOf(msg("only whatsapp pay sorry"), msg("whatsapp pay only pls"), msg("can only take whatsapp pay sorry"), msg("has to be whatsapp pay sorry"))
 }
 
 // sayNoScreenshots answers an image during a buyer's payment turn, once,
 // when [sell] accept_payment_images is off.
 func sayNoScreenshots() reply {
-	return oneOf(msg("cant see screenshots, pay on whatsapp pay here pls"), msg("cant check screenshots, pls pay on whatsapp pay in this chat"))
+	return oneOf(
+		msg("cant check screenshots, pay using whatsapp pay pls"),
+		msg("cant verify screenshots, whatsapp pay pls"),
+		msg("cant confirm payment from a screenshot, use whatsapp pay pls"),
+	)
 }
 
 // soldLines are saySold's variants. A task that has ended may send these
 // and nothing else; see taskGate.sendSold.
-var soldLines = []string{"sold sorry", "sold, sorry"}
+var soldLines = []string{"sold sorry", "already sold sorry", "someone else bought it sorry", "its sold bro sorry"}
 
 // saySold tells a buyer the meal went to someone else.
 func saySold() reply { return msg(soldLines[pick(len(soldLines))]) }
@@ -104,14 +106,23 @@ func saySold() reply { return msg(soldLines[pick(len(soldLines))]) }
 // rest, because a GPay or UPI payment to the number never reaches the bot.
 func paymentPrompt(amount string, testImage bool) reply {
 	price := "ok " + strings.TrimSuffix(amount, ".00")
+	instruction := oneOf(
+		msg("pay using whatsapp pay pls, not gpay/upi"),
+		msg("whatsapp pay pls, not gpay/upi"),
+		msg("use whatsapp pay pls, not gpay/upi"),
+		msg("send through whatsapp pay pls, not gpay/upi"),
+	)[0]
 	if testImage {
-		return msg(price, "pay on whatsapp pay in this chat, not gpay/upi. its the test qr")
+		notice := oneOf(msg("its the test qr"), msg("this ones a test qr"), msg("just the test qr btw"))[0]
+		return msg(price, instruction, notice)
 	}
-	return oneOf(
-		msg(price, "pay on whatsapp pay in this chat, not gpay/upi. qr right after"),
-		msg(price, "pay with whatsapp pay here, not gpay/upi. qr right after"),
-		msg(price, "whatsapp pay in this chat pls, not gpay/upi. ill send the qr right after"),
-	)
+	promise := oneOf(
+		msg("ill send the qr right after"),
+		msg("ill send the qr once youve paid"),
+		msg("once the payment comes through ill send the qr"),
+		msg("ill send the qr as soon as i get the payment"),
+	)[0]
+	return msg(price, instruction, promise)
 }
 
 // qrCaption labels the meal QR, e.g. "kadamba lunch", so a buyer can see

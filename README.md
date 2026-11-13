@@ -363,8 +363,8 @@ The first buyer must reply privately to the quoted post within ten minutes
 (or DM about it, with [plain DMs](#offer-settings) on). With
 [reposts](#offer-settings) on, the ten minutes run from the last copy.
 Later buyers who quote the same offer join the queue in arrival order. Only
-the current buyer gets payment instructions (`ok 1`, then `pay on whatsapp pay
-in this chat, not gpay/upi. qr right after`). That buyer has up to two minutes
+the current buyer gets payment instructions (`ok 1`, then `pay using whatsapp pay pls, not gpay/upi`,
+then `ill send the qr right after`). That buyer has up to two minutes
 to pay, or can drop out with `not interested`, `nvm` and the like. The bot finishes checking
 any payment it received on time before it moves on to the next buyer. A
 payment from a previous buyer cannot release the QR after their turn ends.
@@ -534,7 +534,7 @@ still matches a contact saved under their number. `-buyers` doesn't apply to
 
 **Payment images.** Some buyers pay by UPI outside WhatsApp Pay and send a
 screenshot. The bot can't read those, so by default the image doesn't count.
-The buyer hears `cant see screenshots, pay on whatsapp pay here pls` once,
+The buyer hears `cant check screenshots, pay using whatsapp pay pls` once,
 and their two minutes keep running. With `accept_payment_images = true` (or
 `-accept-payment-images`), an image counts as the payment if:
 
@@ -868,7 +868,7 @@ Buyers message several sellers at once and leave within a minute, so the bot ans
 | --- | --- |
 | `available?`, `price?`, `buy`, `interested`, `?` | Quotes the opening price |
 | `40?`, `buy @50`, `rs 25`, `20-25` (the higher end), `sixty` | At or above its price: agrees to its price. At or above its lowest: agrees to theirs. Below: counters halfway, in ₹5 steps |
-| `45 final`, `max 45`, `last 45` below its lowest | Says `50 only`, then `thats the least` |
+| `45 final`, `max 45`, `last 45` below its lowest | Says `50`, then `final offer` |
 | `too much`, `negotiable?`, `pls`, `people are selling at 70` | Comes down one step |
 | `ok`, `fine`, `done` (after a price), `same number?`, `gpay?`, `paying` | Agrees to its current price |
 | `nv?`, `kadamba?` | `bakul non-veg, 50` |
@@ -877,7 +877,7 @@ Buyers message several sellers at once and leave within a minute, so the bot ans
 
 After two counters the next one is its lowest. A buyer still below that after the bot says so is handed to you.
 
-**A buyer who passes** gets one lower price before the bot lets them go. Above the target, that's the target. At or below the target, it's halfway from the current price to `min_price` in ₹5 steps, at least one step down: `70` with a floor of 60 becomes `how about 65`. This can go under the lowest the bot would otherwise take right now, since the buyer is leaving anyway; `min_price` still holds. A buyer who has heard `thats the least`, or whose price is already `min_price`, ends as `passed` with no counter. The counter shows in the task's events as `pass_counter`. A pass that names a price (`too much, 40?`) is an offer and goes through the offer rules instead.
+**A buyer who passes** gets one lower price before the bot lets them go. Above the target, that's the target. At or below the target, it's halfway from the current price to `min_price` in ₹5 steps, at least one step down: `70` with a floor of 60 becomes `how about 65`. This can go under the lowest the bot would otherwise take right now, since the buyer is leaving anyway; `min_price` still holds. A buyer who has heard `final offer`, or whose price is already `min_price`, ends as `passed` with no counter. The counter shows in the task's events as `pass_counter`. A pass that names a price (`too much, 40?`) is an offer and goes through the offer rules instead.
 
 **Agreeing and paying.** A buyer who agrees joins the pay queue. If nobody is paying, they get the usual payment prompt at once, at the agreed price. If someone is, they hear `ok 50`, then `someone else is paying rn, if they dont in 2 min its yours`, and get the prompt when their turn comes. A buyer who pays a price the bot quoted them before their turn gets the meal if nobody holds it. If someone does, that payment isn't honoured, and the buyer shows in `needs_you` with the amount to send back.
 
@@ -889,19 +889,19 @@ A buyer who timed out and writes again while the task is active and the meal uns
 
 #### What buyers see
 
-Every DM the bot sends is in `buyer_text.go`. It writes like the sellers in the mess groups: lowercase, a bare number with no ₹, the meal named only in the group post, and a `?` to ask. Most replies have two or three variants picked at random, so a buyer who asks every meal doesn't get the same lines each time. Some go out as two messages about a second apart, like `50 only` then `thats the least`.
+Every DM the bot sends is in `buyer_text.go`. It writes like the sellers in the mess groups: lowercase, a bare number with no ₹, the meal named only in the group post, and a `?` to ask. Most replies have two to four variants picked at random, so a buyer who asks every meal doesn't get the same lines each time. Some go out as separate messages about a second apart, like `50` then `final offer`. The agreed price stays `ok {price}`, and the waiting message stays `someone else is paying rn, if they dont in 2 min its yours`. Payment instructions and the separate QR promise each pick their own variation; test mode sends a test QR notice instead of the promise.
 
 | When | The bot says (one variant) |
 | --- | --- |
 | First price | `60`. For a meal that isn't today's: `60, its for tmrw` |
 | Coming down | `how about 50`, then `45?` |
-| Its lowest | `40 only`, `thats the least` |
-| `nv?`, `kadamba?` | `kadamba non-veg, 60` |
-| A message it can't read | `60 bro, want it?` |
+| Its lowest | `40`, `final offer` |
+| `nv?`, `kadamba?` | `kadamba non-veg for 60` |
+| A message it can't read | `60, want it?` |
 | Wants to pay another way | `only whatsapp pay sorry` |
 | Agreed while someone else pays | `ok 50`, `someone else is paying rn, if they dont in 2 min its yours` |
-| Payment turn | `ok 50`, `pay on whatsapp pay in this chat, not gpay/upi. qr right after` |
-| An image during the turn, with `accept_payment_images` off | `cant see screenshots, pay on whatsapp pay here pls` |
+| Payment turn | `ok 50`, `pay using whatsapp pay pls, not gpay/upi`, `ill send the qr right after` |
+| An image during the turn, with `accept_payment_images` off | `cant check screenshots, pay using whatsapp pay pls` |
 | The QR | captioned with the mess and meal, e.g. `kadamba lunch` |
 | Sold to someone else | `sold sorry` |
 

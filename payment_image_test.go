@@ -76,7 +76,7 @@ func TestSellTaskTakesPaymentImage(t *testing.T) {
 		synctest.Wait()
 		f.conn.emit(f.reply(buyerB, "me too"))
 		synctest.Wait()
-		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 2 || got[0] != "ok 20" || !strings.HasPrefix(got[1], "pay on whatsapp pay") {
+		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 3 || got[0] != "ok 20" || got[1] != "pay using whatsapp pay pls, not gpay/upi" || got[2] != "ill send the qr right after" {
 			t.Fatalf("A got %q", got)
 		}
 		time.Sleep(time.Second)
@@ -85,7 +85,7 @@ func TestSellTaskTakesPaymentImage(t *testing.T) {
 		f.conn.emit(imageFrom(buyerB, "img-b", time.Now()))
 		f.conn.emit(imageFrom(buyerA, "img-old", time.Now().Add(-time.Hour)))
 		synctest.Wait()
-		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 2 {
+		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 3 {
 			t.Fatalf("A got %q before a qualifying image", got)
 		}
 		if got := sentTo(f.conn.messages(), buyerB); len(got) != 0 {
@@ -95,7 +95,7 @@ func TestSellTaskTakesPaymentImage(t *testing.T) {
 		f.conn.emit(dm(buyerA, "20"))
 		f.conn.emit(imageFrom(buyerA, "img-a", time.Now()))
 		synctest.Wait()
-		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 3 || got[2] != "[QR]" {
+		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 4 || got[3] != "[QR]" {
 			t.Fatalf("A got %q, want the prompt then the QR", got)
 		}
 		if got := texts(sentTo(f.conn.messages(), buyerB)); len(got) != 1 || got[0] != "sold sorry" {
@@ -137,8 +137,8 @@ func TestPaymentImageOffByDefault(t *testing.T) {
 		synctest.Wait()
 		f.conn.emit(imageFrom(buyerA, "img-a2", time.Now()))
 		synctest.Wait()
-		want := []string{"ok 20", "pay on whatsapp pay in this chat, not gpay/upi. qr right after",
-			"cant see screenshots, pay on whatsapp pay here pls"}
+		want := []string{"ok 20", "pay using whatsapp pay pls, not gpay/upi", "ill send the qr right after",
+			"cant check screenshots, pay using whatsapp pay pls"}
 		if got := texts(sentTo(f.conn.messages(), buyerA)); !slices.Equal(got, want) {
 			t.Fatalf("A got %q, want %q", got, want)
 		}

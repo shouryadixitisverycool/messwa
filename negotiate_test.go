@@ -94,17 +94,17 @@ func TestHaggleDecide(t *testing.T) {
 		// Your 8 Mar sale: 100 -> B80 x4 -> 80. The bot stops at its lowest
 		// and hands a buyer who won't move to you.
 		{"firm lowballer is parked", 60, 100, 90, []string{"price?", "80", "80", "80", "80"},
-			[]string{"100", "90 only / thats the least", "PARK"}},
+			[]string{"100", "90 / final offer", "PARK"}},
 		{"firm offer gets the lowest at once", 30, 60, 45, []string{"price?", "35 final"},
-			[]string{"60", "45 only / thats the least"}},
+			[]string{"60", "45 / final offer"}},
 		{"a counter that reaches the walk-away price is the lowest", 30, 80, 40, []string{"price?", "20", "25", "30"},
-			[]string{"80", "how about 50", "40 only / thats the least", "PARK"}},
+			[]string{"80", "how about 50", "40 / final offer", "PARK"}},
 		{"two counters then lowest", 30, 100, 80, []string{"price?", "75", "76", "77"},
-			[]string{"100", "how about 90", "85?", "80 only / thats the least"}},
+			[]string{"100", "how about 90", "85?", "80 / final offer"}},
 		{"lower without a number steps down", 30, 60, 40, []string{"price?", "too much", "too much", "too much", "too much"},
-			[]string{"60", "how about 50", "45?", "40 only / thats the least", "PARK"}},
+			[]string{"60", "how about 50", "45?", "40 / final offer", "PARK"}},
 		{"question gets the label and price", 30, 60, 50, []string{"price?", "nv?"},
-			[]string{"60", "kadamba veg, 60"}},
+			[]string{"60", "kadamba veg for 60"}},
 		{"pass before any price ends", 30, 60, 50, []string{"nvm"},
 			[]string{"PASS"}},
 		{"pass at the opening gets the target once", 30, 60, 50, []string{"price?", "sorry bought"},
@@ -112,7 +112,7 @@ func TestHaggleDecide(t *testing.T) {
 		{"second pass ends", 30, 60, 50, []string{"price?", "nvm", "nvm"},
 			[]string{"60", "how about 50", "PASS"}},
 		{"pass after hearing the lowest ends", 30, 60, 45, []string{"price?", "35 final", "nvm"},
-			[]string{"60", "45 only / thats the least", "PASS"}},
+			[]string{"60", "45 / final offer", "PASS"}},
 		{"a pass with a price is an offer", 30, 60, 50, []string{"price?", "too much, 55?"},
 			[]string{"60", "AGREE 55"}},
 		{"an offer doesn't use up the pass counter", 30, 60, 40, []string{"price?", "too much, 35?", "nvm", "nvm"},
@@ -120,7 +120,7 @@ func TestHaggleDecide(t *testing.T) {
 		{"pay another way parks", 30, 60, 50, []string{"price?", "upi id?"},
 			[]string{"60", "PARK"}},
 		{"absurd number is unreadable", 30, 60, 50, []string{"price?", "500", "999"},
-			[]string{"60", "60 bro, want it?", "PARK"}},
+			[]string{"60", "60, want it?", "PARK"}},
 	}
 	for _, c := range cases {
 		h := newHaggle(c.min, c.max, c.median, true, end, "kadamba veg", "")
@@ -156,13 +156,13 @@ func TestHaggleNamesTheDay(t *testing.T) {
 	end := time.Date(2026, 11, 12, 14, 30, 0, 0, time.UTC)
 	h := newHaggle(30, 60, 50, true, end, "kadamba veg", "tmrw")
 	early := end.Add(-4 * time.Hour)
-	if got := replay(h, early, "price?", "nv?"); strings.Join(got, "|") != "60, its for tmrw|kadamba veg, 60" {
+	if got := replay(h, early, "price?", "nv?"); strings.Join(got, "|") != "60, its for tmrw|kadamba veg for 60" {
 		t.Fatalf("opening: %q", got)
 	}
 	if got := replay(h, early, "45?"); strings.Join(got, "|") != "how about 55, its for tmrw" {
 		t.Fatalf("counter first: %q", got)
 	}
-	if got := replay(h, early, "35 final"); strings.Join(got, "|") != "50 only / thats the least, its for tmrw" {
+	if got := replay(h, early, "35 final"); strings.Join(got, "|") != "50 / final offer, its for tmrw" {
 		t.Fatalf("lowest first: %q", got)
 	}
 }
