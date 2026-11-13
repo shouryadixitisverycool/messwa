@@ -53,6 +53,8 @@ type SalePost struct {
 	State string `json:"state"` // posting, posted, failed
 	At    int64  `json:"at"`
 	Error string `json:"error,omitempty"`
+	// Revoked is when a cancelled task deleted the post for everyone.
+	Revoked int64 `json:"revoked,omitempty"`
 	// After is how many listing posts went up in the group after yours.
 	After int `json:"after"`
 }
@@ -152,7 +154,7 @@ func (s *Server) saleView(ctx context.Context, t store.SellTask, now time.Time) 
 		return v, err
 	}
 	for _, o := range offers {
-		p := SalePost{Group: groupName(names, o.Group), State: o.State, At: unix(o.PostedAt), Error: o.Error}
+		p := SalePost{Group: groupName(names, o.Group), State: o.State, At: unix(o.PostedAt), Error: o.Error, Revoked: unix(o.RevokedAt)}
 		if o.State == store.OfferPosted {
 			if p.After, err = s.st.PostsAfter(ctx, o.Group, o.ID, o.PostedAt); err != nil {
 				return v, err

@@ -32,6 +32,7 @@ type saleConn interface {
 	SendPeerMessage(ctx context.Context, msg *waE2E.Message) (whatsmeow.SendResponse, error)
 	BuildUnavailableMessageRequest(chat, sender types.JID, id string) *waE2E.Message
 	BuildReaction(chat, sender types.JID, id types.MessageID, reaction string) *waE2E.Message
+	BuildRevoke(chat, sender types.JID, id types.MessageID) *waE2E.Message
 	GetJoinedGroups(ctx context.Context) ([]*types.GroupInfo, error)
 	GetGroupInfo(ctx context.Context, jid types.JID) (*types.GroupInfo, error)
 	// PNForLID returns the phone-number JID for a LID, or an empty JID.

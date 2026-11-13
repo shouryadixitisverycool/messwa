@@ -33,7 +33,7 @@ func (f *fakeSell) Start(ctx context.Context, userID int64, date, meal string, m
 		UserID: userID, Handoff: handoff, CreatedAt: time.Now(), EndsAt: time.Now().Add(time.Hour)})
 }
 
-func (f *fakeSell) Cancel(ctx context.Context, id int64) error {
+func (f *fakeSell) Cancel(ctx context.Context, id int64, _ bool) error {
 	f.cancels = append(f.cancels, id)
 	_, err := f.st.EndSellTask(ctx, id, store.TaskCancelled, "cancelled", time.Now())
 	return err

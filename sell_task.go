@@ -97,12 +97,19 @@ type sellManager struct {
 	base    context.Context // run's context; tasks stop with it and resume next start
 	mu      sync.Mutex
 	running map[int64]*runningTask
+	// dead are the posts of cancelled tasks whose meal hasn't ended, by
+	// message ID, so a reply to one can go to a task still selling that
+	// meal. See adoptTarget.
+	dead map[string]deadPost
 }
 
 type runningTask struct {
+	task   store.SellTask
 	cancel context.CancelCauseFunc
 	done   chan struct{}
 	gate   *taskGate
+	// revoke is set by a cancel that deletes the task's posts once it ends.
+	revoke atomic.Bool
 }
 
 func newSellManager(ctx context.Context, cfg *config.Config, log *slog.Logger, st *store.Store, conn saleConn, send sendFunc,
@@ -110,6 +117,7 @@ func newSellManager(ctx context.Context, cfg *config.Config, log *slog.Logger, s
 	return &sellManager{
 		cfg: cfg, log: log.With("component", "sell"), st: st, conn: conn, send: send, connected: connected,
 		portalFor: portalFor, prices: st.Prices, limits: newSendLimits(), own: own, base: ctx, running: map[int64]*runningTask{},
+		dead: map[string]deadPost{},
 	}
 }
 
@@ -180,8 +188,12 @@ func (m *sellManager) saleEvents(id int64) func(buyer types.JID, kind string, n 
 }
 
 // Cancel stops a task. A QR already being delivered for a payment still
-// goes out, and the task then ends as sold.
-func (m *sellManager) Cancel(ctx context.Context, id int64) error {
+// goes out, and the task then ends as sold. A group post in flight is
+// allowed to finish. With revoke, once the task has ended as cancelled its
+// group posts are deleted for everyone (see revokeCopies); Cancel returns
+// after that. Either way, replies to its posts can go to another task
+// selling the same meal.
+func (m *sellManager) Cancel(ctx context.Context, id int64, revoke bool) error {
 	m.mu.Lock()
 	rt := m.running[id]
 	m.mu.Unlock()
@@ -193,9 +205,19 @@ func (m *sellManager) Cancel(ctx context.Context, id int64) error {
 		if t == nil || t.State != store.TaskActive {
 			return fmt.Errorf("sell task %d is not active", id)
 		}
-		m.end(*t, store.TaskCancelled, "cancelled")
+		m.retire(*t)
+		if m.end(*t, store.TaskCancelled, "cancelled") != store.TaskCancelled {
+			m.forget(t.ID)
+			return nil
+		}
+		if revoke {
+			m.revokeCopies(*t)
+		}
 		return nil
 	}
+	// Replies that arrive while the task winds down already go elsewhere.
+	m.retire(rt.task)
+	rt.revoke.Store(revoke)
 	rt.gate.active.Store(false)
 	rt.cancel(errCancelledByUser)
 	select {
@@ -217,6 +239,9 @@ func (m *sellManager) Resume(ctx context.Context, enabled bool) error {
 	}
 	var listening []chan struct{}
 	for _, t := range tasks {
+		if t.State == store.TaskCancelled && time.Now().Before(t.EndsAt) {
+			m.retire(t)
+		}
 		if t.State != store.TaskActive {
 			continue
 		}
@@ -257,7 +282,7 @@ func (m *sellManager) launch(t store.SellTask, s *sale, ready chan struct{}) {
 	ctx, stop := context.WithDeadline(ctx, t.EndsAt)
 	gate := &taskGate{m: m, id: t.ID}
 	gate.active.Store(true)
-	rt := &runningTask{cancel: cancel, done: make(chan struct{}), gate: gate}
+	rt := &runningTask{task: t, cancel: cancel, done: make(chan struct{}), gate: gate}
 	m.mu.Lock()
 	m.running[t.ID] = rt
 	m.mu.Unlock()
@@ -290,8 +315,18 @@ func (m *sellManager) launch(t store.SellTask, s *sale, ready chan struct{}) {
 			m.log.Info("sell task paused until run restarts", "task", t.ID)
 			return
 		}
-		if m.end(t, state, detail) == store.TaskSold {
+		switch final := m.end(t, state, detail); {
+		case final == store.TaskSold:
+			m.forget(t.ID)
 			m.tickOffers(t, gate)
+		case final == store.TaskCancelled:
+			// Posts claimed since Cancel looked count too.
+			m.retire(t)
+			if rt.revoke.Load() {
+				m.revokeCopies(t)
+			}
+		default:
+			m.forget(t.ID)
 		}
 	}()
 }
@@ -426,6 +461,7 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, ga
 	}
 	posting := watchGroupOffer(ctx, m.conn, queue)
 	defer posting.close()
+	posting.adoptReplies(m.adopter(t))
 	if settings.AcceptPlainDMs {
 		posting.acceptPlainDMs(newPlainDMs(m.cfg, m.st, m.log.With("task", t.ID), s.mess, baseMeal(t.Meal), ""))
 	}
@@ -812,6 +848,15 @@ func (g *taskGate) deliver(ctx context.Context, paid bool, to types.JID, msg *wa
 	}
 	if !paid && !g.active.Load() {
 		return whatsmeow.SendResponse{}, errTaskInactive
+	}
+	if to.Server == types.GroupServer {
+		// A cancel must not abort a group post halfway: whatsmeow may
+		// have sent it to some members already, and a revoke needs to
+		// know it went out. The post finishes or times out, and a
+		// cancelled task revokes it with the rest.
+		sendCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), groupPostTimeout)
+		defer stop()
+		return g.m.send(sendCtx, to, msg, extra...)
 	}
 	return g.m.send(ctx, to, msg, extra...)
 }

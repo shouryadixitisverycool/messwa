@@ -18,7 +18,9 @@ import (
 // are enforced there, not by these tools.
 type SellTasks interface {
 	Start(ctx context.Context, userID int64, date, meal string, minRupees, maxRupees int, handoff string) (int64, error)
-	Cancel(ctx context.Context, id int64) error
+	// Cancel stops a task. With revoke, the task's group posts are deleted
+	// for everyone.
+	Cancel(ctx context.Context, id int64, revoke bool) error
 }
 
 // SetSellTasks adds the sell task tools while the sell_tasks setting is on.
@@ -37,7 +39,7 @@ func (s *Server) addSellTools(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{Name: "sell_task_status", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 		Description: "One sell task by id, or every active task plus those started in the last 24 hours: state, every copy of the offer posted (reposts included, marking each group's current one), when each group gets its next fresh copy and why, buyers who replied, and the sale. Admins only."}, s.sellTaskStatus)
 	mcp.AddTool(srv, &mcp.Tool{Name: "cancel_sell_task", Annotations: write,
-		Description: "Stop a sell task. A QR already being delivered for a payment still goes out, and the task then shows as sold. Admins only."}, s.cancelSellTask)
+		Description: "Stop a sell task. A QR already being delivered for a payment still goes out, and the task then shows as sold. Unless keep_posts is set, the task's offer posts are deleted for everyone in the groups (sell_task_status shows each copy's revoked time, or why it stayed up). A private reply to a cancelled task's post goes to another active task selling the same meal at the same mess and diet, if there is one. Admins only."}, s.cancelSellTask)
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -55,7 +57,8 @@ type SellTaskIn struct {
 }
 
 type CancelSellIn struct {
-	ID int64 `json:"id"`
+	ID        int64 `json:"id"`
+	KeepPosts bool  `json:"keep_posts,omitempty" jsonschema:"leave the task's offer posts up in the groups; by default cancelling deletes them for everyone"`
 }
 
 type SellOfferOut struct {
@@ -64,6 +67,9 @@ type SellOfferOut struct {
 	Current  bool   `json:"current,omitempty" jsonschema:"the group's latest copy, the one buyers see"`
 	State    string `json:"state" jsonschema:"posting (sent, not confirmed), posted or failed"`
 	PostedAt string `json:"posted_at"`
+	Revoked  string `json:"revoked,omitempty" jsonschema:"when the copy was deleted for everyone after the task was cancelled"`
+	// RevokeError says why a cancelled task's copy is still up.
+	RevokeError string `json:"revoke_error,omitempty"`
 }
 
 // SellRepostOut is when a group gets its next fresh copy of the offer.
@@ -207,7 +213,7 @@ func (s *Server) cancelSellTask(ctx context.Context, req *mcp.CallToolRequest, i
 	if _, err := s.sellAdmin(ctx, req); err != nil {
 		return nil, SellTaskOut{}, err
 	}
-	if err := s.sell.Cancel(ctx, in.ID); err != nil {
+	if err := s.sell.Cancel(ctx, in.ID, !in.KeepPosts); err != nil {
 		return nil, SellTaskOut{}, err
 	}
 	out, err := s.sellTask(ctx, in.ID)
@@ -269,7 +275,7 @@ func (s *Server) sellTaskOut(ctx context.Context, t store.SellTask) (SellTaskOut
 	}
 	for _, o := range offers {
 		out.Offers = append(out.Offers, SellOfferOut{Group: groupName(names, o.Group), Copy: o.Seq, Current: o.Seq == latest[o.Group],
-			State: o.State, PostedAt: s.fmt(o.PostedAt)})
+			State: o.State, PostedAt: s.fmt(o.PostedAt), Revoked: s.fmt(o.RevokedAt), RevokeError: o.RevokeError})
 	}
 	if t.State == store.TaskActive {
 		rules := repost.FromConfig(s.cfg.Live().Sell)
