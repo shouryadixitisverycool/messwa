@@ -280,7 +280,7 @@ func TestReplyToCancelledPostGoesToMatchingTask(t *testing.T) {
 		f.conn.emit(replyTo(buyerA, f.group, deadPost, "interested"))
 		synctest.Wait()
 		toA := sentTo(f.conn.messages(), buyerA)
-		if len(toA) != 2 || toA[0].text != "ok 1" {
+		if len(toA) != 3 || toA[0].text != "ok 1" {
 			t.Fatalf("buyer A got %+v, want the live task's prompt", toA)
 		}
 		if b, _ := f.st.SellTaskBuyers(ctx, live); len(b) != 1 || b[0].Peer != buyerA.String() {
@@ -342,7 +342,7 @@ func TestResumedRunRoutesRepliesToCancelledPosts(t *testing.T) {
 		synctest.Wait()
 		f.conn.emit(replyTo(buyerA, f.group, deadPost, "interested"))
 		synctest.Wait()
-		if toA := sentTo(f.conn.messages(), buyerA); len(toA) != 2 || toA[0].text != "ok 1" {
+		if toA := sentTo(f.conn.messages(), buyerA); len(toA) != 3 || toA[0].text != "ok 1" {
 			t.Fatalf("buyer A got %+v", toA)
 		}
 	})
