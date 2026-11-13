@@ -9,6 +9,7 @@ import (
 )
 
 const accountSchema = `
+CREATE TABLE IF NOT EXISTS account_ids (id INTEGER PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS users (
 	id          INTEGER PRIMARY KEY,
 	name        TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -19,6 +20,7 @@ CREATE TABLE IF NOT EXISTS users (
 	created_at  INTEGER NOT NULL,
 	disabled    INTEGER NOT NULL DEFAULT 0
 );
+CREATE TRIGGER IF NOT EXISTS remember_account_id AFTER INSERT ON users BEGIN INSERT OR IGNORE INTO account_ids(id) VALUES(new.id); END;
 CREATE TABLE IF NOT EXISTS sessions (
 	token_hash BLOB PRIMARY KEY,
 	user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -77,7 +79,7 @@ func scanUser(row interface{ Scan(...any) error }) (*UserRecord, error) {
 
 // AddUser creates a user and returns its ID.
 func (s *Store) AddUser(ctx context.Context, name, role, pwHash string, now time.Time) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `INSERT INTO users(name,role,pw_hash,created_at) VALUES(?,?,?,?)`, name, role, pwHash, now.Unix())
+	res, err := s.db.ExecContext(ctx, `INSERT INTO users(id,name,role,pw_hash,created_at) VALUES((SELECT coalesce(max(id),0)+1 FROM (SELECT id FROM users UNION ALL SELECT id FROM account_ids)),?,?,?,?)`, name, role, pwHash, now.Unix())
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			return 0, ErrNameTaken

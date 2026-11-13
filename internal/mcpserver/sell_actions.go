@@ -21,6 +21,9 @@ type SellOperator interface {
 
 // SellOperator returns the sell task actions while sell tasks are on.
 func (s *Server) SellOperator() (SellOperator, error) {
+	if s.Scoped() && (s.Device == nil || !s.Device.Linked()) {
+		return nil, errors.New("link your WhatsApp account first")
+	}
 	if !s.sellEnabled() {
 		return nil, errors.New("sell tasks are turned off; an admin can turn them on in the dashboard's settings")
 	}
@@ -33,13 +36,13 @@ func (s *Server) SellOperator() (SellOperator, error) {
 
 func (s *Server) addSellActionTools(srv *mcp.Server, write *mcp.ToolAnnotations) {
 	mcp.AddTool(srv, &mcp.Tool{Name: "mark_sell_task_sold", Annotations: write,
-		Description: "Record that the user sold a running sell task's meal themselves, outside the bot. The task stops, the sale goes in the ledger as paid and sent now (payment kind manual), buyers still in the running get the usual \"sold\" message, and the offer posts get a ✅. The buyer gets no message from the bot. Use it only when the user says they sold the meal, with the buyer and price they gave. Admins only."}, s.markSellTaskSold)
+		Description: "Record that the user sold a running sell task's meal themselves, outside the bot. The task stops, the sale goes in the ledger as paid and sent now (payment kind manual), buyers still in the running get the usual \"sold\" message, and the offer posts get a ✅. The buyer gets no message from the bot. Use it only when the user says they sold the meal, with the buyer and price they gave. Uses your own linked account."}, s.markSellTaskSold)
 	mcp.AddTool(srv, &mcp.Tool{Name: "add_sell_task_buyer", Annotations: write,
-		Description: "Add someone to a running sell task's buyers as if they had replied privately to its offer. The bot then sends them the opening price (or, without a price range, asks them to pay) like anyone who replied. Fails for someone already a buyer, and for saved contacts when [sell] buyers is \"unsaved_only\". Admins only."}, s.addSellTaskBuyer)
+		Description: "Add someone to a running sell task's buyers as if they had replied privately to its offer. The bot then sends them the opening price (or, without a price range, asks them to pay) like anyone who replied. Fails for someone already a buyer, and for saved contacts when [sell] buyers is \"unsaved_only\". Uses your own linked account."}, s.addSellTaskBuyer)
 	mcp.AddTool(srv, &mcp.Tool{Name: "mute_sell_task_buyer", Annotations: write,
-		Description: "Stop the bot messaging one of a running sell task's buyers: no replies, no payment prompt, no \"sold\" message. Their messages are ignored and their record stays. Payments received while muted do not trigger automatic QR delivery. Undo with unmute_sell_task_buyer. Admins only."}, s.muteSellTaskBuyer)
+		Description: "Stop the bot messaging one of a running sell task's buyers: no replies, no payment prompt, no \"sold\" message. Their messages are ignored and their record stays. Payments received while muted do not trigger automatic QR delivery. Undo with unmute_sell_task_buyer. Uses your own linked account."}, s.muteSellTaskBuyer)
 	mcp.AddTool(srv, &mcp.Tool{Name: "unmute_sell_task_buyer", Annotations: write,
-		Description: "Let the bot message a muted buyer of a running sell task again. It answers their next message; nothing is sent right away. Admins only."}, s.unmuteSellTaskBuyer)
+		Description: "Let the bot message a muted buyer of a running sell task again. It answers their next message; nothing is sent right away. Uses your own linked account."}, s.unmuteSellTaskBuyer)
 }
 
 type MarkSoldIn struct {

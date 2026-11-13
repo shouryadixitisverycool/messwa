@@ -46,7 +46,7 @@ type LogEntry struct {
 
 // AppendLog stores an event and reports whether it was new.
 func (s *Store) AppendLog(ctx context.Context, e LogEntry) (bool, error) {
-	res, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO group_log(chat,id,type,sender,sender_alt,push_name,ts,text,reply_to,target) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+	res, err := s.boardDB().ExecContext(ctx, `INSERT OR IGNORE INTO group_log(chat,id,type,sender,sender_alt,push_name,ts,text,reply_to,target) VALUES(?,?,?,?,?,?,?,?,?,?)`,
 		e.Chat, e.ID, e.Type, e.Sender, e.SenderAlt, e.PushName, e.TS.Unix(), e.Text, e.ReplyTo, e.Target)
 	if err != nil {
 		return false, err
@@ -62,7 +62,7 @@ type LogLine struct {
 }
 
 func (s *Store) Log(ctx context.Context, since time.Time) ([]LogLine, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT g.chat,g.id,g.type,g.sender,g.sender_alt,g.push_name,g.ts,g.text,g.reply_to,g.target,coalesce(p.listing_id,0)
+	rows, err := s.boardDB().QueryContext(ctx, `SELECT g.chat,g.id,g.type,g.sender,g.sender_alt,g.push_name,g.ts,g.text,g.reply_to,g.target,coalesce(p.listing_id,0)
 		FROM group_log g LEFT JOIN posts p ON g.type='post' AND p.chat=g.chat AND p.id=g.id
 		WHERE g.ts >= ? ORDER BY g.ts, g.rowid`, since.Unix())
 	if err != nil {
@@ -84,7 +84,7 @@ func (s *Store) Log(ctx context.Context, since time.Time) ([]LogLine, error) {
 
 // ResetDerived deletes listings, posts and reactions so the log can be replayed.
 func (s *Store) ResetDerived(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM posts; DELETE FROM reactions; DELETE FROM listings;`)
+	_, err := s.boardDB().ExecContext(ctx, `DELETE FROM posts; DELETE FROM reactions; DELETE FROM listings;`)
 	return err
 }
 
@@ -93,12 +93,12 @@ func (s *Store) SetGroupName(ctx context.Context, jid, name string) error {
 	if name == "" {
 		return nil
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO groups(jid,name) VALUES(?,?) ON CONFLICT(jid) DO UPDATE SET name=excluded.name`, jid, name)
+	_, err := s.boardDB().ExecContext(ctx, `INSERT INTO groups(jid,name) VALUES(?,?) ON CONFLICT(jid) DO UPDATE SET name=excluded.name`, jid, name)
 	return err
 }
 
 func (s *Store) pruneLog(ctx context.Context, before time.Time) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM group_log WHERE ts < ?`, before.Unix())
+	_, err := s.boardDB().ExecContext(ctx, `DELETE FROM group_log WHERE ts < ?`, before.Unix())
 	return err
 }
 
@@ -122,18 +122,18 @@ func (s *Store) After(ctx context.Context, chat, id string) (AfterPost, bool, er
 	var a AfterPost
 	var row, ts int64
 	var sender, alt string
-	err := s.db.QueryRowContext(ctx, `SELECT rowid,ts,sender,sender_alt FROM group_log WHERE chat=? AND id=? AND type='post'`, chat, id).Scan(&row, &ts, &sender, &alt)
+	err := s.boardDB().QueryRowContext(ctx, `SELECT rowid,ts,sender,sender_alt FROM group_log WHERE chat=? AND id=? AND type='post'`, chat, id).Scan(&row, &ts, &sender, &alt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return a, false, nil
 	}
 	if err != nil {
 		return a, false, err
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM group_log WHERE chat=? AND type='post' AND id!=? AND (ts>? OR (ts=? AND rowid>?))`,
+	if err := s.boardDB().QueryRowContext(ctx, `SELECT count(*) FROM group_log WHERE chat=? AND type='post' AND id!=? AND (ts>? OR (ts=? AND rowid>?))`,
 		chat, id, ts, ts, row).Scan(&a.Messages); err != nil {
 		return a, true, err
 	}
-	err = s.db.QueryRowContext(ctx, `SELECT count(DISTINCT l.seller) FROM listings ours
+	err = s.boardDB().QueryRowContext(ctx, `SELECT count(DISTINCT l.seller) FROM listings ours
  JOIN posts op ON op.listing_id=ours.id AND op.chat=? AND op.id=?
  JOIN listings l ON l.kind='sell' AND l.mess=ours.mess AND l.meal=ours.meal AND l.meal_date=ours.meal_date AND l.id!=ours.id
  JOIN posts p ON p.listing_id=l.id AND p.chat=op.chat

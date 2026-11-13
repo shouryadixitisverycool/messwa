@@ -189,7 +189,7 @@ func (s *Store) SetOfferFailed(ctx context.Context, id int64, offerID, why strin
 // itself: how far down the chat your offer has been pushed.
 func (s *Store) PostsAfter(ctx context.Context, chat, id string, at time.Time) (int, error) {
 	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM posts WHERE chat=? AND id!=? AND ts>? AND deleted=0`, chat, id, at.Unix()).Scan(&n)
+	err := s.boardDB().QueryRowContext(ctx, `SELECT count(*) FROM posts WHERE chat=? AND id!=? AND ts>? AND deleted=0`, chat, id, at.Unix()).Scan(&n)
 	return n, err
 }
 

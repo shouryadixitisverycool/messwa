@@ -52,15 +52,20 @@ func waReaction(c *wa.Client) sendReaction {
 type ownGroupLog struct {
 	in             *ingest.Ingester
 	jid, alt, name string
+	self           func(context.Context) (string, string, string)
 }
 
-func newOwnGroupLog(ctx context.Context, cfg *config.Config, st *store.Store, c *wa.Client) ownGroupLog {
-	jid, alt, name := c.Self(ctx)
-	return ownGroupLog{in: ingest.New(cfg, st), jid: jid, alt: alt, name: name}
+func newOwnGroupLog(ctx context.Context, cfg *config.Config, st *store.Store, c interface {
+	Self(context.Context) (string, string, string)
+}) ownGroupLog {
+	return ownGroupLog{in: ingest.New(cfg, st), self: c.Self}
 }
 
 // add skips groups that aren't configured market groups, like a test group.
 func (l ownGroupLog) add(ctx context.Context, e store.LogEntry) error {
+	if l.self != nil {
+		l.jid, l.alt, l.name = l.self(ctx)
+	}
 	if l.in == nil || l.jid == "" {
 		return nil
 	}
@@ -302,7 +307,11 @@ func markSold(ctx context.Context, cfg *config.Config, log *slog.Logger, args []
 	if err != nil {
 		return err
 	}
-	st, err := store.Open(cfg.DataDB())
+	cfg, err = scopeCLI(ctx, cfg, a.user)
+	if err != nil {
+		return err
+	}
+	st, err := openCommandStore(cfg)
 	if err != nil {
 		return err
 	}

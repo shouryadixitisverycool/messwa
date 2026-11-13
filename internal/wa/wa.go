@@ -12,6 +12,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mdp/qrterminal/v3"
@@ -29,13 +31,23 @@ import (
 )
 
 type Client struct {
-	WA  *whatsmeow.Client
-	cfg *config.Config
-	log *slog.Logger
+	ctx              context.Context
+	cancel           context.CancelFunc
+	workers          sync.WaitGroup
+	linked           atomic.Bool
+	selfMu           sync.RWMutex
+	selfJID, selfLID types.JID
+	selfName         string
+	container        *sqlstore.Container
+	WA               *whatsmeow.Client
+	cfg              *config.Config
+	log              *slog.Logger
 }
 
+var osInfoOnce sync.Once
+
 func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Client, error) {
-	store.SetOSInfo("messwa", [3]uint32{0, 1, 0})
+	osInfoOnce.Do(func() { store.SetOSInfo("messwa", [3]uint32{0, 1, 0}) })
 	container, err := sqlstore.New(ctx, "sqlite", "file:"+cfg.SessionDB()+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)", newWALogger(log, "Database"))
 	if err != nil {
 		return nil, fmt.Errorf("session store: %w", err)
@@ -43,18 +55,53 @@ func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Client, e
 	os.Chmod(cfg.SessionDB(), 0o600) // holds the device's keys
 	dev, err := container.GetFirstDevice(ctx)
 	if err != nil {
+		container.Close()
 		return nil, err
 	}
-	return &Client{WA: whatsmeow.NewClient(dev, newWALogger(log, "Client")), cfg: cfg, log: log}, nil
+	return newClient(ctx, container, dev, cfg, log), nil
 }
 
-func (c *Client) LoggedIn() bool { return c.WA.Store.ID != nil }
+func newClient(ctx context.Context, container *sqlstore.Container, dev *store.Device, cfg *config.Config, log *slog.Logger) *Client {
+	ctx, cancel := context.WithCancel(ctx)
+	c := &Client{ctx: ctx, cancel: cancel, container: container, WA: whatsmeow.NewClient(dev, newWALogger(log, "Client")), cfg: cfg, log: log}
+	c.WA.BackgroundEventCtx = ctx
+	c.selfJID, c.selfLID, c.selfName = dev.GetJID(), dev.GetLID(), dev.PushName
+	c.linked.Store(dev.ID != nil)
+	// Device.ID is mutated by whatsmeow during pairing and logout. Pollers
+	// must use event-derived state rather than reading that field concurrently.
+	c.WA.AddEventHandler(func(evt any) {
+		switch e := evt.(type) {
+		case *events.PairSuccess:
+			c.selfMu.Lock()
+			c.selfJID, c.selfLID = e.ID, e.LID
+			c.selfMu.Unlock()
+			c.linked.Store(true)
+		case *events.PushNameSetting:
+			c.selfMu.Lock()
+			c.selfName = e.Action.GetName()
+			c.selfMu.Unlock()
+		case *events.LoggedOut:
+			c.linked.Store(false)
+			c.selfMu.Lock()
+			c.selfJID, c.selfLID, c.selfName = types.EmptyJID, types.EmptyJID, ""
+			c.selfMu.Unlock()
+		}
+	})
+	return c
+}
+
+func (c *Client) LoggedIn() bool { return c.linked.Load() }
 
 // Self returns the linked account the way ingest names a sender: phone-number
 // JID first, LID second, plus its push name.
 func (c *Client) Self(ctx context.Context) (jid, alt, name string) {
-	jid, alt = c.identity(ctx, c.WA.Store.GetJID(), c.WA.Store.GetLID())
-	return jid, alt, c.WA.Store.PushName
+	// Snapshot event-derived identity rather than whatsmeow's mutable device
+	// fields; pairing, app-state updates and logout write those fields.
+	c.selfMu.RLock()
+	own, lid, name := c.selfJID, c.selfLID, c.selfName
+	c.selfMu.RUnlock()
+	jid, alt = c.identity(ctx, own, lid)
+	return jid, alt, name
 }
 
 // Login links this program as a companion device, by QR code or, when
@@ -154,6 +201,9 @@ func (c *Client) Saved(ctx context.Context, jids ...string) (bool, string) {
 // still matches a contact saved under their number. Ingest, the MCP and
 // the sell paths all decide "saved" here.
 func SavedContact(ctx context.Context, dev *store.Device, jids ...types.JID) (bool, string) {
+	if dev == nil || dev.Contacts == nil {
+		return false, ""
+	}
 	var all []types.JID
 	seen := map[types.JID]bool{}
 	add := func(j types.JID) {
@@ -194,7 +244,7 @@ func SavedContact(ctx context.Context, dev *store.Device, jids ...types.JID) (bo
 // Ingest wires events into the ingester. Call before Connect.
 func (c *Client) Ingest(in *ingest.Ingester, st *mstore.Store) {
 	c.WA.AddEventHandler(func(evt any) {
-		ctx := context.Background()
+		ctx := c.ctx
 		var err error
 		switch e := evt.(type) {
 		case *events.Message:
@@ -202,14 +252,13 @@ func (c *Client) Ingest(in *ingest.Ingester, st *mstore.Store) {
 		case *events.HistorySync:
 			c.history(ctx, in, e)
 		case *events.Connected:
-			go c.refreshGroups(ctx, st)
+			c.background(func() { c.refreshGroups(ctx, st) })
 		case *events.GroupInfo:
 			if in.IsMarketGroup(e.JID.String()) {
-				go c.refreshGroups(ctx, st)
+				c.background(func() { c.refreshGroups(ctx, st) })
 			}
 		case *events.LoggedOut:
 			c.log.Error("WhatsApp logged this device out; run `messwa login` again")
-			os.Exit(1)
 		}
 		if err != nil {
 			c.log.Error("ingest", "err", err)
@@ -466,3 +515,19 @@ func firstNonEmpty(ss ...string) string {
 	}
 	return ""
 }
+
+// stop retires a generation without closing its account's container. Removing
+// handlers drains synchronous callbacks before waiting for their child work.
+func (c *Client) stop() {
+	c.cancel()
+	c.WA.Disconnect()
+	c.WA.RemoveEventHandlers()
+	c.workers.Wait()
+}
+
+func (c *Client) background(fn func()) {
+	c.workers.Add(1)
+	go func() { defer c.workers.Done(); fn() }()
+}
+
+func (c *Client) Close() { c.stop(); c.container.Close() }
