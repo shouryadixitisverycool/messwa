@@ -12,8 +12,9 @@ import (
 )
 
 type Config struct {
-	StateDir string `toml:"state_dir"`
-	Timezone string `toml:"timezone"`
+	AccountRoot string `toml:"-"`
+	StateDir    string `toml:"state_dir"`
+	Timezone    string `toml:"timezone"`
 
 	// Groups are the mess buy/sell group JIDs (xxxx@g.us) to merge.
 	Groups []string `toml:"groups"`

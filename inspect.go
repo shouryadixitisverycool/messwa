@@ -21,7 +21,7 @@ func chat(ctx context.Context, cfg *config.Config, args []string) error {
 	fs := flag.NewFlagSet("chat", flag.ExitOnError)
 	hours := fs.Int("hours", 48, "look back this many hours")
 	fs.Parse(args)
-	st, err := store.Open(cfg.DataDB())
+	st, err := openCommandStore(cfg)
 	if err != nil {
 		return err
 	}
@@ -81,7 +81,7 @@ func listings(ctx context.Context, cfg *config.Config, args []string) error {
 	fs := flag.NewFlagSet("listings", flag.ExitOnError)
 	hours := fs.Int("hours", 48, "look back this many hours")
 	fs.Parse(args)
-	st, err := store.Open(cfg.DataDB())
+	st, err := openCommandStore(cfg)
 	if err != nil {
 		return err
 	}
@@ -131,7 +131,7 @@ func contactNames(cfg *config.Config) map[string]string {
 }
 
 func rebuild(ctx context.Context, cfg *config.Config) error {
-	st, err := store.Open(cfg.DataDB())
+	st, err := openCommandStore(cfg)
 	if err != nil {
 		return err
 	}

@@ -51,6 +51,11 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	if fs.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
+	var scopeErr error
+	cfg, scopeErr = scopeCLI(ctx, cfg, *user)
+	if scopeErr != nil {
+		return scopeErr
+	}
 	overrides := readSellFlags()
 	if *peer != "" && overrides.pickGroups() {
 		return errors.New("choose either -peer or -group/-group-count")
@@ -148,7 +153,7 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 	if *peer != "" && (jid == c.WA.Store.GetJID().ToNonAD() || jid == c.WA.Store.GetLID().ToNonAD()) {
 		return errors.New("buyer cannot be your own account")
 	}
-	st, err := store.Open(cfg.DataDB())
+	st, err := openCommandStore(cfg)
 	if err != nil {
 		return err
 	}
@@ -310,15 +315,16 @@ func waitForFirstReply(ctx context.Context, o *groupOffer, wait time.Duration, s
 // resumeFlags are the image flags for resuming a handed-off sale with
 // deliver-qr -peer, so it sends the same kind of image the offer promised.
 func resumeFlags(portalQR bool, user, qr string) string {
-	switch {
-	case portalQR && user != "":
-		return " -portal-qr -user " + user
-	case portalQR:
-		return " -portal-qr"
-	case qr != "":
-		return " -qr " + qr
+	flags := ""
+	if portalQR {
+		flags = " -portal-qr"
+	} else if qr != "" {
+		flags = " -qr " + qr
 	}
-	return ""
+	if user != "" {
+		flags += " -user " + user
+	}
+	return flags
 }
 
 // extrasPortal reads the extras registered for a meal.

@@ -379,3 +379,6 @@ func nonNil[T any](s []T) []T {
 	}
 	return s
 }
+
+// IsolateSettings gives a per-account configuration its own live settings.
+func (c *Config) IsolateSettings() { c.file = nil; c.live = &atomic.Pointer[Config]{} }

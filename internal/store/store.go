@@ -86,7 +86,11 @@ CREATE TABLE IF NOT EXISTS dm_messages (
 CREATE INDEX IF NOT EXISTS dm_messages_ts ON dm_messages(chat, ts);
 `
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db         *sql.DB
+	board      *sql.DB
+	closeBoard *Store
+}
 
 func Open(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
@@ -98,6 +102,11 @@ func Open(path string) (*Store, error) {
 	if _, err := db.Exec(schema + logSchema + deliverySchema + priceSchema + accountSchema + factSchema + sellTaskSchema + sellEventSchema + settingsSchema); err != nil {
 		return nil, fmt.Errorf("schema: %w", err)
 	}
+	if _, err := db.Exec(`INSERT OR IGNORE INTO account_ids SELECT id FROM users`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate account IDs: %w", err)
+	}
+	os.Chmod(path, 0o600)
 	// Columns added after the first release. Listings are derived data, so
 	// run rebuild afterwards to fill them in for old rows.
 	for _, col := range []string{
@@ -134,15 +143,25 @@ func Open(path string) (*Store, error) {
 			return nil, fmt.Errorf("migrate: %w", err)
 		}
 	}
-	return &Store{db}, nil
+	st := &Store{db: db}
+	if err := st.migrateOwnership(context.Background()); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate ownership: %w", err)
+	}
+	return st, nil
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	if s.closeBoard != nil {
+		defer s.closeBoard.Close()
+	}
+	return s.db.Close()
+}
 
 // ---- groups ----
 
 func (s *Store) SetGroup(ctx context.Context, jid, name string, admins []string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.boardDB().BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -162,7 +181,7 @@ func (s *Store) SetGroup(ctx context.Context, jid, name string, admins []string)
 }
 
 func (s *Store) GroupNames(ctx context.Context) (map[string]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT jid,name FROM groups`)
+	rows, err := s.boardDB().QueryContext(ctx, `SELECT jid,name FROM groups`)
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +241,7 @@ type Post struct {
 // HasPost reports whether a post was already ingested.
 func (s *Store) HasPost(ctx context.Context, chat, id string) (bool, error) {
 	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM posts WHERE chat=? AND id=?`, chat, id).Scan(&n)
+	err := s.boardDB().QueryRowContext(ctx, `SELECT count(*) FROM posts WHERE chat=? AND id=?`, chat, id).Scan(&n)
 	return n > 0, err
 }
 
@@ -239,7 +258,7 @@ func (s *Store) RecentBySeller(ctx context.Context, ids []string, since time.Tim
 }
 
 func (s *Store) CreateListing(ctx context.Context, l *Listing) error {
-	res, err := s.db.ExecContext(ctx, `INSERT INTO listings(seller,seller_alt,seller_name,kind,meal,meal_source,meal_date,meal_end,mess,diet,price,qty,wants,text,norm,first_seen,last_seen)
+	res, err := s.boardDB().ExecContext(ctx, `INSERT INTO listings(seller,seller_alt,seller_name,kind,meal,meal_source,meal_date,meal_end,mess,diet,price,qty,wants,text,norm,first_seen,last_seen)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		l.Seller, l.SellerAlt, l.SellerName, l.Kind, l.Meal, l.MealSource, l.MealDate, l.MealEnd.Unix(), l.Mess, l.Diet, l.Price, l.Qty, l.Wants, l.Text, l.Norm, l.FirstSeen.Unix(), l.LastSeen.Unix())
 	if err != nil {
@@ -251,13 +270,13 @@ func (s *Store) CreateListing(ctx context.Context, l *Listing) error {
 
 // UpdateListing rewrites a listing's derived fields after an edit.
 func (s *Store) UpdateListing(ctx context.Context, l *Listing) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE listings SET kind=?,meal=?,meal_source=?,meal_date=?,meal_end=?,mess=?,diet=?,price=?,qty=?,wants=?,text=?,norm=? WHERE id=?`,
+	_, err := s.boardDB().ExecContext(ctx, `UPDATE listings SET kind=?,meal=?,meal_source=?,meal_date=?,meal_end=?,mess=?,diet=?,price=?,qty=?,wants=?,text=?,norm=? WHERE id=?`,
 		l.Kind, l.Meal, l.MealSource, l.MealDate, l.MealEnd.Unix(), l.Mess, l.Diet, l.Price, l.Qty, l.Wants, l.Text, l.Norm, l.ID)
 	return err
 }
 
 func (s *Store) AddPost(ctx context.Context, p Post) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.boardDB().BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -285,33 +304,33 @@ func (s *Store) PostListing(ctx context.Context, chat, id string) (*Listing, err
 }
 
 func (s *Store) EditPost(ctx context.Context, chat, id, text string, at time.Time) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE posts SET text=?, edited_at=? WHERE chat=? AND id=?`, text, at.Unix(), chat, id)
+	_, err := s.boardDB().ExecContext(ctx, `UPDATE posts SET text=?, edited_at=? WHERE chat=? AND id=?`, text, at.Unix(), chat, id)
 	return err
 }
 
 func (s *Store) DeletePost(ctx context.Context, chat, id string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE posts SET deleted=1 WHERE chat=? AND id=?`, chat, id)
+	_, err := s.boardDB().ExecContext(ctx, `UPDATE posts SET deleted=1 WHERE chat=? AND id=?`, chat, id)
 	return err
 }
 
 // SetPrice records the seller's latest stated price, from a reply like "@25".
 func (s *Store) SetPrice(ctx context.Context, listingID int64, price int) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE listings SET price=? WHERE id=?`, price, listingID)
+	_, err := s.boardDB().ExecContext(ctx, `UPDATE listings SET price=? WHERE id=?`, price, listingID)
 	return err
 }
 
 func (s *Store) MarkSoldByText(ctx context.Context, listingID int64, at time.Time) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE listings SET sold_text_at=coalesce(sold_text_at, ?) WHERE id=?`, at.Unix(), listingID)
+	_, err := s.boardDB().ExecContext(ctx, `UPDATE listings SET sold_text_at=coalesce(sold_text_at, ?) WHERE id=?`, at.Unix(), listingID)
 	return err
 }
 
 // SetReaction records or (with an empty emoji) removes one person's reaction.
 func (s *Store) SetReaction(ctx context.Context, chat, target, reactor, reactorAlt, emoji string, at time.Time) error {
 	if emoji == "" {
-		_, err := s.db.ExecContext(ctx, `DELETE FROM reactions WHERE chat=? AND target_id=? AND reactor=?`, chat, target, reactor)
+		_, err := s.boardDB().ExecContext(ctx, `DELETE FROM reactions WHERE chat=? AND target_id=? AND reactor=?`, chat, target, reactor)
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO reactions(chat,target_id,reactor,reactor_alt,emoji,ts) VALUES(?,?,?,?,?,?)
+	_, err := s.boardDB().ExecContext(ctx, `INSERT INTO reactions(chat,target_id,reactor,reactor_alt,emoji,ts) VALUES(?,?,?,?,?,?)
 		ON CONFLICT(chat,target_id,reactor) DO UPDATE SET emoji=excluded.emoji, reactor_alt=excluded.reactor_alt, ts=excluded.ts`,
 		chat, target, reactor, reactorAlt, NormalizeEmoji(emoji), at.Unix())
 	return err
@@ -385,7 +404,7 @@ func (s *Store) Listing(ctx context.Context, rule SoldRule, id int64) (*Listing,
 	if err := s.fillSold(ctx, rule, ls); err != nil {
 		return nil, nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT chat,id,sender,ts,text,edited_at IS NOT NULL,deleted FROM posts WHERE listing_id=? ORDER BY ts`, id)
+	rows, err := s.boardDB().QueryContext(ctx, `SELECT chat,id,sender,ts,text,edited_at IS NOT NULL,deleted FROM posts WHERE listing_id=? ORDER BY ts`, id)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -404,7 +423,7 @@ func (s *Store) Listing(ctx context.Context, rule SoldRule, id int64) (*Listing,
 }
 
 func (s *Store) queryListings(ctx context.Context, tail string, args ...any) ([]Listing, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT l.id,l.seller,l.seller_alt,l.seller_name,l.kind,l.meal,l.meal_source,l.meal_date,l.meal_end,l.mess,l.diet,l.price,l.qty,l.wants,l.text,l.norm,l.first_seen,l.last_seen,
+	rows, err := s.boardDB().QueryContext(ctx, `SELECT l.id,l.seller,l.seller_alt,l.seller_name,l.kind,l.meal,l.meal_source,l.meal_date,l.meal_end,l.mess,l.diet,l.price,l.qty,l.wants,l.text,l.norm,l.first_seen,l.last_seen,
 		l.sold_text_at IS NOT NULL,
 		NOT EXISTS (SELECT 1 FROM posts p WHERE p.listing_id=l.id AND p.deleted=0),
 		coalesce((SELECT group_concat(DISTINCT p.chat) FROM posts p WHERE p.listing_id=l.id), '')
@@ -463,7 +482,7 @@ func (s *Store) fillSold(ctx context.Context, rule SoldRule, ls []Listing) error
 		args = append(args, toAny(sold)...)
 		args = append(args, toAny(closed)...)
 		args = append(args, toAny(sold)...)
-		if err := s.db.QueryRowContext(ctx, q, args...).Scan(&l.SoldReact, &l.Closed, &l.OtherTicks); err != nil {
+		if err := s.boardDB().QueryRowContext(ctx, q, args...).Scan(&l.SoldReact, &l.Closed, &l.OtherTicks); err != nil {
 			return err
 		}
 	}
@@ -611,10 +630,10 @@ func (s *Store) Prune(ctx context.Context, dmBefore, listingsBefore time.Time) e
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM dm_messages WHERE ts < ?`, dmBefore.Unix()); err != nil {
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM reactions WHERE ts < ?`, listingsBefore.Unix()); err != nil {
+	if _, err := s.boardDB().ExecContext(ctx, `DELETE FROM reactions WHERE ts < ?`, listingsBefore.Unix()); err != nil {
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM listings WHERE last_seen < ?`, listingsBefore.Unix()); err != nil {
+	if _, err := s.boardDB().ExecContext(ctx, `DELETE FROM listings WHERE last_seen < ?`, listingsBefore.Unix()); err != nil {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at < ?`, time.Now().Unix()); err != nil {

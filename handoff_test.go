@@ -31,7 +31,7 @@ func TestHandOff(t *testing.T) {
 		"https://wa.me/919876543210",
 		"asked INR 60.00",
 		"messwa deliver-qr -date 2026-11-12 -meal lunch -peer 919876543210@s.whatsapp.net -amount PRICE -portal-qr -user asha\n",
-		"messwa release-handoff -date 2026-11-12 -meal lunch\n",
+		"messwa release-handoff -date 2026-11-12 -meal lunch -user asha\n",
 		"Also replied to the offer: +911111111111, 77@lid\n",
 	} {
 		if !strings.Contains(out.String(), want) {
@@ -61,6 +61,8 @@ func TestResumeFlags(t *testing.T) {
 		{true, "asha", "", " -portal-qr -user asha"},
 		{false, "", "state/qr.png", " -qr state/qr.png"},
 		{false, "", "", ""},
+		{false, "asha", "", " -user asha"},
+		{false, "asha", "state/qr.png", " -qr state/qr.png -user asha"},
 	} {
 		if got := resumeFlags(tc.portal, tc.user, tc.qr); got != tc.want {
 			t.Errorf("resumeFlags(%v, %q, %q) = %q", tc.portal, tc.user, tc.qr, got)

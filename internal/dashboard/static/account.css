@@ -48,3 +48,5 @@ code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--t
 @media (max-width: 560px) {
   .tokens th:nth-child(3), .tokens td:nth-child(3) { display: none; }
 }
+
+.pairing-qr { max-width: 280px; background: white; padding: 12px; }

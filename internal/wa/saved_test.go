@@ -75,3 +75,11 @@ func TestSavedContactFollowsLIDs(t *testing.T) {
 		}
 	}
 }
+
+func TestSavedContactBeforePairing(t *testing.T) {
+	for _, dev := range []*store.Device{nil, {}} {
+		if saved, name := SavedContact(t.Context(), dev, types.NewJID("911111111111", types.DefaultUserServer)); saved || name != "" {
+			t.Fatalf("unpaired device returned contact: %v %q", saved, name)
+		}
+	}
+}

@@ -50,7 +50,11 @@ func handoffNotice(d store.Delivery, name, resumeFlags string, others []types.JI
 	b.WriteString("Once you agree a price, let the bot take the payment and send the QR:\n")
 	fmt.Fprintf(&b, "  messwa deliver-qr -date %s -meal %s -peer %s -amount PRICE%s\n", d.Date, d.Meal, d.Peer, resumeFlags)
 	b.WriteString("If the sale falls through, free the meal:\n")
-	fmt.Fprintf(&b, "  messwa release-handoff -date %s -meal %s\n", d.Date, d.Meal)
+	accountFlag := ""
+	if _, user, ok := strings.Cut(resumeFlags, " -user "); ok {
+		accountFlag = " -user " + user
+	}
+	fmt.Fprintf(&b, "  messwa release-handoff -date %s -meal %s%s\n", d.Date, d.Meal, accountFlag)
 	if len(others) > 0 {
 		list := make([]string, len(others))
 		for i, o := range others {
@@ -78,7 +82,7 @@ func releaseHandoff(ctx context.Context, cfg *config.Config, out io.Writer, args
 	if fs.NArg() != 0 || *date == "" || *meal == "" {
 		return errors.New("provide -date and -meal")
 	}
-	st, err := store.Open(cfg.DataDB())
+	st, err := openCommandStore(cfg)
 	if err != nil {
 		return err
 	}
