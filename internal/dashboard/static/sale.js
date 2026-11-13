@@ -177,12 +177,34 @@ function clock(v) {
 }
 
 // rail draws floor to opening price, the bot's lowest, the target and
-// everyone's offers.
+// everyone's offers. It draws in pixels (times RAIL_K) rather than a fixed
+// viewBox, so a wide laptop gets a longer bar, not a 5x zoomed one.
+const RAIL_K = 1.2;
+const railRO = typeof ResizeObserver === 'function' && new ResizeObserver((es) => {
+  for (const e of es) {
+    if (!e.target.isConnected) railRO.unobserve(e.target);
+    else e.target._draw?.(e.contentRect.width);
+  }
+});
+
 function rail(v) {
   const wrap = el('div', 'ms-rail');
-  const W = 220, lo = Math.min(v.min, ...v.buyers.filter((b) => b.offer).map((b) => b.offer)), hi = v.max;
+  let drawn = 0;
+  wrap._draw = (px) => {
+    const W = Math.max(120, Math.round(px / RAIL_K));
+    if (W === drawn) return;
+    drawn = W;
+    wrap.replaceChildren(railSVG(v, W));
+  };
+  wrap._draw(220 * RAIL_K);
+  if (railRO) railRO.observe(wrap);
+  return wrap;
+}
+
+function railSVG(v, W) {
+  const lo = Math.min(v.min, ...v.buyers.filter((b) => b.offer).map((b) => b.offer)), hi = v.max;
   const x = (p) => 12 + (hi === lo ? 1 : (Math.min(Math.max(p, lo), hi) - lo) / (hi - lo)) * (W - 24);
-  const s = sv('svg', { viewBox: `0 0 ${W} 46`, width: '100%' });
+  const s = sv('svg', { viewBox: `0 0 ${W} 46`, width: '100%', height: Math.round(46 * RAIL_K) });
   s.append(sv('rect', { x: 12, y: 25, width: W - 24, height: 7, rx: 3.5, fill: C.line }));
   if (v.state === 'active' || won(v)) {
     const at = won(v) && v.pay ? v.pay.amount : v.lowest;
@@ -206,8 +228,7 @@ function rail(v) {
   s.append(sv('text', { x: xl.toFixed(1), y: 10, 'text-anchor': anchor, class: 'rail-now', fill: col }, (v.held ? '🔒' : '') + rup(mark)));
   s.append(sv('text', { x: 12, y: 45, class: 'rail-end' }, String(lo)));
   s.append(sv('text', { x: W - 12, y: 45, 'text-anchor': 'end', class: 'rail-end' }, String(hi)));
-  wrap.append(s);
-  return wrap;
+  return s;
 }
 
 function heroTip(v) {
