@@ -30,11 +30,11 @@ import (
 // refuses to quote, agree or arm below the task's floor.
 
 const (
-	maxSessions    = 10               // buyers negotiating at once
-	maxCounters    = 2                // counter-offers before "the lowest I can do"
-	maxBotMsgs     = 6                // replies a session sends one buyer; a two-message reply counts once
-	replyDebounce  = 2 * time.Second  // a burst of messages gets one reply
-	sessionLimit   = 6 * time.Minute  // one negotiation, start to agreement; never shorter than the silence
+	maxSessions    = 10              // buyers negotiating at once
+	maxCounters    = 2               // counter-offers before "the lowest I can do"
+	maxBotMsgs     = 6               // replies a session sends one buyer; a two-message reply counts once
+	replyDebounce  = 2 * time.Second // a burst of messages gets one reply
+	sessionLimit   = config.NegotiationLimit
 	paidGrace      = 60 * time.Second // "paid" with no WhatsApp Pay payment yet
 	maxOfferFactor = 3                // an "offer" above 3x max_price is not a price
 )

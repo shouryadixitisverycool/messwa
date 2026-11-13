@@ -952,7 +952,7 @@ addEventListener('keydown', (e) => {
 const modal = $('modal');
 const sheet = $('sheet');
 modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
-function closeModal() { modal.hidden = true; sheet.replaceChildren(); sheet.classList.remove('sale-sheet'); saleClosed(); }
+function closeModal() { modal.hidden = true; sheet.replaceChildren(); sheet.className = 'sheet'; saleClosed(); }
 
 function digits(phone) { return (phone || '').replace(/\D/g, ''); }
 

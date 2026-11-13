@@ -1,17 +1,19 @@
 'use strict';
 
-// The "my sale" chest: your running sell tasks, drawn for a glance. Colour
-// and shape carry the state, and words only appear in tooltips and sheets:
+// The "my sale" cards: your running sell tasks, one small card each, in a
+// grid. A card reads top to bottom:
 //
-//   glow       red: a buyer needs you. green: a payment is in flight.
-//   clock      minutes until the meal ends.
-//   price bar  floor to opening price. Green is what the bot takes now,
-//              the arrow its lowest, the gold tick its target; dots are
-//              buyers' offers.
-//   posts      gold is your post, the bar after it the listings posted
-//              since. Red once it's buried; dashed red when it failed.
-//   buyers     border colour is their state; ! needs you, ? check, the ring
-//              their pay window.
+//   header     meal, a tag saying why it glows (needs you, paying, failed
+//              posts) and the minutes left.
+//   price      what the bot takes now, the ✎ range button that opens the
+//              range editor in place, and a bar: green is what the bot
+//              takes, the gold tick its target, dots buyers' offers.
+//   buyers     one row each with their state, timer and price. Finished
+//              buyers fold into a "+N finished" line.
+//   posted     ✓ / ✗ / … per group; red with ↓N once buried.
+//   market     the other listings for the meal, yours in gold.
+//
+// Finished sales fold to one line under ENDED.
 //
 // Uses app.js's globals (D, now, hm, dur, sheet, modal, closeModal,
 // messagingApp, digits, toast, openListing). Buyer names are untrusted and
@@ -92,13 +94,32 @@ function buyerTip(b) {
 // ---------- chest ----------
 
 let saleSheet = null; // {id, key} or {id, meal: true} while a sale sheet is open
+// rangeEdit is the price range being edited on a card: {id, lo, hi}. While
+// it is open that card keeps its DOM across live updates, so a drag in
+// progress isn't cut off.
+let rangeEdit = null;
+const showGone = new Set(); // sale ids whose finished buyers are listed
+
+const payingNow = (v) => (v.state === 'active' && v.buyers.some((b) => b.state === 'offered')) || (v.pay && LIVE_PAY.includes(v.pay.state) && v.pay.paid);
+const isOver = (v) => v.state !== 'active' && !payingNow(v);
+const rangeText = (lo, hi) => (lo === hi ? rup(lo) : `${rup(lo)}–${rup(hi)}`);
 
 function renderSales() {
   const box = $('sales');
   if (!box) return;
   const list = (D && D.sales) || [];
   box.hidden = !list.length;
-  box.replaceChildren(...list.map(chest));
+  const live = list.filter((v) => !isOver(v)), over = list.filter(isOver);
+  if (rangeEdit && !live.some((v) => v.id === rangeEdit.id && v.state === 'active')) rangeEdit = null;
+  const kept = rangeEdit && box.querySelector(`.mysale[data-id="${rangeEdit.id}"] .ms-edit`)?.closest('.mysale');
+  const parts = [];
+  if (live.length) {
+    const grid = el('div', 'ms-grid');
+    grid.append(...live.map((v) => (kept && v.id === rangeEdit.id ? kept : chest(v))));
+    parts.push(grid);
+  }
+  if (over.length) parts.push(el('div', 'ms-sec', 'ENDED'), ...over.map(endedRow));
+  box.replaceChildren(...parts);
   tickSales();
   if (saleSheet && !saleSheet.editing && !modal.hidden) {
     const v = list.find((x) => x.id === saleSheet.id);
@@ -107,134 +128,113 @@ function renderSales() {
 }
 function saleClosed() { saleSheet = null; }
 
-function chest(v) {
-  const needs = v.buyers.some((b) => ['need', 'chk'].includes(look(b, v).cls));
-  // A live pay window outranks the rest: it's over in two minutes.
-  const paying = v.state === 'active' && v.buyers.some((b) => b.state === 'offered') || (v.pay && LIVE_PAY.includes(v.pay.state) && v.pay.paid);
-  const c = el('section', 'mysale' + (won(v) ? ' sold' : paying ? ' pay' : needs ? ' hot' : v.state !== 'active' ? ' over' : ''));
-  c.setAttribute('aria-label', v.for_friend ? `Your sale of ${mealLabel(v)}` : `Your ${mealOf(v)} sale`);
-
-  const top = el('div', 'ms-top');
+function mealHead(v, cls) {
   const dot = el('span', 'ms-mess');
   dot.style.setProperty('--m', messColor(v.mess));
   const diet = el('span', 'ms-diet');
   diet.append(svgEl(dietMark(v.diet)));
-  const day = v.date === ymd(now()) ? '' : ' ' + dayWord(v.date).toUpperCase();
-  top.append(dot, diet, el('span', 'ms-meal', mealLabel(v).toUpperCase() + day), historyPips(v));
+  const name = el('span', cls, cap(mealOf(v)));
+  const sub = [v.for_friend ? `for ${v.friend || 'a friend'}` : '', v.date === ymd(now()) ? '' : dayWord(v.date)].filter(Boolean).join(' · ');
+  if (sub) name.append(el('small', '', ' · ' + sub));
+  return [dot, diet, name];
+}
+
+function chest(v) {
+  const looks = v.buyers.map((b) => look(b, v));
+  const needs = looks.filter((l) => l.cls === 'need' || l.cls === 'chk').length;
+  const paying = payingNow(v);
+  const failed = v.posts.filter((p) => p.state === 'failed').length;
+  const c = el('section', 'mysale' + (won(v) ? ' sold' : paying ? ' pay' : needs ? ' hot' : ''));
+  c.dataset.id = v.id;
+  c.setAttribute('aria-label', v.for_friend ? `Your sale of ${mealLabel(v)}` : `Your ${mealOf(v)} sale`);
+
+  const top = el('div', 'ms-top');
+  top.append(...mealHead(v, 'ms-meal'));
+  const tag = paying ? ['grn', 'PAYING'] : needs ? ['red', `${needs} NEEDS YOU`] : failed ? ['red', `${failed} ${failed === 1 ? 'POST' : 'POSTS'} FAILED`] : null;
+  if (tag) top.append(el('span', 'ms-tag ' + tag[0], tag[1]));
+  top.append(timeBadge(v));
   c.append(top);
 
-  const hero = el('div', 'ms-hero');
-  hero.append(clock(v), rail(v));
-  hero.addEventListener('click', () => openMealSheet(v));
-  tip(hero, () => heroTip(v));
-  c.append(hero);
+  const price = el('div', 'ms-price');
+  const at = won(v) && v.pay ? v.pay.amount : v.lowest;
+  price.append(el('b', v.held ? 'held' : '', (v.held ? '🔒' : '') + rup(at)));
+  const words = el('span', 'what', won(v) ? 'sold for' : !v.negotiates ? 'fixed price' : v.held ? 'held at target' : 'lowest now');
+  if (v.negotiates && !won(v) && !v.held && v.target > v.lowest && v.target < v.max) words.append(' · aims for ', el('em', '', rup(v.target)));
+  price.append(words);
+  if (v.state === 'active') price.append(rangeButton(v));
+  price.addEventListener('click', () => openMealSheet(v));
+  tip(price, () => heroTip(v));
+  c.append(price);
+  c.append(rangeEdit && rangeEdit.id === v.id ? rangeEditor(v) : priceBar(v, looks));
 
-  const posts = el('div', 'ms-posts');
-  for (const p of v.posts) posts.append(postPill(p, v));
-  if (!v.posts.length) posts.append(el('span', 'ms-none', '…'));
-  posts.addEventListener('click', () => openMealSheet(v));
-  c.append(posts);
+  const buyers = el('div', 'ms-buyers');
+  const open = showGone.has(v.id);
+  const gone = looks.filter((l) => l.cls === 'gone').length;
+  v.buyers.forEach((b, i) => { if (open || looks[i].cls !== 'gone') buyers.append(buyerRow(b, v, looks[i])); });
+  if (!v.buyers.length) buyers.append(el('div', 'ms-none', 'No buyers yet'));
+  if (gone) {
+    const more = el('button', 'ms-more', open ? 'Hide finished buyers' : `+${gone} finished (passed, timed out, muted)`);
+    more.type = 'button';
+    more.addEventListener('click', () => { if (open) showGone.delete(v.id); else showGone.add(v.id); renderSales(); });
+    buyers.append(more);
+  }
+  c.append(buyers);
 
-  const row = el('div', 'ms-buyers');
-  for (const b of v.buyers) row.append(buyerTile(b, v));
-  for (let i = v.buyers.length; i < 5; i++) row.append(el('span', 'ms-b empty'));
-  c.append(row);
-  if (v.state === 'active') c.append(saleTaskActions(v));
-
+  c.append(postsRow(v));
   const mk = marketRow(v);
   if (mk) c.append(mk);
+  c.append(cardActions(v));
   return c;
 }
 
-function historyPips(v) {
-  const h = el('span', 'ms-hist');
-  for (const x of v.history) {
-    const p = el('i', 'h-' + x.state + (x.id === v.id ? ' cur' : ''));
-    tip(p, () => [[{ t: `#${x.id} `, c: 'nm' }, { t: x.state.replace('_', ' '), c: 'c7' }],
-      [{ t: `${hm(x.started)}${x.ended ? '–' + hm(x.ended) : '–'} · ${x.buyers} ${x.buyers === 1 ? 'buyer' : 'buyers'}`, c: 'c8' }]]);
-    h.append(p);
+// timeBadge is the minutes left in the meal, with a ring that empties.
+function timeBadge(v) {
+  const t = el('span', 'ms-time');
+  if (v.state !== 'active') {
+    t.append(el('b', won(v) ? 'grn' : 'dim', won(v) ? '✓' : '✕'));
+    return t;
   }
-  return h;
-}
-
-function clock(v) {
-  const box = el('div', 'ms-clock');
-  const R = 25, L = 2 * Math.PI * R;
-  const s = sv('svg', { viewBox: '0 0 58 58' });
-  s.append(sv('circle', { cx: 29, cy: 29, r: R, fill: 'none', stroke: C.line, 'stroke-width': 5 }));
-  const arc = sv('circle', { cx: 29, cy: 29, r: R, fill: 'none', stroke: C.gold, 'stroke-width': 5, 'stroke-linecap': 'round', 'stroke-dasharray': L.toFixed(1), transform: 'rotate(-90 29 29)' });
+  const R = 7, L = 2 * Math.PI * R;
+  const s = sv('svg', { viewBox: '0 0 18 18' });
+  s.append(sv('circle', { cx: 9, cy: 9, r: R, fill: 'none', stroke: C.line, 'stroke-width': 3 }));
+  const arc = sv('circle', { cx: 9, cy: 9, r: R, fill: 'none', stroke: C.gold, 'stroke-width': 3, 'stroke-dasharray': L.toFixed(1), transform: 'rotate(-90 9 9)' });
+  arc.dataset.from = v.started;
+  arc.dataset.until = v.ends;
+  arc.dataset.len = L;
   s.append(arc);
-  box.append(s);
   const b = el('b');
-  if (v.state === 'active') {
-    arc.dataset.from = v.started;
-    arc.dataset.until = v.ends;
-    arc.dataset.len = L;
-    b.dataset.until = v.ends;
-    b.dataset.fmt = 'mins';
-  } else {
-    arc.setAttribute('stroke', won(v) ? C.veg : C.dim);
-    arc.setAttribute('stroke-dashoffset', 0);
-    b.textContent = won(v) ? '✓' : '✕';
-    b.classList.add(won(v) ? 'grn' : 'dim');
-  }
-  box.append(b);
-  return box;
+  b.dataset.until = v.ends;
+  b.dataset.fmt = 'mins';
+  t.append(s, b);
+  tip(t, () => [[{ t: `Ends ${hm(v.ends)}, in ${dur(v.ends - now())}`, c: 'c7' }]]);
+  return t;
 }
 
-// rail draws floor to opening price, the bot's lowest, the target and
-// everyone's offers. It draws in pixels (times RAIL_K) rather than a fixed
-// viewBox, so a wide laptop gets a longer bar, not a 5x zoomed one.
-const RAIL_K = 1.2;
-const railRO = typeof ResizeObserver === 'function' && new ResizeObserver((es) => {
-  for (const e of es) {
-    if (!e.target.isConnected) railRO.unobserve(e.target);
-    else e.target._draw?.(e.contentRect.width);
-  }
-});
-
-function rail(v) {
-  const wrap = el('div', 'ms-rail');
-  let drawn = 0;
-  wrap._draw = (px) => {
-    const W = Math.max(120, Math.round(px / RAIL_K));
-    if (W === drawn) return;
-    drawn = W;
-    wrap.replaceChildren(railSVG(v, W));
-  };
-  wrap._draw(220 * RAIL_K);
-  if (railRO) railRO.observe(wrap);
-  return wrap;
-}
-
-function railSVG(v, W) {
+// priceBar runs from the lowest offer or floor to the opening price. Green
+// is what the bot takes now, the gold tick its target, dots buyers' offers.
+function priceBar(v, looks) {
   const lo = Math.min(v.min, ...v.buyers.filter((b) => b.offer).map((b) => b.offer)), hi = v.max;
-  const x = (p) => 12 + (hi === lo ? 1 : (Math.min(Math.max(p, lo), hi) - lo) / (hi - lo)) * (W - 24);
-  const s = sv('svg', { viewBox: `0 0 ${W} 46`, width: '100%', height: Math.round(46 * RAIL_K) });
-  s.append(sv('rect', { x: 12, y: 25, width: W - 24, height: 7, rx: 3.5, fill: C.line }));
+  const pct = (p) => (hi === lo ? 0 : ((Math.min(Math.max(p, lo), hi) - lo) / (hi - lo)) * 100);
+  const bar = el('div', 'ms-bar');
   if (v.state === 'active' || won(v)) {
-    const at = won(v) && v.pay ? v.pay.amount : v.lowest;
-    s.append(sv('rect', { x: x(at).toFixed(1), y: 25, width: Math.max(0, W - 12 - x(at)).toFixed(1), height: 7, rx: 3.5, fill: C.veg, 'fill-opacity': 0.55 }));
+    const on = el('i', 'on');
+    on.style.setProperty('left', `${pct(won(v) && v.pay ? v.pay.amount : v.lowest)}%`);
+    bar.append(on);
   }
   if (v.negotiates && v.target > v.min && v.target < v.max) {
-    s.append(sv('line', { x1: x(v.target), x2: x(v.target), y1: 21, y2: 36, stroke: C.gold, 'stroke-width': 2 }));
+    const t = el('i', 'tg');
+    t.style.setProperty('left', `${pct(v.target)}%`);
+    bar.append(t);
   }
-  for (const b of v.buyers) {
+  v.buyers.forEach((b, i) => {
     const p = b.agreed || b.offer;
-    if (!p) continue;
-    const l = look(b, v);
-    if (l.cls === 'gone') continue;
-    s.append(sv('circle', { cx: x(p).toFixed(1), cy: 28.5, r: 5, fill: l.cls === 'need' ? '#121620' : l.tone, stroke: l.tone, 'stroke-width': 2 }));
-  }
-  const mark = won(v) && v.pay ? v.pay.amount : v.lowest;
-  const xl = x(mark);
-  const col = won(v) ? C.veg : v.held ? C.gold : C.veg;
-  s.append(sv('path', { d: `M${(xl - 6).toFixed(1)} 13 L${(xl + 6).toFixed(1)} 13 L${xl.toFixed(1)} 21 Z`, fill: col }));
-  const anchor = xl < 30 ? 'start' : xl > W - 30 ? 'end' : 'middle';
-  s.append(sv('text', { x: xl.toFixed(1), y: 10, 'text-anchor': anchor, class: 'rail-now', fill: col }, (v.held ? '🔒' : '') + rup(mark)));
-  s.append(sv('text', { x: 12, y: 45, class: 'rail-end' }, String(lo)));
-  s.append(sv('text', { x: W - 12, y: 45, 'text-anchor': 'end', class: 'rail-end' }, String(hi)));
-  return s;
+    if (!p || looks[i].cls === 'gone') return;
+    const d = el('i', 'of' + (looks[i].cls === 'need' ? ' hollow' : ''));
+    d.style.setProperty('left', `${pct(p)}%`);
+    d.style.setProperty('--c', looks[i].tone);
+    bar.append(d);
+  });
+  return bar;
 }
 
 function heroTip(v) {
@@ -249,6 +249,182 @@ function heroTip(v) {
   return lines;
 }
 
+// ---------- price range ----------
+
+function rangeButton(v) {
+  const b = el('button', 'ms-range', `✎ ${rangeText(v.min, v.max)}`);
+  b.type = 'button';
+  b.setAttribute('aria-label', `Change the price range, now ${rangeText(v.min, v.max)}`);
+  b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    hideTip();
+    rangeEdit = rangeEdit && rangeEdit.id === v.id ? null : { id: v.id, lo: v.min, hi: v.max };
+    renderSales();
+  });
+  return b;
+}
+
+const nameList = (bs) => {
+  const ns = bs.map((b) => b.name || b.phone || 'a buyer');
+  return ns.length <= 2 ? ns.join(' and ') : `${ns.slice(0, 2).join(', ')} and ${ns.length - 2} more`;
+};
+
+// rangeHint says what saving lo-hi does to the buyers already here.
+function rangeHint(v, lo, hi) {
+  const out = [lo === hi ? `Sells at ${rup(lo)} to the first buyer who pays it.` : `Opens at ${rup(hi)} and never goes under ${rup(lo)}.`];
+  const talking = v.buyers.filter((b) => b.state === 'negotiating');
+  if (talking.length) out.push(`The bot uses the new range in its next reply to ${nameList(talking)}.`);
+  if (lo < v.min) {
+    const back = v.buyers.filter((b) => ['timed_out', 'passed', 'parked'].includes(b.state) && b.offer >= lo && !b.refund);
+    if (back.length) out.push(`${nameList(back)} offered enough for the new floor and will show as needing you.`);
+  }
+  out.push('Prices already quoted or agreed stand.');
+  return out.join(' ');
+}
+
+// rangeEditor edits a running sale's floor and opening price in place. A
+// sale can't switch between haggling and a fixed price, so a fixed one
+// moves both ends together and a haggling one keeps them a rupee apart.
+function rangeEditor(v) {
+  const e = rangeEdit;
+  const fixed = v.min === v.max, gap = fixed ? 0 : 1;
+  // The scale hugs the current range, so a few rupees still move a thumb a
+  // useful distance. The steppers go past it in rupee steps.
+  const B = { lo: Math.max(1, Math.floor((v.min * 0.6) / 5) * 5), hi: Math.max(20, Math.ceil((v.max * 1.5) / 5) * 5) };
+  const pct = (p) => Math.min(100, Math.max(0, ((p - B.lo) / (B.hi - B.lo)) * 100));
+  const clamp = (x) => Math.min(10000, Math.max(1, Math.round(x)));
+
+  const box = el('div', 'ms-edit');
+  const head = el('div', 'eh');
+  head.append(el('b', '', fixed ? 'PRICE' : 'PRICE RANGE'), el('span', '', `was ${rangeText(v.min, v.max)}`));
+
+  const dual = el('div', 'dual');
+  const track = el('div', 'track');
+  const fill = el('i', 'fill');
+  track.append(fill);
+  for (const p of fixed ? [v.min] : [v.min, v.max]) {
+    const m = el('i', 'was');
+    m.style.setProperty('left', `${pct(p)}%`);
+    track.append(m);
+  }
+  const input = (val, label) => {
+    const r = el('input');
+    Object.assign(r, { type: 'range', min: B.lo, max: B.hi, step: 1, value: val });
+    r.setAttribute('aria-label', label);
+    return r;
+  };
+  const rMin = input(e.lo, fixed ? 'Price' : 'Floor'), rMax = input(e.hi, 'Opening price');
+  dual.append(track, rMin);
+  if (!fixed) dual.append(rMax);
+
+  const setLo = (x) => { x = clamp(x); if (fixed) e.lo = e.hi = x; else e.lo = Math.min(x, e.hi - gap); draw(); };
+  const setHi = (x) => { e.hi = Math.max(clamp(x), e.lo + gap); draw(); };
+  const stepper = (label, get, set) => {
+    const w = el('div', 'stp');
+    const minus = el('button', '', '−'), plus = el('button', '', '+'), val = el('b');
+    for (const [btn, d, word] of [[minus, -1, 'down'], [plus, 1, 'up']]) {
+      btn.type = 'button';
+      btn.setAttribute('aria-label', `${label} ${word} a rupee`);
+      btn.addEventListener('click', () => set(get() + d));
+    }
+    w.append(el('small', '', label), minus, val, plus);
+    return [w, val];
+  };
+  const nums = el('div', 'nums');
+  const [sLo, vLo] = stepper(fixed ? 'Price' : 'Floor', () => e.lo, setLo);
+  const [sHi, vHi] = stepper('Opens', () => e.hi, setHi);
+  nums.append(sLo);
+  if (!fixed) nums.append(sHi);
+
+  const hint = el('p', 'hint');
+  hint.setAttribute('aria-live', 'polite');
+  const error = el('p', 'err');
+  error.setAttribute('role', 'alert');
+  const acts = el('div', 'eacts');
+  const cancel = el('button', 'ms-btn ghost', 'Cancel'), save = el('button', 'ms-btn gold', 'Save range');
+  cancel.type = save.type = 'button';
+  cancel.addEventListener('click', () => { rangeEdit = null; renderSales(); });
+  save.addEventListener('click', async () => {
+    save.disabled = true;
+    error.textContent = '';
+    try {
+      await send('POST', 'api/sell-action', { action: 'prices', id: v.id, min: e.lo, max: e.hi });
+      rangeEdit = null;
+      toast('Prices updated');
+      await load();
+    } catch (err) {
+      error.textContent = err.message;
+      save.disabled = false;
+    }
+  });
+  acts.append(cancel, save);
+
+  function draw() {
+    rMin.value = e.lo;
+    rMax.value = e.hi;
+    rMin.setAttribute('aria-valuetext', rup(e.lo));
+    rMax.setAttribute('aria-valuetext', rup(e.hi));
+    vLo.textContent = rup(e.lo);
+    vHi.textContent = rup(e.hi);
+    fill.style.setProperty('left', `${pct(e.lo)}%`);
+    fill.style.setProperty('right', `${100 - pct(e.hi)}%`);
+    hint.textContent = rangeHint(v, e.lo, e.hi);
+    save.disabled = e.lo === v.min && e.hi === v.max;
+  }
+  // The thumb that last moved sits on top, so two thumbs at the same spot
+  // can still be pulled apart.
+  rMin.addEventListener('input', () => { setLo(+rMin.value); rMin.style.zIndex = 3; rMax.style.zIndex = 2; });
+  rMax.addEventListener('input', () => { setHi(+rMax.value); rMax.style.zIndex = 3; rMin.style.zIndex = 2; });
+  draw();
+  box.append(head, dual, nums, hint, error, acts);
+  box.addEventListener('keydown', (k) => { if (k.key === 'Escape') cancel.click(); });
+  return box;
+}
+
+// ---------- buyers, posts, market ----------
+
+function stateWord(b, l) {
+  if (b.muted) return 'muted';
+  if (l.cls === 'need') { const [ic, w] = reason(b); return `${ic} ${w.toLowerCase()}`; }
+  if (sentPicture(b)) return 'sent a picture';
+  return STATE_WORD[b.state] || b.state;
+}
+const buyerPrice = (b, l) => (l.cls === 'won' ? b.asked || b.agreed : b.refund || b.agreed || b.offer || b.asked);
+
+// buyerTimer counts down a buyer's pay window, or how long the bot waits
+// for a haggling buyer to answer.
+function buyerTimer(b, cls) {
+  const until = b.state === 'offered' ? b.pay_until : b.state === 'negotiating' ? b.quiet_until : 0;
+  if (!until) return null;
+  const t = el('span', cls + (b.state === 'offered' ? ' pay' : ' quiet'));
+  t.dataset.until = until;
+  t.dataset.fmt = 'mmss';
+  return t;
+}
+
+function buyerRow(b, v, l) {
+  const r = el('button', 'ms-b ' + l.cls);
+  r.type = 'button';
+  const f = el('span', 'face');
+  f.append(svgEl(face(b.key)));
+  const nm = el('span', 'nm', b.name || b.phone || 'Buyer');
+  if (b.saved) nm.append(el('span', 'hrt', ' ♥'));
+  const st = el('span', 'st', stateWord(b, l));
+  r.append(f, nm, st);
+  const tm = buyerTimer(b, 'tmr');
+  if (tm) r.append(tm);
+  const p = buyerPrice(b, l);
+  if (p && b.state !== 'offered') {
+    const a = el('span', 'amt', rup(p));
+    a.style.setProperty('color', l.tone);
+    r.append(a);
+  }
+  r.setAttribute('aria-label', `${b.name || 'Buyer'}: ${stateWord(b, l)}`);
+  tip(r, () => buyerTip(b));
+  r.addEventListener('click', () => openBuyerSheet(v, b.key));
+  return r;
+}
+
 // A group's short code from the words that tell groups apart: "Mess Buy
 // Sell" -> "BS", "IIIT Mess Exchange" -> "EX".
 const FILLER = new Set(['mess', 'iiit', 'iiith', 'the', 'group', 'and', 'of']);
@@ -259,51 +435,27 @@ function groupCode(g) {
 const errCode = (e) => ((e || '').match(/\b(\d{3})\b/) || [, 'ERR'])[1];
 const BURIED = 15;
 
-function postPill(p, v) {
-  const n = el('span', 'ms-post ' + p.state + (p.state === 'posted' && p.after > BURIED ? ' buried' : ''));
-  n.append(el('b', '', p.state === 'failed' ? '✗' : p.state === 'posted' ? '✓' : '…'), el('span', 'code', groupCode(p.group)));
-  if (p.state === 'failed') {
-    n.append(el('span', 'err', errCode(p.error)));
-  } else {
-    const bar = el('span', 'depth');
-    const me = el('i', 'me');
-    const after = el('i', 'after');
-    after.style.setProperty('width', `${Math.min(1, p.after / 25) * 100}%`);
-    bar.append(me, after);
-    n.append(bar);
-  }
+function postsRow(v) {
+  const r = el('div', 'ms-row');
+  r.append(el('span', 'lbl', 'Posted'));
+  for (const p of v.posts) r.append(postPill(p));
+  if (!v.posts.length) r.append(el('span', 'ms-none', 'not yet'));
+  r.addEventListener('click', () => openMealSheet(v));
+  return r;
+}
+
+// postPill: ✓ posted, ✗ failed, … posting. A post with more than BURIED
+// listings after it is red, with how far down it sits.
+function postPill(p) {
+  const buried = p.state === 'posted' && p.after > BURIED;
+  const n = el('span', 'ms-post ' + p.state + (buried ? ' buried' : ''));
+  n.append(el('b', '', p.state === 'failed' ? '✗' : p.state === 'posted' ? '✓' : '…'), groupCode(p.group));
+  if (buried) n.append(el('small', '', `↓${p.after}`));
   tip(n, () => [[{ t: p.group, c: 'nm' }],
     p.state === 'failed' ? [{ t: `Failed at ${hm(p.at)}: ${p.error || 'unknown error'}`, c: 'cc' }]
       : [{ t: `Posted ${hm(p.at)}, ${ago(p.at)}`, c: 'c7' }],
     p.state === 'posted' ? [{ t: `${p.after} listing ${p.after === 1 ? 'post' : 'posts'} since yours`, c: p.after > BURIED ? 'cc' : 'c8' }] : null].filter(Boolean));
   return n;
-}
-
-function buyerTile(b, v) {
-  const l = look(b, v);
-  const t = el('button', 'ms-b ' + l.cls);
-  t.type = 'button';
-  t.append(svgEl(face(b.key)));
-  if (l.ring && b.pay_until) {
-    const R = 30, L = 2 * Math.PI * R;
-    const s = sv('svg', { viewBox: '0 0 66 66', class: 'ring' });
-    const arc = sv('circle', { cx: 33, cy: 33, r: R, fill: 'none', stroke: C.veg, 'stroke-width': 3, 'stroke-linecap': 'round', 'stroke-dasharray': L.toFixed(1), transform: 'rotate(-90 33 33)' });
-    arc.dataset.from = b.pay_until - 120;
-    arc.dataset.until = b.pay_until;
-    arc.dataset.len = L;
-    s.append(arc);
-    t.append(s);
-  }
-  if (b.saved) t.append(el('span', 'hrt', '♥'));
-  if (l.badge) t.append(el('span', 'bd', l.badge));
-  const chip = el('span', 'chip', l.chip);
-  chip.style.setProperty('color', l.tone);
-  if (l.ring && b.pay_until) { chip.dataset.until = b.pay_until; chip.dataset.fmt = 'mmss'; }
-  if (chip.textContent || chip.dataset.until) t.append(chip);
-  t.setAttribute('aria-label', `${b.name || 'Buyer'}: ${STATE_WORD[b.state] || b.state}`);
-  tip(t, () => buyerTip(b));
-  t.addEventListener('click', () => openBuyerSheet(v, b.key));
-  return t;
 }
 
 // The other open listings for the same meal, cheapest first, yours in gold.
@@ -314,25 +466,60 @@ function marketRow(v) {
     && l.status === 'available' && (!v.diet || !l.diet || l.diet === v.diet) && (l.price != null || mine.has(l.id)));
   if (ls.length < 2) return null;
   ls.sort((a, b) => (a.price ?? 1e9) - (b.price ?? 1e9));
-  const row = el('div', 'ms-market');
-  for (const l of ls.slice(0, 8)) {
+  const row = el('div', 'ms-row');
+  row.append(el('span', 'lbl', 'Market'));
+  const SHOW = 7;
+  for (const l of ls.slice(0, SHOW)) {
     const m = el('button', 'ms-l' + (mine.has(l.id) ? ' me' : ''), l.price != null ? String(l.price) : '?');
     m.type = 'button';
     tip(m, () => itemTip(l));
     m.addEventListener('click', () => openListing(l));
     row.append(m);
   }
+  if (ls.length > SHOW) row.append(el('span', 'ms-none', `+${ls.length - SHOW}`));
   return row;
 }
 
-// tickSales moves the clocks, pay rings and countdowns between fetches.
+function cardActions(v) {
+  const a = el('div', 'ms-acts');
+  const btn = (cls, text, fn, label) => {
+    const b = el('button', 'ms-btn ' + cls, text);
+    b.type = 'button';
+    if (label) b.setAttribute('aria-label', label);
+    b.addEventListener('click', fn);
+    a.append(b);
+  };
+  if (v.state === 'active') {
+    btn('grn', '✓ Mark sold', () => saleActionForm(v, 'sold'));
+    btn('', '+ Add buyer', () => saleActionForm(v, 'add'));
+  }
+  btn('ghost more', '···', () => openMealSheet(v), 'Sale details: posts, tries and price over time');
+  return a;
+}
+
+// endedRow is a finished sale, folded to one line. It opens the meal sheet.
+function endedRow(v) {
+  const r = el('button', 'ms-done' + (won(v) ? ' won' : ''));
+  r.type = 'button';
+  r.append(...mealHead(v, 'nm'));
+  const bought = v.buyers.find((b) => b.state === 'bought');
+  const amount = v.pay ? v.pay.amount : bought && (bought.asked || bought.agreed);
+  r.append(el('span', 'st', won(v) ? `✓ SOLD${amount ? ' ' + rup(amount) : ''}` : `✕ ${v.state.replace('_', ' ').toUpperCase()}`));
+  const n = v.buyers.length;
+  r.append(el('span', 'sub', `${hm(v.started)}–${hm(v.ended || v.ends)} · ${n} ${n === 1 ? 'buyer' : 'buyers'}`));
+  tip(r, () => heroTip(v));
+  r.addEventListener('click', () => openMealSheet(v));
+  return r;
+}
+
+// tickSales moves the clocks, pay rings, countdowns and bars between fetches.
 function tickSales() {
   const n = now();
+  const frac = (e) => Math.min(1, Math.max(0, (+e.dataset.until - n) / Math.max(1, +e.dataset.until - +e.dataset.from)));
   for (const a of document.querySelectorAll('#sales circle[data-until], .sheet circle[data-until]')) {
-    const from = +a.dataset.from, until = +a.dataset.until, len = +a.dataset.len;
-    const frac = Math.min(1, Math.max(0, (until - n) / Math.max(1, until - from)));
-    a.setAttribute('stroke-dashoffset', (len * (1 - frac)).toFixed(1));
+    a.setAttribute('stroke-dashoffset', (+a.dataset.len * (1 - frac(a))).toFixed(1));
   }
+  for (const b of document.querySelectorAll('.sheet [data-bar]')) b.style.setProperty('width', `${frac(b) * 100}%`);
   for (const t of document.querySelectorAll('#sales [data-fmt], .sheet [data-fmt]')) {
     const left = Math.max(0, +t.dataset.until - n);
     if (t.dataset.fmt === 'mmss') {
@@ -347,11 +534,11 @@ setInterval(() => { if (document.visibilityState === 'visible') tickSales(); }, 
 
 // ---------- sheets ----------
 
-function sheetFor(v, keep) {
+function sheetFor(v, keep, tone) {
   hideTip();
   const scroll = keep ? sheet.scrollTop : 0;
   sheet.replaceChildren();
-  sheet.classList.add('sale-sheet');
+  sheet.className = 'sheet sale-sheet' + (tone ? ' tone-' + tone : '');
   modal.hidden = false;
   return () => { sheet.scrollTop = scroll; };
 }
@@ -362,12 +549,20 @@ function chatLink(b) {
   return messagingApp() === 'beeper' ? `beeper://compose/whatsapp/phone/+${ph}` : `https://wa.me/${ph}`;
 }
 
+const closeButton = () => {
+  const x = el('button', 'sb-x', '✕');
+  x.type = 'button';
+  x.setAttribute('aria-label', 'Close');
+  x.addEventListener('click', closeModal);
+  return x;
+};
+
 function openBuyerSheet(v, key, keep) {
   const b = v.buyers.find((x) => x.key === key);
   if (!b) return;
   saleSheet = { id: v.id, key };
-  const restore = sheetFor(v, keep);
   const l = look(b, v);
+  const restore = sheetFor(v, keep, l.cls);
 
   const head = el('div', 'sb-head');
   const f = el('span', 'sb-face ' + l.cls);
@@ -376,33 +571,29 @@ function openBuyerSheet(v, key, keep) {
   const nm = el('div', 'sb-name', b.name || b.phone || 'Buyer');
   if (b.saved) nm.append(el('span', 'hrt', ' ♥'));
   who.append(nm);
-  const chips = el('div', 'sb-chips');
-  if (l.cls === 'need') {
-    const [ic, word] = reason(b);
-    chips.append(el('span', 'sb-chip red', `${ic} ${word}`));
-  } else {
-    chips.append(el('span', 'sb-chip', (STATE_WORD[b.state] || b.state).toUpperCase()));
+  if (b.phone) {
+    const ph = el('div', 'sb-phone');
+    const copy = el('button', 'sb-copy', 'copy');
+    copy.type = 'button';
+    copy.setAttribute('aria-label', 'Copy number');
+    copy.addEventListener('click', () => navigator.clipboard?.writeText(b.phone).then(() => toast('Number copied'), () => toast(b.phone)));
+    ph.append(el('span', '', b.phone), copy);
+    who.append(ph);
   }
-  if (sentPicture(b)) chips.append(el('span', 'sb-chip egg', '🖼 PICTURE'));
-  who.append(chips);
-  head.append(f, who);
-  if (b.state === 'offered' && b.pay_until) {
-    const cd = el('b', 'sb-count');
-    cd.dataset.until = b.pay_until;
-    cd.dataset.fmt = 'mmss';
-    head.append(cd);
-  } else if (b.agreed || b.asked) {
-    head.append(el('b', 'sb-price', rup(b.agreed || b.asked)));
-  }
-  sheet.append(head);
+  head.append(f, who, closeButton());
+  sheet.append(head, buyerStatus(b, v, l));
 
-  if (v.negotiates && b.events.some((e) => e.kind === 'read' || e.kind === 'bot_said')) sheet.append(tugOfWar(b, v));
-  if (b.events.some((e) => e.kind === 'prompt') || (v.pay && v.pay.buyer === b.key)) sheet.append(payPips(b, v));
-  if (b.note) sheet.append(el('div', 'sb-note', b.note));
+  const strip = priceStrip(b, v);
+  if (strip) sheet.append(strip);
+  if (b.events.some((e) => e.kind === 'prompt') || (v.pay && v.pay.buyer === b.key)) {
+    sheet.append(el('div', 'sec', 'PAYMENT'), payPips(b, v));
+  }
+  const rounds = haggleRounds(b, v);
+  if (rounds) sheet.append(el('div', 'sec', 'HAGGLE'), rounds);
 
   const acts = el('div', 'sb-acts');
   const link = chatLink(b);
-  const chat = el(link ? 'a' : 'span', 'sb-act grn');
+  const chat = el(link ? 'a' : 'span', 'sb-act chat');
   chat.append(el('b', '', '💬'), el('span', '', 'CHAT'));
   if (link) {
     chat.href = link;
@@ -411,39 +602,99 @@ function openBuyerSheet(v, key, keep) {
     chat.classList.add('off');
   }
   acts.append(chat);
-  if (b.phone) {
-    const copy = el('button', 'sb-act');
-    copy.append(el('b', '', '📋'), el('span', '', 'NUMBER'));
-    copy.addEventListener('click', () => navigator.clipboard?.writeText(b.phone).then(() => toast('Number copied'), () => toast(b.phone)));
-    acts.append(copy);
-  }
   if (v.state === 'active') {
     acts.append(saleActionButton('✓', 'MARK SOLD', () => saleActionForm(v, 'sold', b)));
     acts.append(saleActionButton(b.muted ? '🔈' : '🔇', b.muted ? 'UNMUTE' : 'MUTE', () => saleActionForm(v, b.muted ? 'unmute' : 'mute', b)));
   }
-  const close = el('button', 'sb-act');
-  close.append(el('b', '', '✕'), el('span', '', 'CLOSE'));
-  close.addEventListener('click', closeModal);
-  acts.append(close);
   sheet.append(acts);
   tickSales();
   restore();
 }
 
-// READ glyphs: what the bot read, never what they wrote.
-const READ = { opener: '?', question: '?', ok: '✓', accept: '✓', lower: '↓', pay_other: '₹?', paid: '💸', pass: '✕', unknown: '…' };
+// buyerStatus says in words where the buyer stands, with the amount or a
+// countdown beside it and, for a timer, a bar that drains.
+function buyerStatus(b, v, l) {
+  let tone, title, body = b.note || '', big = null, from = 0, until = 0;
+  if (b.muted) {
+    [tone, title, body] = ['dim', 'MUTED', 'The bot sends this buyer nothing for this sale.'];
+  } else if (l.cls === 'need') {
+    const [ic, w] = reason(b);
+    [tone, title] = ['red', `${ic} ${w}`];
+    if (b.refund || b.offer) big = rup(b.refund || b.offer);
+  } else if (b.state === 'offered') {
+    [tone, title] = ['grn', `ASKED TO PAY ${rup(b.asked || b.agreed)}`];
+    body = 'Waiting for their WhatsApp Pay payment. The QR goes out once it is read.';
+    if (b.pay_until) [from, until] = [b.pay_until - 120, b.pay_until];
+  } else if (b.state === 'negotiating' && b.quiet_until) {
+    [tone, title] = ['blue', 'HAGGLING · TIMES OUT IN'];
+    body = 'If they stay quiet this long, the bot drops them. Each bot reply restarts the clock.';
+    const lastBot = [...b.events].reverse().find((e) => e.kind === 'bot_said' || e.kind === 'revived');
+    [from, until] = [lastBot ? lastBot.at : b.joined, b.quiet_until];
+  } else {
+    tone = { won: 'grn', chk: 'egg', wait: 'gold', talk: 'blue' }[l.cls] || 'dim';
+    title = (STATE_WORD[b.state] || b.state).toUpperCase();
+    const p = buyerPrice(b, l);
+    if (p) big = rup(p);
+  }
+  if (sentPicture(b)) body = `${body} Sent a picture, not a WhatsApp Pay payment. They may have paid another way.`.trim();
 
-// tugOfWar draws the negotiation round by round: their offer in red, the
-// bot's answer in green, and at the bottom where the bot's lowest is now.
-function tugOfWar(b, v) {
+  const box = el('div', 'sb-status ' + tone);
+  if (until) {
+    big = el('b', 'big');
+    big.dataset.until = until;
+    big.dataset.fmt = 'mmss';
+  } else if (big) {
+    big = el('b', 'big', big);
+  }
+  if (big) box.append(big);
+  box.append(el('b', 'ttl', title));
+  if (body) box.append(el('p', '', body));
+  if (!until) return box;
+  const wrap = el('div', 'sb-statusw');
+  const bar = el('div', 'sb-bar ' + tone);
+  const fill = el('i');
+  fill.dataset.from = from;
+  fill.dataset.until = until;
+  fill.dataset.bar = '1';
+  bar.append(fill);
+  wrap.append(box, bar);
+  return wrap;
+}
+
+// priceStrip: their offer, what the bot asked or agreed, and the bot's
+// lowest now, side by side.
+function priceStrip(b, v) {
+  const cells = [];
+  if (b.offer) cells.push(['Their offer', rup(b.offer), 'red']);
+  if (b.agreed) cells.push(['Agreed', rup(b.agreed), 'grn']);
+  else if (b.ask) cells.push(['Bot asked', rup(b.ask), 'grn']);
+  if (v.state === 'active' && v.negotiates) cells.push([v.held ? 'Held at' : 'Lowest now', rup(v.lowest), '']);
+  if (v.state === 'active' && cells.length < 3) cells.push(['Floor', rup(v.min), 'dim']);
+  if (cells.length < 2) return null;
+  const s = el('div', 'sb-strip');
+  for (const [k, val, cls] of cells.slice(0, 3)) {
+    const c = el('div');
+    c.append(el('small', '', k), el('b', cls, val));
+    s.append(c);
+  }
+  return s;
+}
+
+// READ_WORD: what the bot read, never what they wrote.
+const READ_WORD = { opener: 'Asked the price', question: 'Asked something', ok: 'Said ok', accept: 'Accepted', lower: 'Asked for lower', pay_other: 'Other payment', paid: 'Says paid', pass: 'Passed', unknown: 'Unclear' };
+
+// haggleRounds lists the negotiation round by round: what the bot read
+// from them, then what it answered.
+function haggleRounds(b, v) {
+  if (!v.negotiates) return null;
   const rows = [];
   let row = null;
   for (const e of b.events) {
     if (e.kind === 'read') {
-      row = { them: e.text.startsWith('offer') ? e.n : null, glyph: READ[e.text] || '…', at: e.at };
+      row = { them: e.text.startsWith('offer') ? e.n : null, word: READ_WORD[e.text] || 'Unclear' };
       rows.push(row);
     } else if (e.kind === 'bot_said' || e.kind === 'agreed') {
-      if (!row || row.bot != null) { row = { glyph: '?', at: e.at }; rows.push(row); }
+      if (!row || row.bot != null) { row = { word: 'Wrote' }; rows.push(row); }
       row.bot = e.n;
       row.lock = row.lock || /lowest/.test(e.text || '');
       row.deal = row.deal || e.kind === 'agreed';
@@ -451,50 +702,29 @@ function tugOfWar(b, v) {
       row.stop = true;
     }
   }
-  const shown = rows.slice(-6);
-  const prices = [v.min, v.max, v.lowest, ...shown.flatMap((r) => [r.them, r.bot]).filter((p) => p != null)];
-  const lo = Math.floor(Math.min(...prices) / 5) * 5, hi = Math.ceil(Math.max(...prices) / 5) * 5;
-  const W = 300, X0 = 24, X1 = 286, H = 22 + shown.length * 30 + 36;
-  const x = (p) => X0 + (hi === lo ? 0.5 : (p - lo) / (hi - lo)) * (X1 - X0);
-  const s = sv('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', class: 'tug' });
-  const ny = 12 + shown.length * 30 + 4;
-  s.append(sv('rect', { x: x(v.lowest), y: 4, width: X1 - x(v.lowest), height: ny + 6, fill: C.veg, 'fill-opacity': 0.06 }));
-  s.append(sv('line', { x1: x(v.min), x2: x(v.min), y1: 4, y2: ny + 10, stroke: C.red, 'stroke-opacity': 0.5, 'stroke-dasharray': '3 3' }));
-  if (v.target > v.min && v.target < v.max) s.append(sv('line', { x1: x(v.target), x2: x(v.target), y1: 4, y2: ny + 10, stroke: C.gold, 'stroke-opacity': 0.5, 'stroke-dasharray': '3 3' }));
-  const pill = (cx, y, text, fg, bg, w = 30) => {
-    s.append(sv('rect', { x: cx - w / 2, y: y - 9, width: w, height: 18, rx: 5, fill: bg, stroke: fg }));
-    s.append(sv('text', { x: cx, y: y + 3.5, 'text-anchor': 'middle', fill: fg, class: 'tug-n' }, text));
-  };
-  shown.forEach((r, i) => {
-    const y = 20 + i * 30;
-    s.append(sv('text', { x: 4, y: y + 3, fill: C.dim, class: 'tug-i' }, String(rows.length - shown.length + i + 1)));
-    if (r.them != null && r.bot != null) s.append(sv('line', { x1: x(r.them), x2: x(r.bot), y1: y, y2: y, stroke: '#3b3f74', 'stroke-width': 2, 'stroke-dasharray': '2 3' }));
-    if (r.them != null) pill(x(r.them), y, String(r.them), C.red, '#2a1418', 28);
-    else {
-      s.append(sv('circle', { cx: X0, cy: y, r: 8, fill: 'none', stroke: '#b8c6ff', 'stroke-dasharray': '2 2' }));
-      s.append(sv('text', { x: X0, y: y + 3, 'text-anchor': 'middle', fill: '#b8c6ff', class: 'tug-n' }, r.glyph));
+  if (!rows.length) return null;
+  const SHOW = 6;
+  const box = el('div', 'sb-rounds');
+  if (rows.length > SHOW) box.append(el('div', 'earlier', `${rows.length - SHOW} earlier ${rows.length - SHOW === 1 ? 'round' : 'rounds'}`));
+  rows.slice(-SHOW).forEach((r, i) => {
+    const line = el('div', 'rd');
+    line.append(el('span', 'i', String(rows.length - Math.min(SHOW, rows.length) + i + 1)));
+    const them = el('span', 'them' + (r.them != null ? '' : ' word'));
+    them.append(el('small', '', r.them != null ? 'They' : r.word));
+    if (r.them != null) them.append(el('em', '', rup(r.them)));
+    line.append(them, el('span', 'ar', '→'));
+    let bot;
+    if (r.bot != null) {
+      bot = el('span', 'bot' + (r.deal ? ' deal' : ''));
+      bot.append(el('small', '', r.deal ? 'Deal' : r.lock ? 'Bot, lowest' : 'Bot'), el('em', '', (r.deal ? '✓ ' : r.lock ? '🔒' : '') + rup(r.bot)));
+    } else if (r.stop) {
+      bot = el('span', 'bot stop', 'Stopped, asked you');
+    } else {
+      bot = el('span', 'bot wait', '…');
     }
-    if (r.bot != null) pill(x(r.bot), y, (r.lock ? '🔒' : r.deal ? '✓' : '') + r.bot, C.veg, r.deal ? '#1d4a2c' : '#13301f', r.lock || r.deal ? 38 : 30);
-    if (r.stop) s.append(sv('text', { x: X1, y: y + 3, 'text-anchor': 'end', fill: C.red, class: 'tug-n' }, '!'));
+    line.append(bot);
+    box.append(line);
   });
-  // Now: the bot's lowest, and the gap to their last offer.
-  if (v.state === 'active') {
-    const y = ny;
-    if (b.offer && b.offer < v.lowest) s.append(sv('rect', { x: x(b.offer), y: y - 4, width: x(v.lowest) - x(b.offer), height: 8, fill: C.red, 'fill-opacity': 0.6 }));
-    s.append(sv('rect', { x: x(v.lowest), y: y - 4, width: X1 - x(v.lowest), height: 8, rx: 2, fill: C.veg, 'fill-opacity': 0.35 }));
-    s.append(sv('circle', { cx: x(v.lowest), cy: y, r: 5, fill: v.held ? C.gold : C.veg }));
-    s.append(sv('text', { x: x(v.lowest) + 8, y: y - 7, fill: v.held ? C.gold : C.veg, class: 'tug-n' }, `${v.held ? '🔒' : ''}${v.lowest} NOW`));
-    s.append(sv('text', { x: 4, y: y + 3, fill: C.veg, class: 'tug-i' }, '▸'));
-  }
-  for (let p = lo; p <= hi; p += Math.max(5, Math.ceil((hi - lo) / 5 / 5) * 5)) {
-    const col = p === v.min ? C.red : p === v.target ? C.gold : C.dim;
-    s.append(sv('text', { x: x(p), y: H - 4, 'text-anchor': 'middle', fill: col, class: 'tug-i' }, String(p)));
-  }
-  const box = el('div', 'sb-tug');
-  box.append(s);
-  const key = el('div', 'sb-key');
-  for (const [cls, t] of [['red', 'THEM'], ['grn', 'BOT'], ['gold', 'TARGET'], ['red dash', 'FLOOR']]) key.append(el('span', cls, t));
-  box.append(key);
   return box;
 }
 
