@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,8 +48,15 @@ type deviceAccount struct {
 	st      *store.Store
 	sell    *sellManager
 	pairing bool
-	qr      string
-	err     string
+	// pairStart, stopPair and done belong to the running pairing session;
+	// done closes when it ends. code is the phone-number pairing code for
+	// it, when one was asked for.
+	pairStart time.Time
+	stopPair  context.CancelFunc
+	done      chan struct{}
+	code      string
+	qr        string
+	err       string
 }
 
 func accountConfig(ctx context.Context, cfg *config.Config, st *store.Store, id int64) (*config.Config, error) {
@@ -217,7 +225,7 @@ func (a *deviceAccount) Linked() bool { a.mu.Lock(); defer a.mu.Unlock(); return
 func (a *deviceAccount) Status() any {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return map[string]any{"linked": a.client.LoggedIn(), "connected": a.client.IsConnected(), "pairing": a.pairing, "qr": a.qr, "error": a.err}
+	return map[string]any{"linked": a.client.LoggedIn(), "connected": a.client.IsConnected(), "pairing": a.pairing, "qr": a.qr, "code": a.code, "error": a.err}
 }
 func (a *deviceAccount) Link(_ context.Context) error {
 	a.mu.Lock()
@@ -236,8 +244,14 @@ func (a *deviceAccount) Link(_ context.Context) error {
 		return err
 	}
 	a.pairing = true
+	a.pairStart = time.Now()
+	a.stopPair = cancel
+	a.done = make(chan struct{})
 	a.err = ""
+	a.code = ""
+	done := a.done
 	go func() {
+		defer close(done)
 		defer cancel()
 		if err := a.client.Do(func(c *wa.Client) error { return c.WA.Connect() }); err != nil {
 			a.mu.Lock()
@@ -262,9 +276,74 @@ func (a *deviceAccount) Link(_ context.Context) error {
 		a.mu.Lock()
 		a.pairing = false
 		a.qr = ""
+		a.code = ""
 		a.mu.Unlock()
 	}()
 	return nil
+}
+
+// LinkCode links by phone number instead of QR: it returns a code to type
+// into WhatsApp on the phone with that number. A code only lasts as long as
+// its pairing session, about 160 seconds from the start, so a session older
+// than a minute is restarted first.
+func (a *deviceAccount) LinkCode(ctx context.Context, phone string) (string, error) {
+	digits := strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return r
+		}
+		return -1
+	}, phone)
+	if len(digits) == 10 {
+		digits = "91" + digits // a bare Indian mobile number
+	}
+	if len(digits) < 11 || len(digits) > 15 || digits[0] == '0' {
+		return "", fmt.Errorf("enter your WhatsApp number with its country code, like +91 98765 43210")
+	}
+	a.mu.Lock()
+	old, stop := a.done, a.stopPair
+	stale := a.pairing && time.Since(a.pairStart) > time.Minute
+	a.mu.Unlock()
+	if stale {
+		stop()
+		select {
+		case <-old:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	if err := a.Link(ctx); err != nil {
+		return "", err
+	}
+	// The session is ready for a code once it has shown its first QR.
+	for deadline := time.Now().Add(20 * time.Second); ; {
+		a.mu.Lock()
+		ready, pairing := a.qr != "", a.pairing
+		a.mu.Unlock()
+		if ready {
+			break
+		}
+		if !pairing || time.Now().After(deadline) {
+			return "", fmt.Errorf("couldn't reach WhatsApp to get a code; try again")
+		}
+		select {
+		case <-time.After(200 * time.Millisecond):
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	var code string
+	err := a.client.Do(func(c *wa.Client) error {
+		var err error
+		code, err = c.WA.PairPhone(ctx, digits, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
+		return err
+	})
+	if err != nil {
+		return "", err
+	}
+	a.mu.Lock()
+	a.code = code
+	a.mu.Unlock()
+	return code, nil
 }
 func (a *deviceAccount) Unlink(ctx context.Context) error {
 	a.mu.Lock()

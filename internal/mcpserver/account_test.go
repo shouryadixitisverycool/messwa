@@ -17,10 +17,11 @@ import (
 
 type linkedTestDevice struct{}
 
-func (linkedTestDevice) Linked() bool                 { return true }
-func (linkedTestDevice) Status() any                  { return nil }
-func (linkedTestDevice) Link(context.Context) error   { return nil }
-func (linkedTestDevice) Unlink(context.Context) error { return nil }
+func (linkedTestDevice) Linked() bool                                     { return true }
+func (linkedTestDevice) Status() any                                      { return nil }
+func (linkedTestDevice) LinkCode(context.Context, string) (string, error) { return "", nil }
+func (linkedTestDevice) Link(context.Context) error                       { return nil }
+func (linkedTestDevice) Unlink(context.Context) error                     { return nil }
 
 func TestHTTPRoutesPrivateDataAndActionsToTokenOwner(t *testing.T) {
 	ctx := t.Context()

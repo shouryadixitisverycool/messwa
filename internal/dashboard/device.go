@@ -100,6 +100,22 @@ func deviceRoutes(mux *http.ServeMux, srv *mcpserver.Server) {
 		}
 		writeJSON(w, r, srv.Device.Status())
 	}))
+	mux.Handle("POST /api/whatsapp/code", member(func(w http.ResponseWriter, r *http.Request) {
+		if srv.Device == nil {
+			jsonError(w, "WhatsApp linking requires the run service", 503)
+			return
+		}
+		var in struct{ Phone string }
+		if !readJSON(w, r, &in) {
+			return
+		}
+		code, err := srv.Device.LinkCode(r.Context(), in.Phone)
+		if err != nil {
+			jsonError(w, err.Error(), 400)
+			return
+		}
+		writeJSON(w, r, map[string]string{"code": code})
+	}))
 	mux.Handle("DELETE /api/whatsapp", member(func(w http.ResponseWriter, r *http.Request) {
 		if srv.Device == nil {
 			jsonError(w, "WhatsApp linking requires the run service", 503)

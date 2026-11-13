@@ -55,10 +55,17 @@
     </div>
     <div class="form">
       <p class="note" id="waHelp" hidden>Link your WhatsApp as a linked device. messwa reads the mess groups with it, and later sells your meals from it when you ask. Your chats, buyers and sales stay private to you. Linking sends no messages.</p>
-      <p id="waStatus" class="note">Checking…</p>
-      <img id="waQR" alt="QR code to scan in WhatsApp, Linked devices" hidden class="pairing-qr">
-      <div class="actions"><button class="btn primary" id="waLink" type="button">Link WhatsApp</button></div>
+      <p id="waStatus" class="wa-status">Checking…</p>
+      <div class="qr-box" id="qrBox" hidden><img id="waQR" alt="QR code to scan in WhatsApp, Linked devices" class="pairing-qr"></div>
+      <div id="codeBox" class="code-box" hidden>
+        <form id="codeForm" class="row">
+          <label class="grow">Your WhatsApp number<input id="phone" type="tel" autocomplete="tel" placeholder="+91 98765 43210"></label>
+          <button class="btn primary" type="submit" id="codeGo">Get code</button>
+        </form>
+        <div class="pair-code" id="pairCode" hidden></div>
+      </div>
       <p class="err" id="waErr" role="alert" hidden></p>
+      <button class="mode-toggle" type="button" id="modeToggle" hidden>Link with phone number instead</button>
     </div>
   </section>
 

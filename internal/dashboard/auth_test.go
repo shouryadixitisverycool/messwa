@@ -429,6 +429,13 @@ func TestSignUpAndApproval(t *testing.T) {
 	// So does a linked WhatsApp, which they can link before approval.
 	expectStatus(c, "GET", "/api/whatsapp", 200)
 	expectStatus(c, "POST", "/api/whatsapp", 200)
+	res = c.send(t, "POST", "/api/whatsapp/code", map[string]string{"phone": "+91 98765 43210"})
+	var code struct{ Code string }
+	json.NewDecoder(res.Body).Decode(&code)
+	res.Body.Close()
+	if res.StatusCode != 200 || code.Code == "" {
+		t.Errorf("pairing code: %d %+v", res.StatusCode, code)
+	}
 	expectStatus(c, "POST", "/api/approval", http.StatusNoContent)
 
 	// Only admins see and decide requests.
@@ -469,3 +476,6 @@ func (d *linkDevice) Linked() bool                 { return d.linked }
 func (d *linkDevice) Status() any                  { return map[string]bool{"linked": d.linked} }
 func (d *linkDevice) Link(context.Context) error   { d.linked = true; return nil }
 func (d *linkDevice) Unlink(context.Context) error { d.linked = false; return nil }
+func (d *linkDevice) LinkCode(context.Context, string) (string, error) {
+	return "ABCD1234", nil
+}

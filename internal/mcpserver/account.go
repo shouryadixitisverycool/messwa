@@ -12,6 +12,9 @@ type DeviceAccount interface {
 	Linked() bool
 	Status() any
 	Link(context.Context) error
+	// LinkCode starts linking by phone number and returns the code to
+	// type into WhatsApp on that phone.
+	LinkCode(ctx context.Context, phone string) (string, error)
 	Unlink(context.Context) error
 }
 

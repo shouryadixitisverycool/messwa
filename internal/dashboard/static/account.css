@@ -88,3 +88,13 @@ code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--t
   font: 700 12px var(--sans);
 }
 .help:hover, .help[aria-expanded="true"] { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 55%, transparent); }
+
+.qr-box { display: flex; justify-content: center; }
+.code-box { display: flex; flex-direction: column; gap: 12px; }
+.pair-code {
+  align-self: center; padding: 14px 22px; border-radius: 12px;
+  background: #10141c; border: 1px solid color-mix(in srgb, var(--gold) 45%, transparent);
+  font: 700 30px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 4px; color: var(--gold);
+  user-select: all;
+}
+.mode-toggle { align-self: center; padding: 0; background: none; border: 0; color: var(--gold); font: 13px var(--sans); text-decoration: underline; cursor: pointer; }

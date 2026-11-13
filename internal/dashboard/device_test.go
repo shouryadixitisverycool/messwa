@@ -19,7 +19,10 @@ type testDevice struct {
 	links, unlinks int
 }
 
-func (d *testDevice) Linked() bool                 { return true }
+func (d *testDevice) Linked() bool { return true }
+func (d *testDevice) LinkCode(context.Context, string) (string, error) {
+	return "", nil
+}
 func (d *testDevice) Status() any                  { return map[string]string{"account": d.name} }
 func (d *testDevice) Link(context.Context) error   { d.links++; return nil }
 func (d *testDevice) Unlink(context.Context) error { d.unlinks++; return nil }
