@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -94,15 +95,20 @@ type sellManager struct {
 	// notify tells the dashboard a sale changed. Nil when nothing watches.
 	notify func()
 
-	base    context.Context // run's context; tasks stop with it and resume next start
-	mu      sync.Mutex
-	running map[int64]*runningTask
+	base context.Context // run's context; tasks stop with it and resume next start
+	// pricesMu serializes SetPrices.
+	pricesMu sync.Mutex
+	mu       sync.Mutex
+	running  map[int64]*runningTask
 }
 
 type runningTask struct {
 	cancel context.CancelCauseFunc
 	done   chan struct{}
 	gate   *taskGate
+	// neg is the task's negotiation once it runs, so a range edit reaches
+	// it; nil for a task that doesn't negotiate.
+	neg atomic.Pointer[negotiation]
 }
 
 func newSellManager(ctx context.Context, cfg *config.Config, log *slog.Logger, st *store.Store, conn saleConn, send sendFunc,
@@ -206,6 +212,91 @@ func (m *sellManager) Cancel(ctx context.Context, id int64) error {
 	}
 }
 
+// SetPrices changes a running task's floor and opening price, in whole
+// rupees, without reposting or restarting it. Buyers mid-haggle get the new
+// range on their next turn. Prices the bot already quoted or agreed stand
+// even below a raised floor, and an ask is never raised. Whether the task
+// negotiates can't change: a negotiating task keeps max above min, and a
+// fixed-price one keeps them equal.
+//
+// When the floor drops, buyers who left the haggle with a last offer at or
+// above the new floor are listed in needs_you, and a WhatsApp Pay payment
+// of that offer from them gets the meal. The bot doesn't message them.
+func (m *sellManager) SetPrices(ctx context.Context, id int64, minRupees, maxRupees int) error {
+	if minRupees <= 0 || maxRupees < minRupees || maxRupees > 10000 {
+		return errors.New("min_price must be at least 1 and max_price between min_price and 10000")
+	}
+	m.pricesMu.Lock()
+	defer m.pricesMu.Unlock()
+	t, err := m.st.GetSellTask(ctx, id)
+	if err != nil {
+		return err
+	}
+	if t == nil {
+		return fmt.Errorf("no sell task %d", id)
+	}
+	if t.State != store.TaskActive {
+		return fmt.Errorf("sell task %d is %s, not active", id, t.State)
+	}
+	switch {
+	case negotiates(*t) && maxRupees == minRupees:
+		return errors.New("this task negotiates, so max_price must stay above min_price; cancel it and start a fixed-price task instead")
+	case !negotiates(*t) && t.Handoff != string(config.HandoffOnReply) && maxRupees != minRupees:
+		return errors.New("this task asks one fixed price, so min_price and max_price must be equal; cancel it and start a negotiating task instead")
+	}
+	minPaise, maxPaise := int64(minRupees)*100, int64(maxRupees)*100
+	if minPaise == t.MinPaise && maxPaise == t.MaxPaise {
+		return nil
+	}
+	old, err := m.st.SetSellTaskPrices(ctx, id, minPaise, maxPaise)
+	if err != nil {
+		return err
+	}
+	m.log.Info("sell task prices changed", "task", id, "min", minRupees, "max", maxRupees,
+		"was_min", old.MinPaise/100, "was_max", old.MaxPaise/100)
+	m.event(ctx, store.SellEvent{TaskID: id, Kind: store.EventPrices, N: minPaise,
+		Text: fmt.Sprintf("%s-%s was %s-%s", store.FormatPaise(minPaise), store.FormatPaise(maxPaise),
+			store.FormatPaise(old.MinPaise), store.FormatPaise(old.MaxPaise))})
+	m.mu.Lock()
+	rt := m.running[id]
+	m.mu.Unlock()
+	if rt != nil {
+		if n := rt.neg.Load(); n != nil {
+			if err := n.refreshRange(ctx); err != nil {
+				m.log.Warn("the running negotiation did not take the new prices", "task", id, "err", err)
+			}
+		}
+	}
+	if minPaise < old.MinPaise {
+		m.flagOffersAtFloor(ctx, id, minPaise)
+	}
+	return nil
+}
+
+// flagOffersAtFloor lists in needs_you the buyers whose last offer the new,
+// lower floor now meets but who are no longer haggling: they timed out,
+// passed, or were parked. Their earlier note stays in the event log.
+func (m *sellManager) flagOffersAtFloor(ctx context.Context, id, floor int64) {
+	buyers, err := m.st.SellTaskBuyers(ctx, id)
+	if err != nil {
+		m.log.Warn("could not look for buyers the new floor meets", "task", id, "err", err)
+		return
+	}
+	for _, b := range buyers {
+		if !offerMeetsFloor(b, floor) {
+			continue
+		}
+		offer := strings.TrimSuffix(store.FormatPaise(b.LastOffer), ".00")
+		note := fmt.Sprintf("offered %s, which the new floor of %s now meets; message them if you want to sell at %s. A WhatsApp Pay payment of %s from them gets the QR",
+			offer, strings.TrimSuffix(store.FormatPaise(floor), ".00"), offer, offer)
+		if err := m.st.ParkSellTaskBuyer(ctx, id, b.Peer, note); err != nil {
+			m.log.Warn("could not list a buyer the new floor meets", "task", id, "buyer", b.Peer, "err", err)
+			continue
+		}
+		m.event(ctx, store.SellEvent{TaskID: id, Peer: b.Peer, Kind: store.EventParked, N: b.LastOffer, Text: note})
+	}
+}
+
 // Resume restarts the tasks that were active when run last stopped. Call
 // it before connecting, so payments and replies that arrived while run was
 // down reach the tasks. It returns once every resumed task is listening,
@@ -278,7 +369,7 @@ func (m *sellManager) launch(t store.SellTask, s *sale, ready chan struct{}) {
 			delete(m.running, t.ID)
 			m.mu.Unlock()
 		}()
-		err := m.runTask(ctx, t, s, gate, signal)
+		err := m.runTask(ctx, t, s, rt, signal)
 		gate.active.Store(false)
 		state, detail := m.outcome(ctx, err)
 		if state == store.TaskSold {
@@ -368,7 +459,8 @@ func (m *sellManager) tickOffers(t store.SellTask, gate *taskGate) {
 // runTask posts the offer (unless it already went out) and sells to the
 // buyers who reply, picking up where a previous run stopped. listening is
 // called once replies and any resumed payment are being watched.
-func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, gate *taskGate, listening func()) error {
+func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, rt *runningTask, listening func()) error {
+	gate := rt.gate
 	switch _, dstate, err := m.st.TaskDelivery(ctx, t.ID); {
 	case err != nil:
 		return err
@@ -415,6 +507,12 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, ga
 	var n *negotiation
 	if negotiates(t) {
 		n = newNegotiation(ctx, m, t, s, gate, queue)
+		rt.neg.Store(n)
+		// A range edit made while the task was starting reached the store
+		// but not n.
+		if err := n.refreshRange(ctx); err != nil {
+			return err
+		}
 	}
 	resume, err := m.restore(ctx, t, queue, gate, n)
 	if err != nil {
@@ -498,14 +596,21 @@ func (m *sellManager) postCopies(ctx context.Context, t store.SellTask, s *sale,
 		listed = true
 		return groups, nil
 	}
-	text := sync.OnceValue(func() string {
-		var extras []string
+	extras := sync.OnceValue(func() []string {
 		if ep, ok := s.portal.(extrasPortal); ok && settings.MentionExtras {
-			extras = readExtras(ctx, ep, m.log, t.Date, t.Meal, s.mess)
+			return readExtras(ctx, ep, m.log, t.Date, t.Meal, s.mess)
 		}
-		return offerText(offerDetails{Mess: s.mess, Diet: s.diet, Meal: t.Meal, Price: rupees(store.FormatPaise(t.MaxPaise)),
-			ShowPrice: settings.ShowPrice, Day: offerDay(m.cfg, t.Date), Extras: extras})
+		return nil
 	})
+	// Each copy shows the opening price as it is now, after any range edit.
+	text := func() string {
+		price := t.MaxPaise
+		if cur, err := m.st.GetSellTask(ctx, t.ID); err == nil && cur != nil {
+			price = cur.MaxPaise
+		}
+		return offerText(offerDetails{Mess: s.mess, Diet: s.diet, Meal: t.Meal, Price: rupees(store.FormatPaise(price)),
+			ShowPrice: settings.ShowPrice, Day: offerDay(m.cfg, t.Date), Extras: extras()})
+	}
 	send := m.taskCopy(t, gate, text)
 	record := func(p postedOffer) { recordOffers(ctx, m.st, m.own, m.log, t.Date, t.Meal, []postedOffer{p}) }
 	keepInView := func() {
@@ -693,13 +798,18 @@ type taskJournal struct {
 	t  store.SellTask
 }
 
-// price is the task's max price: a task that doesn't negotiate asks it of
-// every buyer. A negotiating task uses negotiatedJournal instead.
-func (j *taskJournal) price(context.Context, types.JID) (string, error) {
-	if j.t.MaxPaise < j.t.MinPaise {
-		return "", fmt.Errorf("INR %s is below the floor of INR %s", store.FormatPaise(j.t.MaxPaise), store.FormatPaise(j.t.MinPaise))
+// price is the task's max price as it is now, after any range edit: a task
+// that doesn't negotiate asks it of every buyer. A negotiating task uses
+// negotiatedJournal instead.
+func (j *taskJournal) price(ctx context.Context, _ types.JID) (string, error) {
+	t, err := j.st.GetSellTask(ctx, j.t.ID)
+	if err != nil || t == nil {
+		return "", errors.Join(err, errors.New("sell task is gone"))
 	}
-	return store.FormatPaise(j.t.MaxPaise), nil
+	if t.MaxPaise < t.MinPaise {
+		return "", fmt.Errorf("INR %s is below the floor of INR %s", store.FormatPaise(t.MaxPaise), store.FormatPaise(t.MinPaise))
+	}
+	return store.FormatPaise(t.MaxPaise), nil
 }
 
 func (j *taskJournal) arm(ctx context.Context, d store.Delivery) (time.Time, error) {

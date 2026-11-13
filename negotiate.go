@@ -48,16 +48,27 @@ type haggle struct {
 	// target is what the meal usually goes for: the median ask, clamped
 	// to [min, max]. The bot holds there until time runs short.
 	target int
-	unit   int // concessions round to this: ₹5, or ₹1 for tiny prices
-	end    time.Time
-	what   string // the mess and diet, "kadamba non-veg"
-	day    string // "" for today's meal, else "tmrw" or "13 nov"
+	// median is the market's median ask, kept so a range edit can clamp
+	// it again; haveMedian is false when the market had none.
+	median     float64
+	haveMedian bool
+	unit       int // concessions round to this: ₹5, or ₹1 for tiny prices
+	end        time.Time
+	what       string // the mess and diet, "kadamba non-veg"
+	day        string // "" for today's meal, else "tmrw" or "13 nov"
 }
 
 func newHaggle(minRupees, maxRupees int, median float64, haveMedian bool, end time.Time, what, day string) haggle {
-	h := haggle{min: minRupees, max: maxRupees, target: maxRupees, unit: market.PriceUnit(maxRupees), end: end, what: what, day: day}
-	if haveMedian {
-		h.target = min(max(int(math.Round(median)), minRupees), maxRupees)
+	h := haggle{end: end, what: what, day: day, median: median, haveMedian: haveMedian}
+	return h.withRange(minRupees, maxRupees)
+}
+
+// withRange is h with a new floor and opening price, and the target and
+// price unit worked out again for them.
+func (h haggle) withRange(minRupees, maxRupees int) haggle {
+	h.min, h.max, h.target, h.unit = minRupees, maxRupees, maxRupees, market.PriceUnit(maxRupees)
+	if h.haveMedian {
+		h.target = min(max(int(math.Round(h.median)), minRupees), maxRupees)
 	}
 	return h
 }
@@ -111,9 +122,16 @@ type step struct {
 
 // decide answers in, given st. The buyer has heard a price once the bot
 // has sent them anything.
+//
+// After a range edit, a buyer's ask stays where it was unless the new max
+// is lower: the bot never asks more than it already said, and a raised
+// floor only stops it going lower than that ask.
 func (h haggle) decide(st haggleState, in intent, now time.Time, competing bool) step {
 	priced := st.botMsgs > 0
-	a := st.ask
+	a := min(st.ask, h.max)
+	if !priced {
+		a = h.max
+	}
 	w := min(h.walk(now, competing), a)
 	next := st
 	next.quoted = slices.Clone(st.quoted)
@@ -251,7 +269,11 @@ type negotiation struct {
 	slots  chan struct{}
 	wg     sync.WaitGroup
 
-	mu       sync.Mutex
+	// rangeMu serializes refreshRange.
+	rangeMu sync.Mutex
+
+	mu sync.Mutex
+	// h is guarded by mu once sessions run; read it with prices.
 	sessions map[types.JID]*session
 	resumed  []*session
 	holder   types.JID // the buyer whose payment turn is under way
@@ -286,6 +308,37 @@ func newNegotiation(ctx context.Context, m *sellManager, t store.SellTask, s *sa
 		n.log.Warn("could not record the target price", "err", err)
 	}
 	return n
+}
+
+// prices returns the haggle as it stands now. A range edit can change it
+// while sessions run, so they read it once per turn.
+func (n *negotiation) prices() haggle {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.h
+}
+
+// refreshRange reloads the task's floor and opening price from the store,
+// works out the target again, and records it. Every session's next turn
+// uses them. Calls are serialized and always read the store, so the last
+// edit wins whatever order they arrive in.
+func (n *negotiation) refreshRange(ctx context.Context) error {
+	n.rangeMu.Lock()
+	defer n.rangeMu.Unlock()
+	t, err := n.m.st.GetSellTask(ctx, n.t.ID)
+	if err != nil || t == nil {
+		return errors.Join(err, errors.New("sell task is gone"))
+	}
+	n.mu.Lock()
+	old := n.h
+	n.h = n.h.withRange(int(t.MinPaise/100), int(t.MaxPaise/100))
+	h := n.h
+	n.mu.Unlock()
+	if h.min == old.min && h.max == old.max {
+		return nil
+	}
+	n.log.Info("price range changed", "min", h.min, "max", h.max, "target", h.target)
+	return n.m.st.SetSellTaskTarget(ctx, n.t.ID, int64(h.target)*100)
 }
 
 // negotiates reports whether a task haggles: it has room between min and
@@ -560,15 +613,25 @@ func (n *negotiation) payment(peer types.JID, e *events.Message) {
 		return
 	}
 	ss := n.sessionLocked(peer)
-	amounts := []string{store.FormatPaise(n.t.MaxPaise)}
+	// The posted price, before and after any range edit.
+	amounts := []string{store.FormatPaise(n.t.MaxPaise), store.FormatPaise(int64(n.h.max) * 100)}
 	for _, q := range ss.hs.quoted {
 		amounts = append(amounts, store.FormatPaise(int64(q)*100))
 	}
 	if ss.agreed != "" {
 		amounts = append(amounts, ss.agreed)
 	}
+	ended := ss.state == sessionEnded || ss.state == sessionWaiting
+	floor := int64(n.h.min) * 100
 	since := ss.joined.Truncate(time.Second)
 	n.mu.Unlock()
+	if ended {
+		// A buyer who left the haggle with an offer a lowered floor now
+		// meets is listed in needs_you; paying that offer gets the meal.
+		if offer := n.endedOffer(peer, floor); offer != "" {
+			amounts = append(amounts, offer)
+		}
+	}
 
 	amount, err := paymentMatch(e, amounts, since, n.t.EndsAt, time.Now())
 	ctx := context.WithoutCancel(n.ctx)
@@ -614,6 +677,32 @@ func (n *negotiation) payment(peer types.JID, e *events.Message) {
 		n.m.event(ctx, store.SellEvent{TaskID: n.t.ID, Peer: peer.String(), Kind: store.EventQRSent, N: paise(amount)})
 	}
 	n.direct <- err
+}
+
+// endedOffer is the last offer, as an INR amount, of a buyer who timed out,
+// passed or was parked, when it is at or above floor; otherwise "".
+func (n *negotiation) endedOffer(peer types.JID, floor int64) string {
+	buyers, err := n.m.st.SellTaskBuyers(context.WithoutCancel(n.ctx), n.t.ID)
+	if err != nil {
+		return ""
+	}
+	for _, b := range buyers {
+		if b.Peer == peer.String() && offerMeetsFloor(b, floor) {
+			return store.FormatPaise(b.LastOffer)
+		}
+	}
+	return ""
+}
+
+// offerMeetsFloor reports whether a buyer who left the haggle without
+// buying made a last offer at or above floor. Buyers with a payment to
+// refund are left out: they need you for that already.
+func offerMeetsFloor(b store.SellBuyer, floor int64) bool {
+	switch b.State {
+	case store.BuyerTimedOut, store.BuyerPassed, store.BuyerParked:
+		return b.LastOffer > 0 && b.LastOffer >= floor && b.Refund == ""
+	}
+	return false
 }
 
 // directSale reports a buyer who paid outside a turn and got the meal.
@@ -801,7 +890,7 @@ func (ss *session) handle(texts []string) handled {
 	if in.kind == intentPayOther && ss.sayPayOther() {
 		return handledReplied
 	}
-	st := n.h.decide(hs, in, time.Now(), n.competing())
+	st := n.prices().decide(hs, in, time.Now(), n.competing())
 	switch {
 	case st.pass:
 		n.m.st.MoveSellTaskBuyerFrom(ctx, n.t.ID, ss.buyer.String(), []string{store.BuyerQueued, store.BuyerNegotiating}, store.BuyerPassed)
@@ -978,12 +1067,11 @@ func (j negotiatedJournal) price(_ context.Context, buyer types.JID) (string, er
 	if !ok {
 		return "", errNotAgreed
 	}
-	paise, err := store.ParsePaise(amount)
-	if err != nil {
+	// The store arms the reservation only at or above the floor, or at the
+	// price agreed with this buyer: a range edit that raised the floor
+	// since doesn't undo the deal.
+	if _, err := store.ParsePaise(amount); err != nil {
 		return "", err
-	}
-	if paise < j.t.MinPaise {
-		return "", fmt.Errorf("INR %s is below the floor of INR %s", amount, store.FormatPaise(j.t.MinPaise))
 	}
 	return amount, nil
 }

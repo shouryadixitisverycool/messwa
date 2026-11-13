@@ -19,6 +19,8 @@ import (
 type SellTasks interface {
 	Start(ctx context.Context, userID int64, date, meal string, minRupees, maxRupees int, handoff string) (int64, error)
 	Cancel(ctx context.Context, id int64) error
+	// SetPrices changes an active task's price range in place.
+	SetPrices(ctx context.Context, id int64, minRupees, maxRupees int) error
 }
 
 // SetSellTasks adds the sell task tools while the sell_tasks setting is on.
@@ -28,7 +30,7 @@ func (s *Server) sellEnabled() bool { return s.sell != nil && s.cfg.Live().MCP.S
 
 const sellInstructions = `
 
-Sell tasks (admins only) sell one of your registered meals through WhatsApp. start_sell_task checks the registration and posts an offer in the mess groups set in messwa's settings. With [sell] accept_plain_dms in config.toml, people who DM about the offer without quoting it count as replies too. When config.toml sets [sell] buyers = "unsaved_only", replies from saved contacts are skipped and they get nothing. With max_price above min_price, the task negotiates with everyone who replies privately to a post, all at once: it opens at max_price and comes down toward the meal's usual price, and toward min_price as the meal's end nears. It never quotes, agrees or accepts less than min_price. Buyers who agree pay one at a time; the first matching WhatsApp Pay payment gets the meal's QR, and the offer posts get a ✅. With [sell] accept_payment_images, an image the paying buyer sends after the payment prompt also counts as payment; nothing verifies it, and sell_task_status says so. With max_price equal to min_price it just asks that price. Buyers the bot can't handle (unreadable messages, still too low after its lowest price, asking twice to pay another way) are listed in needs_you, along with buyers whose payment it could not honour and the amount to refund. With handoff "on_reply" the task stops at the first private reply and sends that buyer nothing; with "on_agreement" it negotiates and hands over the first buyer who agrees, at the agreed price. sell_task_status shows who to message. While the task is active it reposts the offer in a group once the last copy has dropped out of view (after [sell] repost_after, 10 minutes by default, or sooner once enough messages or other sellers' listings for the same meal and mess came in after it), up to max_reposts per group and never in the meal's last 15 minutes. Replies to any copy count. sell_task_status lists every copy and when each group gets its next one, and why. A task ends when the meal sells, when it hands off, when it is cancelled, or when the meal ends. Check on it with sell_task_status and stop it with cancel_sell_task. Start a task only when the user asked you to sell that meal, at the prices they gave.`
+Sell tasks (admins only) sell one of your registered meals through WhatsApp. start_sell_task checks the registration and posts an offer in the mess groups set in messwa's settings. With [sell] accept_plain_dms in config.toml, people who DM about the offer without quoting it count as replies too. When config.toml sets [sell] buyers = "unsaved_only", replies from saved contacts are skipped and they get nothing. With max_price above min_price, the task negotiates with everyone who replies privately to a post, all at once: it opens at max_price and comes down toward the meal's usual price, and toward min_price as the meal's end nears. It never quotes, agrees or accepts less than min_price. Buyers who agree pay one at a time; the first matching WhatsApp Pay payment gets the meal's QR, and the offer posts get a ✅. With [sell] accept_payment_images, an image the paying buyer sends after the payment prompt also counts as payment; nothing verifies it, and sell_task_status says so. With max_price equal to min_price it just asks that price. Buyers the bot can't handle (unreadable messages, still too low after its lowest price, asking twice to pay another way) are listed in needs_you, along with buyers whose payment it could not honour and the amount to refund. With handoff "on_reply" the task stops at the first private reply and sends that buyer nothing; with "on_agreement" it negotiates and hands over the first buyer who agrees, at the agreed price. sell_task_status shows who to message. While the task is active it reposts the offer in a group once the last copy has dropped out of view (after [sell] repost_after, 10 minutes by default, or sooner once enough messages or other sellers' listings for the same meal and mess came in after it), up to max_reposts per group and never in the meal's last 15 minutes. Replies to any copy count. sell_task_status lists every copy and when each group gets its next one, and why. A task ends when the meal sells, when it hands off, when it is cancelled, or when the meal ends. Check on it with sell_task_status and stop it with cancel_sell_task. To change an active task's prices, use set_sell_task_prices rather than cancelling and starting again: the posts, buyers and haggles carry on, and buyers mid-haggle get the new range on their next message. Prices the bot already quoted or agreed with a buyer stand even if the new floor is higher. Lowering the floor lists buyers whose last offer now meets it under needs_you; the bot doesn't message them. Change prices only when the user asked. Start a task only when the user asked you to sell that meal, at the prices they gave.`
 
 func (s *Server) addSellTools(srv *mcp.Server) {
 	write := &mcp.ToolAnnotations{OpenWorldHint: ptr(true)}
@@ -38,6 +40,8 @@ func (s *Server) addSellTools(srv *mcp.Server) {
 		Description: "One sell task by id, or every active task plus those started in the last 24 hours: state, every copy of the offer posted (reposts included, marking each group's current one), when each group gets its next fresh copy and why, buyers who replied, and the sale. Admins only."}, s.sellTaskStatus)
 	mcp.AddTool(srv, &mcp.Tool{Name: "cancel_sell_task", Annotations: write,
 		Description: "Stop a sell task. A QR already being delivered for a payment still goes out, and the task then shows as sold. Admins only."}, s.cancelSellTask)
+	mcp.AddTool(srv, &mcp.Tool{Name: "set_sell_task_prices", Annotations: write,
+		Description: "Change an active sell task's min_price and max_price without reposting or restarting it. Buyers mid-negotiation get the new range on their next message; prices already quoted or agreed stand. A negotiating task must keep max_price above min_price, and a fixed-price task must keep them equal. Lowering the floor lists buyers whose last offer now meets it under needs_you. Prices are whole rupees. Admins only."}, s.setSellTaskPrices)
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -56,6 +60,21 @@ type SellTaskIn struct {
 
 type CancelSellIn struct {
 	ID int64 `json:"id"`
+}
+
+type SetSellPricesIn struct {
+	ID       int64 `json:"id"`
+	MinPrice int   `json:"min_price" jsonschema:"new lowest price in rupees to accept"`
+	MaxPrice int   `json:"max_price" jsonschema:"new price in rupees to open at; new buyers and reposts use it"`
+}
+
+// SellPriceChangeOut is one range edit on a task.
+type SellPriceChangeOut struct {
+	At       string `json:"at"`
+	MinPrice string `json:"min_price"`
+	MaxPrice string `json:"max_price"`
+	WasMin   string `json:"was_min_price"`
+	WasMax   string `json:"was_max_price"`
 }
 
 type SellOfferOut struct {
@@ -128,11 +147,14 @@ type SellTaskOut struct {
 	Detail   string         `json:"detail,omitempty"`
 	MinPrice string         `json:"min_price"`
 	MaxPrice string         `json:"max_price"`
+	Target   string         `json:"target_price,omitempty" jsonschema:"the price a negotiation holds at until time runs short, from the meal's usual price"`
 	Handoff  string         `json:"handoff" jsonschema:"never, on_reply or on_agreement"`
 	Started  string         `json:"started"`
 	Ends     string         `json:"ends"`
 	Ended    string         `json:"ended,omitempty"`
 	Offers   []SellOfferOut `json:"offers"`
+	// PriceChanges are set_sell_task_prices edits, oldest first.
+	PriceChanges []SellPriceChangeOut `json:"price_changes,omitempty"`
 	// Reposts, per group, while the task is active.
 	Reposts []SellRepostOut `json:"reposts,omitempty"`
 	Buyers  []SellBuyerOut  `json:"buyers"`
@@ -214,6 +236,17 @@ func (s *Server) cancelSellTask(ctx context.Context, req *mcp.CallToolRequest, i
 	return nil, out, err
 }
 
+func (s *Server) setSellTaskPrices(ctx context.Context, req *mcp.CallToolRequest, in SetSellPricesIn) (*mcp.CallToolResult, SellTaskOut, error) {
+	if _, err := s.sellAdmin(ctx, req); err != nil {
+		return nil, SellTaskOut{}, err
+	}
+	if err := s.sell.SetPrices(ctx, in.ID, in.MinPrice, in.MaxPrice); err != nil {
+		return nil, SellTaskOut{}, err
+	}
+	out, err := s.sellTask(ctx, in.ID)
+	return nil, out, err
+}
+
 func (s *Server) sellTask(ctx context.Context, id int64) (SellTaskOut, error) {
 	t, err := s.st.GetSellTask(ctx, id)
 	if err != nil {
@@ -251,6 +284,24 @@ func (s *Server) sellTaskOut(ctx context.Context, t store.SellTask) (SellTaskOut
 		MinPrice: store.FormatPaise(t.MinPaise), MaxPrice: store.FormatPaise(t.MaxPaise), Handoff: t.Handoff,
 		Started: s.fmt(t.CreatedAt), Ends: s.fmt(t.EndsAt), Ended: s.fmt(t.EndedAt),
 		Offers: []SellOfferOut{}, Buyers: []SellBuyerOut{},
+	}
+	if t.TargetPaise > 0 && t.MaxPaise > t.MinPaise {
+		out.Target = store.FormatPaise(t.TargetPaise)
+	}
+	events, err := s.st.SellTaskEvents(ctx, t.ID)
+	if err != nil {
+		return out, err
+	}
+	for _, e := range events {
+		if e.Kind != store.EventPrices {
+			continue
+		}
+		c := SellPriceChangeOut{At: s.fmt(e.At)}
+		// Text is "min-max was min-max".
+		now, was, _ := strings.Cut(e.Text, " was ")
+		c.MinPrice, c.MaxPrice, _ = strings.Cut(now, "-")
+		c.WasMin, c.WasMax, _ = strings.Cut(was, "-")
+		out.PriceChanges = append(out.PriceChanges, c)
 	}
 	offers, err := s.st.SellTaskOffers(ctx, t.ID)
 	if err != nil {
