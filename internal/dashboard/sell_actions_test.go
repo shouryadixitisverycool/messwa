@@ -20,7 +20,7 @@ type dashboardOperator struct{ calls []operatorCall }
 func (o *dashboardOperator) Start(context.Context, int64, string, string, int, int, string) (int64, error) {
 	return 1, nil
 }
-func (o *dashboardOperator) Cancel(context.Context, int64) error              { return nil }
+func (o *dashboardOperator) Cancel(context.Context, int64, bool) error        { return nil }
 func (o *dashboardOperator) SetPrices(context.Context, int64, int, int) error { return nil }
 func (o *dashboardOperator) MarkSold(_ context.Context, id int64, buyer, name string, price int, note string) error {
 	o.calls = append(o.calls, operatorCall{id: id, buyer: buyer, name: name, price: price, note: note})
