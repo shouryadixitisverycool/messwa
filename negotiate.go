@@ -330,7 +330,7 @@ func newNegotiation(ctx context.Context, m *sellManager, t store.SellTask, s *sa
 		if ps, err := m.prices(ctx, from, t.Date); err != nil {
 			m.log.Warn("could not read market prices; negotiating toward max_price", "task", t.ID, "err", err)
 		} else {
-			median, have = market.MedianAsk(ps, t.Date, baseMeal(t.Meal), s.mess)
+			median, have = market.MedianAsk(ps, t.Date, baseMeal(t.Meal), s.mess, s.diet)
 		}
 	}
 	n := &negotiation{

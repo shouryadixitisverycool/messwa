@@ -43,6 +43,14 @@ function median(xs) {
   return v.length % 2 ? v[h] : (v[h - 1] + v[h]) / 2;
 }
 const meals = () => D.windows.map((w) => w.meal);
+// priceDiet is the diet a meal's price counts under. Non-veg goes for two
+// or three times veg, so prices are never pooled across diets. A meal with
+// no diet on record counts as veg, as the server does for listings.
+const priceDiet = (d) => (d === 'nonveg' || d === 'egg' ? d : 'veg');
+// marketFor is the market spread for meal in diet, or for every diet when
+// that diet has no asks.
+const marketFor = (meal, diet) => D.market.find((x) => x.meal === meal && x.diet === priceDiet(diet))
+  || D.market.find((x) => x.meal === meal && !x.diet);
 const recentSales = () => D.sales.filter((s) => isSold(s) && s.date >= D.recent && s.date <= D.today);
 
 function span(cls, markup) {
@@ -729,11 +737,12 @@ function openFriendForm() {
   let slider;
   const drawPrice = () => {
     const w = slots[+meal.value];
-    const m = w && D.market.find((x) => x.meal === w.meal);
+    const m = w && marketFor(w.meal, picked(diets));
     slider = priceSlider({ ask: m ? m.median : null });
     priceBox.replaceChildren(el('span', 'fr-k', 'Price'), ...slider.nodes);
   };
   meal.addEventListener('change', drawPrice);
+  diets.addEventListener('change', drawPrice);
   drawPrice();
 
   const extras = el('input');
@@ -778,7 +787,10 @@ function openFriendForm() {
     const m = D.messes.find((x) => x.name === picked(messes));
     const vegOnly = !!(m && m.veg_only);
     for (const r of diets.querySelectorAll('input:not([value="veg"])')) r.disabled = vegOnly;
-    if (vegOnly) diets.querySelector('input[value="veg"]').checked = true;
+    if (vegOnly && !diets.querySelector('input[value="veg"]').checked) {
+      diets.querySelector('input[value="veg"]').checked = true;
+      drawPrice();
+    }
   };
   messes.addEventListener('change', syncDiet);
 
@@ -929,35 +941,43 @@ function renderPrices() {
   const box = $('pplot');
   box.replaceChildren();
   const mine = recentSales();
-  const rows = meals().filter((m) => D.market.some((x) => x.meal === m) || mine.some((s) => s.meal === m));
+  // A row per meal and diet: the market's asks in that diet against your
+  // sales in it.
+  const rows = [];
+  for (const meal of meals()) {
+    for (const diet of ['veg', 'egg', 'nonveg']) {
+      const m = D.market.find((x) => x.meal === meal && x.diet === diet);
+      const ms = mine.filter((s) => s.meal === meal && priceDiet(s.diet) === diet);
+      if (m || ms.length) rows.push({ meal, diet, m, ms });
+    }
+  }
   if (!rows.length) {
     box.append(el('div', 'empty-note', 'No priced listings or sales in the last 4 weeks.'));
     return;
   }
   const vals = [];
-  for (const x of D.market) vals.push(x.q1, x.q3);
+  for (const r of rows) if (r.m) vals.push(r.m.q1, r.m.q3);
   for (const s of mine) vals.push(s.amount);
   let lo = Math.floor(Math.min(...vals) / 10) * 10, hi = Math.ceil(Math.max(...vals) / 10) * 10;
   if (hi - lo < 20) { lo = Math.max(0, lo - 10); hi = lo + 30; }
-  const W = 860, x0 = 124, x1 = W - 168, top = 22, rowH = 40, H = top + rows.length * rowH + 16;
+  const W = 860, x0 = 136, x1 = W - 168, top = 22, rowH = 40, H = top + rows.length * rowH + 16;
   const X = (v) => x0 + ((v - lo) / (hi - lo)) * (x1 - x0);
   const step = [5, 10, 20, 25, 50, 100].find((s) => (hi - lo) / s <= 6) || 100;
-  let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Your sale prices against the market's asking prices, by meal">`;
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Your sale prices against the market's asking prices, by meal and diet">`;
   for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
     svg += `<line x1="${X(v)}" x2="${X(v)}" y1="4" y2="${H - 22}" stroke="#252c3a" stroke-dasharray="2 4"/>`
       + `<text x="${X(v)}" y="${H - 6}" fill="#586076" font-size="10.5" text-anchor="middle">₹${v}</text>`;
   }
   const verdicts = [];
-  rows.forEach((meal, i) => {
+  rows.forEach(({ meal, diet, m, ms }, i) => {
     const y = top + i * rowH + 6;
-    const m = D.market.find((x) => x.meal === meal);
     svg += icon(meal).replace('<svg ', `<svg x="2" y="${y - 6}" width="12" height="12" `)
-      + `<text class="px" x="22" y="${y + 4}" fill="#8b94a7">${meal.toUpperCase()}</text>`;
+      + dietMark(diet).replace('<svg ', `<svg x="18" y="${y - 6}" width="12" height="12" `)
+      + `<text class="px" x="36" y="${y + 4}" fill="#8b94a7">${meal.toUpperCase()}</text>`;
     if (m) {
       svg += `<rect x="${X(m.q1)}" y="${y - 9}" width="${Math.max(2, X(m.q3) - X(m.q1))}" height="18" rx="4" fill="rgba(232,236,243,.14)"/>`
         + `<line x1="${X(m.median)}" x2="${X(m.median)}" y1="${y - 12}" y2="${y + 12}" stroke="#e8ecf3" stroke-opacity=".8" stroke-width="2" stroke-linecap="round"/>`;
     }
-    const ms = mine.filter((s) => s.meal === meal);
     ms.forEach((s, k) => {
       const cx = X(s.amount) + ((k % 3) - 1) * 2, cy = y + (((k * 37) % 13) - 6);
       svg += `<g class="dot" data-i="${D.sales.indexOf(s)}"><circle cx="${cx}" cy="${cy}" r="10" fill="transparent"/><circle cx="${cx}" cy="${cy}" r="4.5" fill="#ffc53d" stroke="#141923" stroke-width="2"/></g>`;
@@ -970,14 +990,14 @@ function renderPrices() {
     svg += `<g transform="translate(${W - 150} ${y - 9})"><rect width="${pw}" height="18" rx="9" fill="none" stroke="${hot ? 'rgba(255,197,61,.55)' : '#252c3a'}"/>`
       + `<text class="px pill" x="${pw / 2}" y="12.5" text-anchor="middle" font-size="8" fill="${hot ? '#ffc53d' : d == null ? '#586076' : '#8b94a7'}">${word}</text></g>`;
     if (d != null) svg += `<text x="${W}" y="${y + 4}" text-anchor="end" fill="#8b94a7" font-size="11">${signed(d)}</text>`;
-    verdicts.push({ meal, d, word, m, n: ms.length });
+    verdicts.push({ meal, diet, d, word, m, n: ms.length });
   });
   svg += '</svg>';
   box.append(svgEl(svg));
   for (const g of box.querySelectorAll('.dot')) {
     const s = D.sales[+g.dataset.i];
     tip(g, () => [
-      [{ t: `${messName(s.mess)} ${s.meal}`, c: 'nm', color: messColor(s.mess) }],
+      [{ t: `${messName(s.mess)} ${DIET_LABEL[priceDiet(s.diet)].toLowerCase()} ${s.meal}`, c: 'nm', color: messColor(s.mess) }],
       [{ t: `${fmtDay(s.date)} · `, c: 'c8' }, { t: s.name || fmtPhone(s.phone) || 'Unknown buyer', c: 'c8' }],
       null,
       [{ t: 'You sold at ', c: 'c7' }, { t: rupees(s.amount), c: 'c6' }],
@@ -996,34 +1016,45 @@ function renderEarnings() {
   const mine = recentSales();
   const days = [];
   for (let d = D.recent; d <= D.today; d = addDays(d, 1)) days.push(d);
+  // A card per mess and diet. Messes that serve non-veg always get both
+  // cards; egg only shows up once something sold as egg.
   const names = D.messes.map((m) => m.name);
-  if (mine.some((s) => !names.includes(s.mess))) names.push('');
-  const per = new Map(names.map((m) => [m, days.map(() => 0)]));
-  for (const s of mine) {
-    const row = per.get(names.includes(s.mess) ? s.mess : '');
-    row[days.indexOf(s.date)] += s.amount;
+  const messOf = (s) => (names.includes(s.mess) ? s.mess : '');
+  const keyOf = (mess, diet) => `${mess}|${diet}`;
+  const cards = [];
+  for (const m of [...D.messes, { name: '' }]) {
+    const sold = mine.filter((s) => messOf(s) === m.name);
+    for (const diet of ['veg', 'nonveg', 'egg']) {
+      const any = sold.some((s) => priceDiet(s.diet) === diet);
+      if (any || (m.name && diet === 'veg') || (m.name && diet === 'nonveg' && !m.veg_only)) cards.push({ mess: m.name, diet });
+    }
   }
+  const per = new Map(cards.map((k) => [keyOf(k.mess, k.diet), days.map(() => 0)]));
+  for (const s of mine) per.get(keyOf(messOf(s), priceDiet(s.diet)))[days.indexOf(s.date)] += s.amount;
   const mx = Math.max(1, ...[...per.values()].flat());
-  const totals = names.map((m) => sum(per.get(m)));
+  const totals = cards.map((k) => sum(per.get(keyOf(k.mess, k.diet))));
   const best = Math.max(...totals);
-  const top = totals.filter((t) => t === best).length === 1 && best > 0 ? names[totals.indexOf(best)] : null;
+  const top = totals.filter((t) => t === best).length === 1 && best > 0 ? totals.indexOf(best) : -1;
   const week = weekDates();
   const w0 = days.indexOf(week[0]), w1 = days.indexOf(week[6]);
 
-  names.forEach((m, mi) => {
-    const list = mine.filter((s) => (names.includes(s.mess) ? s.mess : '') === m);
+  cards.forEach(({ mess: m, diet }, ci) => {
+    const list = mine.filter((s) => messOf(s) === m && priceDiet(s.diet) === diet);
     const c = el('div', 'card');
     c.style.setProperty('--m', messColor(m));
     const head = el('div', 'card-head');
     head.append(svgEl(messIcon(m)));
     const nm = el('span', 'card-name', messName(m));
     nm.style.setProperty('color', messColor(m));
+    const dt = span('card-diet', dietMark(diet));
+    dt.append(DIET_LABEL[diet]);
+    nm.append(dt);
     head.append(nm);
-    if (m === top) head.append(el('span', 'verdict hot', 'TOP EARNER'));
+    if (ci === top) head.append(el('span', 'verdict hot', 'TOP EARNER'));
     const kpis = el('div', 'kpis');
     const kpi = (v, label) => { const k = el('div', 'kpi'); k.append(el('b', v == null ? 'none' : '', v == null ? '-' : v), el('span', '', label)); return k; };
     const med = median(list.map((s) => s.amount));
-    kpis.append(kpi(String(list.length), 'MEALS SOLD'), kpi(rupees(totals[mi]), 'EARNED'), kpi(med == null ? null : rupees(Math.round(med)), 'MEDIAN PRICE'));
+    kpis.append(kpi(String(list.length), 'MEALS SOLD'), kpi(rupees(totals[ci]), 'EARNED'), kpi(med == null ? null : rupees(Math.round(med)), 'MEDIAN PRICE'));
     const spark = el('div', 'spark');
     spark.style.setProperty('--n', days.length);
     if (w1 >= 0 || w0 >= 0) {
@@ -1034,7 +1065,7 @@ function renderEarnings() {
       band.style.setProperty('right', 'auto');
       spark.append(band);
     }
-    per.get(m).forEach((v, i) => {
+    per.get(keyOf(m, diet)).forEach((v, i) => {
       const bk = el('div', 'bk');
       if (v) {
         const bar = el('i');
@@ -1043,7 +1074,7 @@ function renderEarnings() {
       }
       const ds = list.filter((s) => s.date === days[i]);
       tip(bk, () => [
-        [{ t: `${messName(m)}, ${fmtDay(days[i])}`, c: 'nm', color: messColor(m) }],
+        [{ t: `${messName(m)} ${DIET_LABEL[diet].toLowerCase()}, ${fmtDay(days[i])}`, c: 'nm', color: messColor(m) }],
         ...(ds.length ? ds.map((s) => [{ t: `${cap(s.meal)} `, c: 'c7' }, { t: rupees(s.amount), c: 'c6' }, { t: ` · ${s.name || fmtPhone(s.phone) || 'Unknown buyer'}`, c: 'c8' }]) : [[{ t: 'No sales', c: 'c8' }]]),
         ds.length > 1 ? [{ t: 'Total ', c: 'c7' }, { t: rupees(v), c: 'cf' }] : null,
       ].filter((x) => x !== null));

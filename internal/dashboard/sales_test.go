@@ -28,9 +28,11 @@ func TestSales(t *testing.T) {
 	}
 	defer st.Close()
 
-	// The market asked 50, 60 and 70 for Kadamba lunch on the 2nd.
+	// The market asked 50, 60 and 70 for Kadamba lunch on the 2nd, and
+	// 120, 130 and 140 for its non-veg.
 	in := ingest.New(cfg, st)
-	for i, txt := range []string{"Selling kadamba lunch @50", "Selling kadamba lunch @60", "Selling kadamba lunch @70"} {
+	for i, txt := range []string{"Selling kadamba lunch @50", "Selling kadamba lunch @60", "Selling kadamba lunch @70",
+		"Selling kadamba nonveg lunch @120", "Selling kadamba nonveg lunch @130", "Selling kadamba nonveg lunch @140"} {
 		ts := time.Date(2026, 11, 2, 10, i, 0, 0, loc)
 		if err := in.Post(ctx, ingest.GroupPost{Chat: "g1@g.us", ID: string(rune('a' + i)), Sender: string(rune('1'+i)) + "1@s.whatsapp.net", TS: ts, Text: txt}); err != nil {
 			t.Fatal(err)
@@ -147,14 +149,15 @@ func TestSales(t *testing.T) {
 			t.Errorf("%s %s: got %s %s/%s, want %s %s/%s", tc.date, tc.meal, c.State, c.Mess, c.Diet, tc.want, tc.mess, tc.diet)
 		}
 	}
-	if c := cellAt(s, "2026-11-02", "lunch"); c.Ask == nil || *c.Ask != 60 {
-		t.Errorf("wasted lunch should be worth the 60 median, got %v", c.Ask)
+	// The wasted lunch was non-veg, so only the non-veg asks price it.
+	if c := cellAt(s, "2026-11-02", "lunch"); c.Ask == nil || *c.Ask != 130 {
+		t.Errorf("wasted non-veg lunch should be worth the 130 non-veg median, got %v", c.Ask)
 	}
 	if s.From != "2026-10-07" || s.Today != "2026-11-03" || len(s.Days) != 28 {
 		t.Errorf("window %s..%s, %d days", s.From, s.Today, len(s.Days))
 	}
 	m := s.Month
-	if m.Start != "2026-11-01" || m.Fee != 1434.5 || m.Bill == nil || m.Bill.Availed != 770 || m.Bill.Projected != 664.5 || m.Earned != 55 || m.Sold != 1 || m.Wasted != 1 || m.Potential != 60 || m.Unpriced != 0 {
+	if m.Start != "2026-11-01" || m.Fee != 1434.5 || m.Bill == nil || m.Bill.Availed != 770 || m.Bill.Projected != 664.5 || m.Earned != 55 || m.Sold != 1 || m.Wasted != 1 || m.Potential != 130 || m.Unpriced != 0 {
 		t.Errorf("month %+v", m)
 	}
 	if len(s.Sales) != 2 {
@@ -167,7 +170,9 @@ func TestSales(t *testing.T) {
 	if y := s.Sales[1]; y.State != "armed" || y.Phone != "" || y.Buyer != "77@lid" {
 		t.Errorf("armed %+v", y)
 	}
-	if len(s.Market) != 1 || s.Market[0].Meal != "lunch" || s.Market[0].Median != 60 || s.Market[0].Q1 != 55 || s.Market[0].Q3 != 65 {
+	// Lunch's spread for every diet, then veg and non-veg on their own.
+	if mk := s.Market; len(mk) != 3 || mk[0].Diet != "" || mk[0].Median != 95 ||
+		mk[1].Diet != "veg" || mk[1].Median != 60 || mk[1].Q1 != 55 || mk[1].Q3 != 65 || mk[2].Diet != "nonveg" || mk[2].Median != 130 {
 		t.Errorf("market %+v", s.Market)
 	}
 
