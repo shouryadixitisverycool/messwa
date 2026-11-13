@@ -135,6 +135,7 @@ var settings = []setting{
 	intSetting("sell.repost_messages", 0, func(c *Config) *int { return &c.Sell.RepostMessages }),
 	intSetting("sell.repost_listings", 0, func(c *Config) *int { return &c.Sell.RepostListings }),
 	intSetting("sell.max_reposts", 0, func(c *Config) *int { return &c.Sell.MaxReposts }),
+	secondsSetting("sell.negotiation_silence", MinNegotiationSilence, false, func(c *Config) *duration { return &c.Sell.NegotiationSilence }),
 	boolSetting("sell.accept_payment_images", func(c *Config) *bool { return &c.Sell.AcceptPaymentImages }),
 	boolSetting("mcp.sell_tasks", func(c *Config) *bool { return &c.MCP.SellTasks }),
 	listSetting("sold.emojis", 1, func(c *Config) *[]string { return &c.Sold.Emojis }),

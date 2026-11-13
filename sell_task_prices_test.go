@@ -187,7 +187,7 @@ func TestSetPricesListsOffersTheNewFloorMeets(t *testing.T) {
 		f.conn.emit(f.reply(buyerA, "40"))
 		f.conn.emit(f.reply(buyerB, "35"))
 		settle()
-		time.Sleep(sessionSilence + time.Second)
+		time.Sleep(f.silence() + time.Second)
 		synctest.Wait()
 		for _, buyer := range []string{buyerA.String(), buyerB.String()} {
 			if b := buyerStateOf(t, f, id, buyer); b.State != store.BuyerTimedOut {
@@ -334,6 +334,40 @@ func TestSetPricesSurvivesRestart(t *testing.T) {
 		settle()
 		if b := buyerState(t, f, id, buyerA); b.Agreed != "50.00" {
 			t.Fatalf("A = %+v", b)
+		}
+	})
+}
+
+// TestSetPricesFlaggedBuyerWritesAgain: a buyer listed for an offer the
+// new floor meets who then writes again is revived, leaves needs_you, and
+// gets the new range.
+func TestSetPricesFlaggedBuyerWritesAgain(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m := f.negotiatingManager(ctx, 40)
+		id, err := m.Start(ctx, 0, f.date, "lunch", 50, 60, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		f.conn.emit(f.reply(buyerA, "40"))
+		settle()
+		time.Sleep(f.silence() + time.Second)
+		synctest.Wait()
+		if err := m.SetPrices(ctx, id, 40, 60); err != nil {
+			t.Fatal(err)
+		}
+		if a := buyerState(t, f, id, buyerA); a.State != store.BuyerTimedOut || a.Note == "" {
+			t.Fatalf("A = %+v", a)
+		}
+		f.conn.emit(dm(buyerA, "40"))
+		settle()
+		a := buyerState(t, f, id, buyerA)
+		if a.Note != "" || a.Agreed != "40.00" || a.State != store.BuyerOffered {
+			t.Fatalf("A = %+v", a)
 		}
 	})
 }

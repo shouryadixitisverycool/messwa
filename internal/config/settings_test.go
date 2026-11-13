@@ -66,6 +66,8 @@ func TestWithSettingsRefuses(t *testing.T) {
 		"wrong type":             {"sell.show_price": raw("yes")},
 		"post gap too short":     {"sell.post_gap": raw(1)},
 		"repost too soon":        {"sell.repost_after": raw(60)},
+		"silence too short":      {"sell.negotiation_silence": raw(30)},
+		"silence too long":       {"sell.negotiation_silence": raw(31 * 60)},
 		"too many reposts":       {"sell.max_reposts": raw(13)},
 		"group count over":       {"sell.group_count": raw(2)},
 		"groups and count":       {"sell.group_count": raw(1), "sell.groups": raw([]string{"a@g.us"})},

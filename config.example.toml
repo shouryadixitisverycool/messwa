@@ -127,6 +127,12 @@ max_reposts = 6
 # sale; the log, sell_task_status and the sales page mark it unverified.
 # Off by default. Applies to group offers, sell tasks and deliver-qr -peer.
 accept_payment_images = false
+# How long a negotiating sell task waits for a buyer to answer before it
+# stops talking to them, 1m to 30m. A quiet buyer holds one of 10
+# negotiation slots and counts as competition, which slows the price drop;
+# nothing is reserved for them. A buyer who writes after this, while the
+# meal is still unsold and the task active, picks up where they left off.
+negotiation_silence = "10m"
 
 # Seasons split the year for the insights page. In a term everyone is
 # registered with a mess, so the market is far busier than in a break, and the

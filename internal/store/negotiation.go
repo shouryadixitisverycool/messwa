@@ -266,3 +266,95 @@ func (s *Store) ClaimTaskSale(ctx context.Context, taskID int64, d Delivery, p P
 	}
 	return true, tx.Commit()
 }
+
+// ReviveSellTaskBuyer puts a timed-out buyer back into negotiation after
+// they replied late. Their journaled haggle (ask, quotes, last offer,
+// message count) stays as it was, so the bot picks up where it stopped.
+// It reports false when the buyer isn't timed out (they passed, were
+// parked or skipped, or someone already revived them), the task isn't
+// active, or a payment for the meal was already claimed. The bot is talking
+// to them again, so a note from a lowered floor (see SetPrices) is
+// cleared; a payment to refund keeps its note.
+func (s *Store) ReviveSellTaskBuyer(ctx context.Context, id int64, peer string) (bool, error) {
+	r, err := s.db.ExecContext(ctx, `UPDATE sell_task_buyers SET state='negotiating',note=CASE WHEN refund='' THEN '' ELSE note END
+ WHERE task_id=? AND peer=? AND state='timed_out' AND `+activeTask+`
+ AND NOT EXISTS(SELECT 1 FROM qr_deliveries WHERE task_id=? AND state IN ('sending','sent'))`, id, peer, id, id)
+	if err != nil {
+		return false, err
+	}
+	c, err := r.RowsAffected()
+	return c == 1, err
+}
+
+// LateBuyer is a task a buyer timed out of.
+type LateBuyer struct {
+	Task SellTask
+	Peer string // as the task recorded them
+}
+
+// TimedOutTasks returns the tasks created since since in which any of peers
+// timed out, newest first, and reports whether any of peers is a buyer
+// in a task that is still active.
+func (s *Store) TimedOutTasks(ctx context.Context, since time.Time, peers ...string) ([]LateBuyer, bool, error) {
+	var out []LateBuyer
+	active := false
+	seen := map[int64]bool{}
+	for _, p := range peers {
+		if p == "" {
+			continue
+		}
+		rows, err := s.db.QueryContext(ctx, `SELECT b.peer,b.state,`+sellTaskColsT+`
+ FROM sell_task_buyers b JOIN sell_tasks t ON t.id=b.task_id
+ WHERE ? IN (b.peer, b.alt) AND (t.state='active' OR t.created_at>=?) ORDER BY t.id DESC`, p, since.Unix())
+		if err != nil {
+			return nil, false, err
+		}
+		for rows.Next() {
+			var lb LateBuyer
+			var state string
+			t, err := scanSellTask(prefixScan{rows, []any{&lb.Peer, &state}})
+			if err != nil {
+				rows.Close()
+				return nil, false, err
+			}
+			lb.Task = t
+			if t.State == TaskActive {
+				active = true
+			}
+			if state == BuyerTimedOut && !seen[t.ID] {
+				seen[t.ID] = true
+				out = append(out, lb)
+			}
+		}
+		if err := rows.Close(); err != nil {
+			return nil, false, err
+		}
+	}
+	return out, active, nil
+}
+
+// ToldSoldLate claims the one "sold sorry" a timed-out buyer gets when
+// they write after the task sold the meal. It reports false when the task
+// didn't sell, the buyer isn't timed out, or they were already told.
+func (s *Store) ToldSoldLate(ctx context.Context, id int64, peer string) (bool, error) {
+	r, err := s.db.ExecContext(ctx, `UPDATE sell_task_buyers SET state='told_sold'
+ WHERE task_id=? AND peer=? AND state='timed_out'
+ AND (EXISTS(SELECT 1 FROM sell_tasks WHERE id=? AND state='sold')
+  OR EXISTS(SELECT 1 FROM qr_deliveries WHERE task_id=? AND state='sent'))`, id, peer, id, id)
+	if err != nil {
+		return false, err
+	}
+	c, err := r.RowsAffected()
+	return c == 1, err
+}
+
+// sellTaskColsT is sellTaskCols for a query that names sell_tasks t.
+const sellTaskColsT = `t.id,t.date,t.meal,t.min_paise,t.max_paise,t.user_id,t.account_hash,t.mess,t.diet,t.handoff,t.state,t.detail,t.created_at,t.ends_at,coalesce(t.ended_at,0),t.target_paise`
+
+// prefixScan scans extra leading columns before a sell task's.
+type prefixScan struct {
+	row   interface{ Scan(...any) error }
+	extra []any
+}
+
+func (p prefixScan) Scan(dest ...any) error { return p.row.Scan(append(p.extra, dest...)...) }
