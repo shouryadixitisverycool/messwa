@@ -152,17 +152,17 @@ The MCP tools are `mark_sell_task_sold`, `add_sell_task_buyer`, `mute_sell_task_
 
 ### Settings page
 
-The account page lets everyone edit their own sell-task enable switch, offer groups, prices in posts, repost rules, buyer policy, handoff, negotiation timeout, image payments unsaved chat retention and monthly fee fallback. These settings are stored in that user's database and apply to their next actions and supported live task settings. New users start with conservative selling defaults, including image payments off. File values remain the fallback for the migrated admin. There is no configured phone number or UPI address to migrate: sender identity comes from the user's device and payment prompts use WhatsApp Pay.
+Everyone edits their own selling settings on the OFFER, REPOST and BUYERS tabs: the sell-task switch, offer groups, prices in posts, repost rules, buyer policy, handoff, image payments, unsaved chat retention and the monthly target. These settings are stored in that user's database and apply to their next actions and supported live task settings. New users start with conservative selling defaults, including image payments off. File values remain the fallback for the migrated admin. There is no configured phone number or UPI address to migrate: sender identity comes from the user's device and payment prompts use WhatsApp Pay.
 
-`settings.html` has a YOU tab for everyone and additional tabs for admins. Selling tabs edit that admin's own settings. Market and calendar tabs remain admin-only:
+`settings.html` has YOU, OFFER, REPOST and BUYERS tabs for everyone. The MARKET and CALENDAR tabs change messwa for everyone, so only admins get them:
 
 | Tab | Settings |
 | --- | --- |
-| OFFER | `[mcp] sell_tasks`, `[sell] groups` or `group_count`, `post_gap`, `show_price`, `mention_extras`, with a preview of the group post |
+| OFFER | `[mcp] sell_tasks`, `[sell] groups` or `group_count`, `post_gap`, `show_price`, `mention_extras`, `[sales] monthly_fee`, with a preview of the group post |
 | REPOST | `[sell] repost`, `repost_after`, `repost_messages`, `repost_listings`, `max_reposts` |
-| BUYERS | `[sell] buyers`, `handoff`, `accept_plain_dms`, `accept_payment_images` |
-| MARKET | `[sold]` emojis, closed emojis, words and `admins_count`, `[dedupe] window`, `[dms] retention` |
-| CALENDAR | meal times, `[[seasons]]`, each mess's `veg_only`, `[sales] monthly_fee` |
+| BUYERS | `[sell] buyers`, `handoff`, `accept_plain_dms`, `accept_payment_images`, `[dms] retention` |
+| MARKET | `[sold]` emojis, closed emojis, words and `admins_count`, `[dedupe] window` |
+| CALENDAR | meal times, `[[seasons]]`, each mess's `veg_only` |
 
 Edits wait for SAVE. messwa stores what you save in a `settings` table in the user's private `messwa.db`, on top of `config.toml`: a value equal to the file's isn't stored, so it keeps following the file. Every command reads the saved values when it starts, and `deliver-qr` flags still override them for one run.
 

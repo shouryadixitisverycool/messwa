@@ -1,10 +1,11 @@
 'use strict';
 
 // The settings page. Everyone gets the YOU tab, which is saved in this
-// browser. Admins also get the tabs that change config.toml's settings for
-// everyone: edits collect in a draft until Save sends them to
-// /api/settings. A value that matches config.toml isn't saved, so it keeps
-// following the file.
+// browser, and the OFFER, REPOST and BUYERS tabs, which set how messwa
+// sells from their own WhatsApp. Admins also get MARKET and CALENDAR,
+// which change messwa for everyone. Edits collect in a draft until Save
+// sends them to /api/settings. A value that matches the default isn't
+// saved, so it keeps following config.toml.
 
 $('logo').append(svgEl(icon('paper')));
 $('navIcon').append(svgEl(icon('prev')));
@@ -78,8 +79,14 @@ function set(key, v) {
   draft[key] = v;
   repaint();
 }
+// Members get only their selling settings, so painters for the admin tabs
+// find their keys missing and throw. Each runs on its own, so one hidden
+// tab can't stop the rest.
+let isAdmin = false;
 function repaint() {
-  for (const p of painters) p();
+  for (const p of painters) {
+    try { p(); } catch (e) { if (isAdmin) console.error(e); }
+  }
   paintSave();
 }
 
@@ -555,9 +562,10 @@ paint(() => { if (document.activeElement !== fee) fee.value = String(draft['sale
 
 (async () => {
   const m = await me();
-  $('role').textContent = m.role === 'admin' ? 'Admin: these change messwa for everyone' : 'Saved in this browser';
+  const admin = m.role === 'admin';
+  isAdmin = admin;
+  $('role').textContent = admin ? 'Selling tabs are yours. 👑 tabs change messwa for everyone.' : 'Selling tabs are for your own WhatsApp.';
   paintTiles(m);
-  if (m.role !== 'admin') return;
   try {
     const r = await fetch('api/settings', { cache: 'no-store' });
     if (r.status === 401) { toLogin(); return; }
@@ -569,7 +577,8 @@ paint(() => { if (document.activeElement !== fee) fee.value = String(draft['sale
   }
   draft = clone(D.values);
   $('tabs').hidden = false;
-  for (const t of document.querySelectorAll('[data-admin]')) t.hidden = false;
+  for (const t of document.querySelectorAll('[data-mine]')) t.hidden = false;
+  if (admin) for (const t of document.querySelectorAll('[data-admin]')) t.hidden = false;
   $('save').hidden = false;
   repaint();
   const last = store.get('mah-settings-tab');

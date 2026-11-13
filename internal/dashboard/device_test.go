@@ -103,15 +103,23 @@ func TestAccountDashboardScopesSalesDevicesAndSettings(t *testing.T) {
 		if res.StatusCode != 403 || devices[client.user.ID].unlinks != 0 {
 			t.Fatal("unlink bypassed CSRF")
 		}
-		res = client.send(t, "PUT", "/api/account-settings", map[string]any{"sell.show_price": false})
+		res = client.send(t, "PUT", "/api/settings", map[string]any{"values": map[string]any{"sell.show_price": false}})
 		res.Body.Close()
-		if res.StatusCode != 204 {
+		if res.StatusCode != 200 {
 			t.Fatal(res.StatusCode)
 		}
-		res = client.send(t, "PUT", "/api/account-settings", map[string]any{"sold.admins_count": true})
+		var got struct{ Values map[string]any }
+		client.get(t, "/api/settings", &got)
+		if _, ok := got.Values["sold.admins_count"]; ok == (client == member) {
+			t.Errorf("%s sees market rules: %v", client.user.Name, ok)
+		}
+		if got.Values["sell.show_price"] != false {
+			t.Errorf("%s's show_price didn't stick: %v", client.user.Name, got.Values["sell.show_price"])
+		}
+		res = client.send(t, "PUT", "/api/settings", map[string]any{"values": map[string]any{"sold.admins_count": true}})
 		res.Body.Close()
-		if res.StatusCode != 400 {
-			t.Fatal("member account endpoint changed market rules")
+		if client == member && res.StatusCode != 403 {
+			t.Fatal("member changed market rules")
 		}
 	}
 	if res := member.get(t, "/api/insights", nil); res.StatusCode != 403 {
