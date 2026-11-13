@@ -20,8 +20,8 @@ func TestMedianAsk(t *testing.T) {
 	}
 	cases := []struct {
 		name, date, meal, mess, diet string
-		want                   float64
-		ok                     bool
+		want                         float64
+		ok                           bool
 	}{
 		{"same weekday at this mess when the serving has too few", "2026-11-11", "lunch", "kadamba", "", 100, true},
 		{"serving at this mess", "2026-11-10", "lunch", "kadamba", "veg", 45, true},
