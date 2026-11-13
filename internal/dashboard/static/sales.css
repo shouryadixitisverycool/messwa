@@ -225,8 +225,10 @@
 .sell-btn:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 .sell-form { display: grid; gap: 12px; margin-top: 16px; }
 .sell-form label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
-.sell-form input, .sell-form select { width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--slot); color: var(--text); font: inherit; }
-.sell-form input:focus-visible, .sell-form select:focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; }
+/* Text fields only: the price slider, mess chips and QR picker are inputs
+   too, and this box would cover the slider's track and its other handle. */
+.sell-form input:not([type=range], [type=radio], [type=file]), .sell-form select { width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--slot); color: var(--text); font: inherit; }
+.sell-form input:not([type=range], [type=radio], [type=file]):focus-visible, .sell-form select:focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; }
 .sell-form .sell-note, .sell-form .sell-err, .sell-form .sell-acts { margin-top: 0; }
 @media (max-width: 420px) { .sell-tools { grid-template-columns: 1fr; } }
 
