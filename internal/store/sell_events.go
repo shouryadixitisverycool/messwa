@@ -59,6 +59,10 @@ const (
 	// EventPrices is a range edit on a running task. N: the new floor,
 	// paise; Text: "min-max was min-max", INR.
 	EventPrices = "prices"
+	// EventBuyPost is a DM to someone whose buy post in a group asked for
+	// this meal. Peer: the poster; N: the listing ID. The post's text is
+	// not kept.
+	EventBuyPost = "buy_post"
 )
 
 // Event kinds for what you did by hand. Peer is the buyer.

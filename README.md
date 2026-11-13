@@ -160,7 +160,7 @@ Everyone edits their own selling settings on the OFFER, REPOST and BUYERS tabs: 
 | --- | --- |
 | OFFER | `[mcp] sell_tasks`, `[sell] groups` or `group_count`, `post_gap`, `show_price`, `mention_extras`, `[sales] monthly_fee`, with a preview of the group post |
 | REPOST | `[sell] repost`, `repost_after`, `repost_messages`, `repost_listings`, `max_reposts` |
-| BUYERS | `[sell] buyers`, `handoff`, `accept_plain_dms`, `accept_payment_images`, `[dms] retention` |
+| BUYERS | `[sell] buyers`, `handoff`, `accept_plain_dms`, `message_buy_posts`, `accept_payment_images`, `[dms] retention` |
 | MARKET | `[sold]` emojis, closed emojis, words and `admins_count`, `[dedupe] window` |
 | CALENDAR | meal times, `[[seasons]]`, each mess's `veg_only` |
 
@@ -429,6 +429,7 @@ isn't today's.
 | `mention_extras` | `-mention-extras` | `false` | List the extras registered for that meal |
 | `handoff` | `-handoff` | `never` | When to hand the buyer's chat to you, see below |
 | `accept_plain_dms` | `-accept-plain-dms` | `false` | Let DMs that ask about the offer without quoting it join the queue, see below |
+| `message_buy_posts` | none | `true` | Sell tasks only: message open buy posts for the meal and queue the posters, see [Sell tasks](#sell-tasks) |
 | `buyers` | `-buyers` | `anyone` | Who may buy. `unsaved_only` skips saved contacts, see below |
 | `repost` | `-repost` | `true` | Post a fresh copy in a group once the last one has dropped out of view, see below |
 | `repost_after` | `-repost-after` | `10m` | Repost once a copy is this old. `0s` turns it off |
@@ -846,6 +847,7 @@ What a task does:
 1. Checks your portal registration for that meal with your saved mess API key, the same way `deliver-qr -portal-qr` does.
 2. Posts the offer using the `[sell]` settings, like `deliver-qr` does with no flags (see [Offer settings](#offer-settings)): `groups` or `group_count`, `post_gap` between copies, `show_price`, `mention_extras` and `accept_plain_dms`. With `show_price` the post shows `max_price`, e.g. `sell bakul non-veg lunch 60`. If `[sell]` names no groups, the task posts in the first group in `groups`. A group that can't be found is skipped; the task fails only if no copy posts. Until the meal sells, it reposts in each group under the `repost` settings (see [Reposts](#offer-settings)).
 3. Takes everyone who replies privately to any copy, in reply order. A plain DM that doesn't quote a post counts only with `[sell] accept_plain_dms = true`, under the rules in [Offer settings](#offer-settings). With `[sell] buyers = "unsaved_only"`, saved contacts are skipped and get nothing (see [Saved contacts](#offer-settings)).
+   Also goes after people who asked for the meal first. With `[sell] message_buy_posts` (on by default), right after the first copy posts and then every minute, the task finds open buy posts in the groups for the same meal and date that name its mess or no mess, and its diet or no diet. "Open" means not sold, withdrawn or deleted. Each poster gets one private reply to their post, like `have bakul non-veg lunch`, and joins the queue as if they had replied to the offer, so a negotiating task follows with its price. One run of a task messages at most 10 posters, stops while it has 20 or fewer sends left, and never messages anyone already among its buyers, so a restart doesn't repeat it. Tasks with `handoff = on_reply` skip this, and `buyers = "unsaved_only"` still applies. `sell_task_events` logs each one as `buy_post`.
 4. With `max_price` above `min_price`, negotiates with each of them at once (see [Negotiation](#negotiation)). Buyers who agree a price queue to pay, highest price first and in the order they agreed among equal prices. With the two prices equal, every buyer queues to pay that price.
 5. Asks the first buyer in the pay queue to pay their price within two minutes. They can drop out with `not interested`, `nvm` and the like. Then the next buyer gets a turn, as in `deliver-qr -group`.
 6. Sends the QR after a matching WhatsApp Pay payment (or, with `[sell] accept_payment_images = true`, an unverified image from that buyer after the prompt; see [Payment images](#offer-settings)), stops posting copies, tells everyone else who replied `sold sorry`, reacts ✅ to the meal's offer posts, and ends as `sold`.
@@ -871,7 +873,7 @@ Until the meal ends, a private reply to a cancelled task's post goes to another 
 `run` enforces these rules on every message, so the agent can't get around them:
 
 - Nothing is sent unless a task is active. The one exception is a QR for a payment that came in while the task was active. It still goes out if you cancel a moment later, and the task then ends as `sold`.
-- Besides one claimed post per group, a task messages only people its posts queued: those who replied privately to one, to a cancelled task's post for the same meal, or with `accept_plain_dms`, DMed about it. After the QR goes out it may also react ✅ to the meal's recorded offer posts, and to nothing else. After a cancel it may delete its own posts.
+- Besides one claimed post per group, a task messages only people its posts queued: those who replied privately to one, to a cancelled task's post for the same meal, with `accept_plain_dms`, DMed about it, or with `message_buy_posts`, posted a buy request for the meal. After the QR goes out it may also react ✅ to the meal's recorded offer posts, and to nothing else. After a cancel it may delete its own posts.
 - With `[sell] buyers = "unsaved_only"`, a task never queues or messages a saved contact. If you switch to it while a task is running, the restart skips saved contacts still waiting in the queue. A buyer already asked to pay keeps their turn, and gets the QR if they pay.
 - No buyer is quoted, agreed with or asked for less than `min_price`. The store checks this itself on every quote, agreement, reservation and sale, whatever the negotiation decided. The one exception is a price the bot already quoted or agreed with that buyer before `set_sell_task_prices` raised the floor: that price stands. A payment must match exactly the price agreed with that buyer, or a higher one the bot quoted them.
 - A task sends at most 12 messages a minute and 80 in total. Reposts count toward both, and a task stops reposting when it has 20 sends left, keeping those for buyers. All tasks together send at most 15 a minute. One buyer gets at most 6 negotiation messages. The ✅ reactions after a sale skip the per-minute wait, so they don't time out behind the sale's own sends.

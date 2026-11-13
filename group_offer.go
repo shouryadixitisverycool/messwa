@@ -106,6 +106,14 @@ func (q *offerQueue) add(peer types.JID) { q.addFrom(peer, peer, "") }
 // addFrom queues peer, who replied from chat (their LID chat, say), and
 // remembers the push name from their first reply.
 func (q *offerQueue) addFrom(peer, chat types.JID, name string) bool {
+	return q.addAfter(peer, chat, name, nil)
+}
+
+// addAfter is addFrom with a step between recording peer and queueing
+// them, such as a first message to someone who never wrote. before runs
+// with peer recorded by join and seen, so their replies already count; if
+// it fails, peer stays seen but never reaches the queue.
+func (q *offerQueue) addAfter(peer, chat types.JID, name string, before func() bool) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.closed || q.seen[peer] {
@@ -115,13 +123,21 @@ func (q *offerQueue) addFrom(peer, chat types.JID, name string) bool {
 		return false
 	}
 	q.seen[peer] = true
-	q.buyers = append(q.buyers, peer)
 	if name != "" {
 		if q.names == nil {
 			q.names = make(map[types.JID]string)
 		}
 		q.names[peer] = name
 	}
+	if before != nil {
+		q.mu.Unlock()
+		ok := before()
+		q.mu.Lock()
+		if !ok || q.closed {
+			return false
+		}
+	}
+	q.buyers = append(q.buyers, peer)
 	select {
 	case q.ready <- struct{}{}:
 	default:
@@ -161,6 +177,13 @@ func (q *offerQueue) joined() bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return len(q.seen) > 0
+}
+
+// isClosed reports whether the queue stopped taking buyers.
+func (q *offerQueue) isClosed() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.closed
 }
 
 // waiting is how many buyers are queued.

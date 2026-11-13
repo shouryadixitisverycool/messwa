@@ -43,6 +43,16 @@ func sayOpening(price int, day string) reply {
 	return r
 }
 
+// sayHave opens a chat with someone whose buy post asked for this meal,
+// as a private reply to that post. what is the mess, diet and meal, e.g.
+// "bakul non-veg lunch". The price follows separately.
+func sayHave(what, day string) reply {
+	if day != "" {
+		what += " for " + day
+	}
+	return oneOf(msg("have "+what), msg("i have "+what), msg(what+" available"))
+}
+
 // sayCounter comes down to price. The first counter offers it, later ones
 // ask.
 func sayCounter(price, round int) reply {
