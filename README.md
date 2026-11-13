@@ -195,8 +195,9 @@ To preview without the live service, `messwa dashboard -at "2026-11-02 12:45"` s
 | `start_sell_task` | Only with `[mcp] sell_tasks = true`. Sells one of your registered meals: date, meal, `min_price`, `max_price` in rupees, negotiating in between. Admins only |
 | `sell_task_status` | Only with `sell_tasks` on. One task by id, or the active and last 24 hours' tasks: state, posts, buyers and where each stands in the haggle, buyers who need you, sale. Admins only |
 | `cancel_sell_task` | Only with `sell_tasks` on. Stops a task and deletes its group posts, unless `keep_posts` is set. Admins only |
+| `set_sell_task_prices` | Only with `sell_tasks` on. Changes an active task's `min_price` and `max_price` in place, without reposting (see [Changing prices](#changing-prices)). Admins only |
 
-Every tool except `start_sell_task` and `cancel_sell_task` is read-only, and those two don't exist unless you turn them on.
+Every tool except `start_sell_task`, `cancel_sell_task` and `set_sell_task_prices` is read-only, and those three don't exist unless you turn them on.
 
 Each MCP request acts as a messwa user. A client sends `Authorization: Bearer mwa_...`, a token made on the account page or with `messwa user token`. Tokens are stored as SHA-256 hashes, shown once, and stop working on the next request after they're revoked or their user is disabled. Two more ways in act as the owner (the first admin):
 
@@ -826,11 +827,22 @@ Until the meal ends, a private reply to a cancelled task's post goes to another 
 - Nothing is sent unless a task is active. The one exception is a QR for a payment that came in while the task was active. It still goes out if you cancel a moment later, and the task then ends as `sold`.
 - Besides one claimed post per group, a task messages only people its posts queued: those who replied privately to one, to a cancelled task's post for the same meal, or with `accept_plain_dms`, DMed about it. After the QR goes out it may also react ✅ to the meal's recorded offer posts, and to nothing else. After a cancel it may delete its own posts.
 - With `[sell] buyers = "unsaved_only"`, a task never queues or messages a saved contact. If you switch to it while a task is running, the restart skips saved contacts still waiting in the queue. A buyer already asked to pay keeps their turn, and gets the QR if they pay.
-- No buyer is quoted, agreed with or asked for less than `min_price`. The store checks this itself on every quote, agreement, reservation and sale, whatever the negotiation decided. A payment must match exactly the price agreed with that buyer, or a higher one the bot quoted them.
+- No buyer is quoted, agreed with or asked for less than `min_price`. The store checks this itself on every quote, agreement, reservation and sale, whatever the negotiation decided. The one exception is a price the bot already quoted or agreed with that buyer before `set_sell_task_prices` raised the floor: that price stands. A payment must match exactly the price agreed with that buyer, or a higher one the bot quoted them.
 - A task sends at most 12 messages a minute and 80 in total. Reposts count toward both, and a task stops reposting when it has 20 sends left, keeping those for buyers. All tasks together send at most 15 a minute. One buyer gets at most 6 negotiation messages. The ✅ reactions after a sale skip the per-minute wait, so they don't time out behind the sale's own sends.
 - A task stops at the meal's end time.
 
 Each send is written to the database before it goes out: each group post, each negotiation message, each payment prompt, each `sold sorry`, and each once-only line (`only whatsapp pay sorry`, the screenshot reply). The QR goes through the existing delivery ledger. When `run` restarts, it resumes active tasks before reconnecting and never repeats a claimed send. Replies to copies from before the restart still count, and groups that had no copy yet get one, `post_gap` apart. Each repost is claimed with its copy number before it goes out, so a restart never posts the same repost twice, and the next one is due from the last copy's time, not from the restart. A buyer whose turn was under way keeps it, with at least 30 seconds after the restart, so a payment sent while `run` was down still counts. Buyers who were negotiating carry on from the bot's last price, and buyers who had agreed keep their place in the pay queue. A post or QR send that was claimed but never confirmed is not retried. A task with an unconfirmed QR send ends as `failed`; check the buyer's chat. Turning `sell_tasks` off cancels active tasks on the next start.
+
+#### Changing prices
+
+`set_sell_task_prices` takes a task id, `min_price` and `max_price` and changes them while the task runs. The posts stay up, nobody is messaged, and every buyer keeps their place. Use it instead of cancelling and starting a new task, which reposts in every group and drops every haggle.
+
+- Buyers mid-haggle get the new range on their next message. The target (the meal's usual price, clamped to the range) is worked out again, and `sell_task_status` shows it as `target_price`.
+- A price the bot already said stays said. A raised floor stops the bot going lower than a buyer's current ask but never raises it, and a buyer who agreed below the new floor still gets their turn at that price. A lower `max_price` lowers asks above it.
+- New buyers open at the new `max_price`, and reposts show it with `show_price`. A buyer who pays the old posted price still counts.
+- When the floor drops, buyers who already left (timed out, passed, or parked) with a last offer at or above the new floor show under `needs_you`, saying what they offered. The bot doesn't message them. If you tell one to go ahead, a WhatsApp Pay payment of their offer from them gets the QR, as long as nobody holds the meal. A timed-out buyer who writes again is picked back up by the bot at the new range, and leaves `needs_you`.
+- A negotiating task must keep `max_price` above `min_price`, and a fixed-price task must keep them equal. Cancel and start again to switch.
+- The task must be active. The new prices are saved, so a restart keeps them. Each change goes in the task's event log, and `sell_task_status` lists them under `price_changes` with the old and new range.
 
 #### Negotiation
 
@@ -855,7 +867,7 @@ After two counters the next one is its lowest. A buyer still below that after th
 
 **Agreeing and paying.** A buyer who agrees joins the pay queue. If nobody is paying, they get the usual payment prompt at once, at the agreed price. If someone is, they hear `ok 50`, then `someone else is paying rn, if they dont in 2 min its yours`, and get the prompt when their turn comes. A buyer who pays a price the bot quoted them before their turn gets the meal if nobody holds it. If someone does, that payment isn't honoured, and the buyer shows in `needs_you` with the amount to send back.
 
-**Buyers who need you.** The bot stops talking to a buyer, without ending the task, when they send two messages it can't read in a row (it restates its price once first), stay below its lowest, ask to pay some other way a second time, say they paid but no WhatsApp Pay payment arrives within a minute, or reach the limit of 6 replies (a two-message reply counts once). `sell_task_status` lists them under `needs_you` with why, a `wa.me` link, the bot's last price and their last offer. To sell to one of them yourself, cancel the task and use `deliver-qr -peer`.
+**Buyers who need you.** The bot stops talking to a buyer, without ending the task, when they send two messages it can't read in a row (it restates its price once first), stay below its lowest, ask to pay some other way a second time, say they paid but no WhatsApp Pay payment arrives within a minute, or reach the limit of 6 replies (a two-message reply counts once). `sell_task_status` lists them under `needs_you` with why, a `wa.me` link, the bot's last price and their last offer. To sell to one of them yourself, cancel the task and use `deliver-qr -peer`. Lowering the floor also lists buyers whose offer it now meets; see [Changing prices](#changing-prices).
 
 A negotiation times out when the buyer has been quiet for `[sell] negotiation_silence` (10 minutes by default, 1 to 30) after the bot's last message, or after six minutes in all, or the silence if that's longer. At most 10 buyers negotiate at once; the rest wait their turn. Nothing is reserved for a quiet buyer, but they hold one of those 10 slots and count as competition, which slows the price drop.
 

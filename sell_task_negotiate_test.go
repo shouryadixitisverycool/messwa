@@ -639,6 +639,9 @@ func TestNegotiationNoReviveAfterPass(t *testing.T) {
 		synctest.Wait()
 		f.conn.emit(f.reply(buyerA, "price?"))
 		settle()
+		// The first pass gets one lower price; the second ends A as passed.
+		f.conn.emit(dm(buyerA, "not interested"))
+		settle()
 		f.conn.emit(dm(buyerA, "not interested"))
 		settle()
 		// The first pass gets one counter; only the second ends negotiation.

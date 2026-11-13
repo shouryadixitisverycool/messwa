@@ -220,6 +220,35 @@ func (s *Store) SellTasks(ctx context.Context, since time.Time) ([]SellTask, err
 	return out, rows.Err()
 }
 
+// SetSellTaskPrices changes an active task's floor and opening price and
+// returns the task as it was before. It fails when the task has ended or
+// the prices don't make sense; whether the task negotiates is the caller's
+// rule to check.
+func (s *Store) SetSellTaskPrices(ctx context.Context, id, minPaise, maxPaise int64) (SellTask, error) {
+	if minPaise <= 0 || maxPaise < minPaise {
+		return SellTask{}, errors.New("prices must be positive with max at least min")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return SellTask{}, err
+	}
+	defer tx.Rollback()
+	old, err := scanSellTask(tx.QueryRowContext(ctx, `SELECT `+sellTaskCols+` FROM sell_tasks WHERE id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return SellTask{}, fmt.Errorf("no sell task %d", id)
+	}
+	if err != nil {
+		return SellTask{}, err
+	}
+	if old.State != TaskActive {
+		return old, fmt.Errorf("sell task %d is %s, not active", id, old.State)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE sell_tasks SET min_paise=?,max_paise=? WHERE id=? AND state='active'`, minPaise, maxPaise, id); err != nil {
+		return old, err
+	}
+	return old, tx.Commit()
+}
+
 // EndSellTask moves an active task to its final state. It reports false
 // when the task had already ended.
 func (s *Store) EndSellTask(ctx context.Context, id int64, state, detail string, at time.Time) (bool, error) {
@@ -420,7 +449,8 @@ func (s *Store) MoveSellTaskBuyer(ctx context.Context, id int64, peer, from, to,
 }
 
 // ArmTaskDelivery reserves the meal for one buyer of an active task at a
-// price no lower than the task's floor. Like ArmNewDelivery, it fails when
+// price no lower than the task's floor, or one the bot already quoted or
+// agreed with them before a range edit raised it. Like ArmNewDelivery, it fails when
 // the meal already has a delivery record.
 func (s *Store) ArmTaskDelivery(ctx context.Context, taskID int64, d Delivery) (time.Time, error) {
 	amount, err := ParsePaise(d.Amount)
@@ -444,7 +474,10 @@ func (s *Store) ArmTaskDelivery(ctx context.Context, taskID int64, d Delivery) (
 	case date != d.Date || meal != d.Meal:
 		return time.Time{}, errors.New("delivery is for a different meal than the task")
 	case amount < minPaise:
-		return time.Time{}, fmt.Errorf("INR %s is below the task's floor of INR %s", d.Amount, FormatPaise(minPaise))
+		// A price agreed before a range edit raised the floor still stands.
+		if ok, err := priceHonoured(ctx, tx, taskID, d.Peer, amount); err != nil || !ok {
+			return time.Time{}, errors.Join(err, fmt.Errorf("INR %s is below the task's floor of INR %s", d.Amount, FormatPaise(minPaise)))
+		}
 	}
 	r, err := tx.ExecContext(ctx, `INSERT INTO qr_deliveries(date,meal,peer,amount,image_hash,armed_at,mess,diet,task_id)
  VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(date,meal) DO NOTHING`, d.Date, d.Meal, d.Peer, d.Amount, d.ImageHash, d.ArmedAt.Unix(), d.Mess, d.Diet, taskID)

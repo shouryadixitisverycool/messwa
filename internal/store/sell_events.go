@@ -52,6 +52,9 @@ const (
 	// A private reply to a cancelled task's post that this task took over.
 	// Peer: the buyer; Text: the cancelled task's ID.
 	EventAdopted = "adopted"
+	// EventPrices is a range edit on a running task. N: the new floor,
+	// paise; Text: "min-max was min-max", INR.
+	EventPrices = "prices"
 )
 
 type SellEvent struct {
