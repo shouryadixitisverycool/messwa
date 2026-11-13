@@ -154,8 +154,11 @@ type sale struct {
 	Ask    *float64 `json:"ask,omitempty"` // median asking price for that serving
 }
 
+// mealMarket is the spread of asks for one meal in one diet: veg, egg,
+// nonveg, or "" for every diet together.
 type mealMarket struct {
 	Meal   string  `json:"meal"`
+	Diet   string  `json:"diet"`
 	Q1     float64 `json:"q1"`
 	Median float64 `json:"median"`
 	Q3     float64 `json:"q3"`
@@ -309,8 +312,10 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 	}
 	asks := newAsks(ps, ymd(recent))
 	for _, m := range cfg.Meals {
-		if mm, ok := asks.market(m.Name); ok {
-			out.Market = append(out.Market, mm)
+		for _, d := range []string{"", "veg", "egg", "nonveg"} {
+			if mm, ok := asks.market(m.Name, d); ok {
+				out.Market = append(out.Market, mm)
+			}
 		}
 	}
 
@@ -462,7 +467,7 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 				c.State = "selling"
 			}
 			if c.State != "none" && c.State != "ate" {
-				c.Ask = asks.estimate(sd.Date, w.Meal, c.Mess)
+				c.Ask = asks.estimate(sd.Date, w.Meal, c.Mess, c.Diet)
 			}
 			if c.State == "wasted" && !day.Before(monthStart) {
 				out.Month.Wasted++
@@ -485,7 +490,7 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 
 	for i := range out.Sales {
 		s := &out.Sales[i]
-		s.Ask = asks.estimate(s.Date, s.Meal, s.Mess)
+		s.Ask = asks.estimate(s.Date, s.Meal, s.Mess, s.Diet)
 		if (s.State == "sold" || s.State == "sending") && s.Date >= out.Month.Start && s.Date <= out.Today {
 			out.Month.Earned += s.Amount
 			out.Month.Sold++
@@ -526,7 +531,7 @@ func friendMeals(ctx context.Context, srv *mcpserver.Server, sched *meals.Schedu
 		base, _, _ := strings.Cut(m.Slot, "#")
 		f := friendMeal{Date: m.Date, Meal: base, Slot: m.Slot, Friend: m.Friend, Extras: m.Extras, State: "ended", Task: running[k]}
 		f.Mess, f.Diet = (portal.Registration{Mess: m.Mess}).MessDiet()
-		f.Ask = asks.estimate(m.Date, base, f.Mess)
+		f.Ask = asks.estimate(m.Date, base, f.Mess, f.Diet)
 		if day, err := time.ParseInLocation("2006-01-02", m.Date, loc); err == nil {
 			for _, w := range sched.Windows(day) {
 				if w.Meal == base {
@@ -587,46 +592,62 @@ func phone(jid string) string {
 }
 
 // asks answers "what does this meal usually go for" from asking prices.
+// Each map is keyed by diet too: veg, egg, nonveg, or "" for every diet.
 type asks struct {
-	serving map[string][]int // date|meal|mess
-	pooled  map[string][]int // date|meal, every mess
-	recent  map[string][]int // meal, every serving in the four-week window
+	serving map[string][]int // date|meal|mess|diet
+	pooled  map[string][]int // date|meal|diet, every mess
+	recent  map[string][]int // meal|diet, every serving in the four-week window
 }
 
 func newAsks(ps []store.ServingPrices, recentFrom string) *asks {
 	a := &asks{serving: map[string][]int{}, pooled: map[string][]int{}, recent: map[string][]int{}}
 	for _, p := range ps {
-		a.serving[p.Date+"|"+p.Meal+"|"+p.Mess] = append(a.serving[p.Date+"|"+p.Meal+"|"+p.Mess], p.Prices...)
-		a.pooled[p.Date+"|"+p.Meal] = append(a.pooled[p.Date+"|"+p.Meal], p.Prices...)
-		if p.Date >= recentFrom {
-			a.recent[p.Meal] = append(a.recent[p.Meal], p.Prices...)
+		for _, d := range []string{p.Diet, ""} {
+			a.serving[p.Date+"|"+p.Meal+"|"+p.Mess+"|"+d] = append(a.serving[p.Date+"|"+p.Meal+"|"+p.Mess+"|"+d], p.Prices...)
+			a.pooled[p.Date+"|"+p.Meal+"|"+d] = append(a.pooled[p.Date+"|"+p.Meal+"|"+d], p.Prices...)
+			if p.Date >= recentFrom {
+				a.recent[p.Meal+"|"+d] = append(a.recent[p.Meal+"|"+d], p.Prices...)
+			}
 		}
 	}
 	return a
 }
 
 // estimate is the median ask for that serving at that mess, else at every
-// mess, else for that meal over the four weeks. Nil when there's nothing.
-func (a *asks) estimate(date, meal, mess string) *float64 {
-	for _, xs := range [][]int{a.serving[date+"|"+meal+"|"+mess], a.pooled[date+"|"+meal]} {
+// mess, else for that meal over the four weeks. Only asks in the meal's
+// diet count; with none of those, or no diet known, every diet does. Nil
+// when there's nothing.
+func (a *asks) estimate(date, meal, mess, diet string) *float64 {
+	if diet != "" {
+		if v := a.estimateIn(date, meal, mess, store.PriceDiet(diet)); v != nil {
+			return v
+		}
+	}
+	return a.estimateIn(date, meal, mess, "")
+}
+
+func (a *asks) estimateIn(date, meal, mess, diet string) *float64 {
+	for _, xs := range [][]int{a.serving[date+"|"+meal+"|"+mess+"|"+diet], a.pooled[date+"|"+meal+"|"+diet]} {
 		if len(xs) >= minAsks {
 			v := quantile(xs, .5)
 			return &v
 		}
 	}
-	if xs := a.recent[meal]; len(xs) > 0 {
+	if xs := a.recent[meal+"|"+diet]; len(xs) > 0 {
 		v := quantile(xs, .5)
 		return &v
 	}
 	return nil
 }
 
-func (a *asks) market(meal string) (mealMarket, bool) {
-	xs := a.recent[meal]
+// market is the spread of asks for meal in diet ("" for every diet) over
+// the four weeks.
+func (a *asks) market(meal, diet string) (mealMarket, bool) {
+	xs := a.recent[meal+"|"+diet]
 	if len(xs) == 0 {
 		return mealMarket{}, false
 	}
-	return mealMarket{Meal: meal, Q1: quantile(xs, .25), Median: quantile(xs, .5), Q3: quantile(xs, .75), N: len(xs)}, true
+	return mealMarket{Meal: meal, Diet: diet, Q1: quantile(xs, .25), Median: quantile(xs, .5), Q3: quantile(xs, .75), N: len(xs)}, true
 }
 
 // quantile interpolates between the closest ranks.

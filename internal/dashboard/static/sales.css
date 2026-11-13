@@ -125,6 +125,8 @@
 .ecards .spark { grid-template-columns: repeat(var(--n), minmax(0, 1fr)); }
 .ecards .bk i { left: 12%; right: 12%; background: var(--m); }
 .ecards .bk:hover i { filter: brightness(1.25); }
+.card-diet { display: inline-flex; align-items: center; gap: 5px; margin-left: 10px; font: 600 11px var(--sans); letter-spacing: 0; color: var(--muted); vertical-align: middle; }
+.card-head .card-diet svg { width: 12px; height: 12px; }
 
 @media (max-width: 760px) {
   /* Seven columns plus the meal icons must fit the phone's width. */
