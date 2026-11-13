@@ -1,0 +1,76 @@
+/* The admin usage page. Builds on style.css, sales.css and insights.css. */
+
+.usage {
+  --u-sold: #35a848;
+  --u-hand: #4a8fe8;
+  --u-lapse: #c99322;
+  --u-waste: #d9503f;
+  --u-man: #c94fd0;
+  --u-img: repeating-linear-gradient(135deg, #35a848 0 3px, #1d5e28 3px 6px);
+}
+
+.usage .saved-v { color: #80ff20; }
+
+.pleg .u-sold, .pleg .u-hand, .pleg .u-lapse, .pleg .u-waste, .pleg .u-man, .pleg .u-img { width: 10px; height: 10px; border-radius: 2px; }
+.u-sold { background: var(--u-sold); }
+.u-hand { background: var(--u-hand); }
+.u-lapse { background: var(--u-lapse); }
+.u-waste { background: var(--u-waste); }
+.u-man { background: var(--u-man); }
+.u-img { background: var(--u-img); }
+
+/* The colors mean nothing without their key, so legends stay at every width. */
+.usage .pleg { display: flex; flex-wrap: wrap; }
+.usage .chest-head { flex-wrap: wrap; }
+
+.u-note { margin: 10px 2px 0; font-size: 11.5px; color: var(--dim); }
+.u-note b { color: var(--text); font-weight: 600; }
+
+.u-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+
+/* ---------- users ---------- */
+
+.u-users .role { margin-left: 6px; font: 700 7px Pixel; color: var(--gold); letter-spacing: .3px; }
+.u-users .st { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.u-users .st i { width: 7px; height: 7px; border-radius: 2px; background: var(--dim); }
+.u-users .st.ok i { background: var(--u-sold); }
+.u-users .st.mid i { background: var(--gold); }
+.u-users .st.bad i { background: var(--u-waste); }
+.u-users .rate i { background: var(--u-sold); }
+.u-users .dim { color: var(--dim); }
+.u-users .pos { color: #80ff20; }
+.u-users .neg { color: #ff6b5b; }
+.u-users svg { display: inline-block; vertical-align: middle; }
+.u-users tr.off td { color: var(--dim); }
+
+/* ---------- onboarding ---------- */
+
+.u-funnel { display: flex; flex-direction: column; gap: 6px; }
+.u-fr { display: grid; grid-template-columns: 118px minmax(0, 1fr) 56px; gap: 8px; align-items: center; font-size: 12.5px; }
+.u-fr .lab { color: var(--muted); white-space: nowrap; }
+.u-fr .track { height: 16px; border-radius: 4px; background: var(--slot); overflow: hidden; }
+.u-fr .track i { display: block; height: 100%; border-radius: 0 4px 4px 0; background: var(--gold); }
+.u-fr .n { text-align: right; font-variant-numeric: tabular-nums; }
+.u-fr .n small { margin-left: 4px; color: #ff6b5b; }
+.u-pend { margin-top: 12px; }
+
+/* ---------- attention ---------- */
+
+.u-att { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.u-att li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; padding: 7px 9px; border-radius: 9px; background: var(--slot); font-size: 12.5px; color: var(--muted); }
+.u-att li b { color: var(--text); font-weight: 600; }
+.u-att .ic { height: 18px; border-radius: 4px; font: 700 10px/18px Pixel; text-align: center; color: #0b0d12; }
+.u-att .crit { background: var(--u-waste); }
+.u-att .warn { background: var(--gold); }
+.u-att .info { background: var(--line); color: var(--text); }
+.u-att .none { background: none; padding: 4px 2px; color: var(--dim); }
+
+/* ---------- close mix ---------- */
+
+.u-mix { display: flex; gap: 2px; height: 22px; border-radius: 5px; overflow: hidden; background: var(--slot); }
+.u-mix div { display: flex; align-items: center; padding-left: 7px; font-size: 11px; font-weight: 600; color: #0b0d12; white-space: nowrap; overflow: hidden; }
+.u-mixleg { flex-wrap: wrap; margin-top: 10px; color: var(--muted); white-space: normal; }
+
+@media (max-width: 860px) {
+  .u-two { grid-template-columns: minmax(0, 1fr); }
+}
