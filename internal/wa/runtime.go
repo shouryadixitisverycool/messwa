@@ -3,6 +3,7 @@ package wa
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -159,10 +160,18 @@ func (r *Runtime) Unlink(ctx context.Context) error {
 	r.leases.Wait()
 	if old.LoggedIn() {
 		if err := old.WA.Logout(ctx); err != nil {
-			r.mu.Lock()
-			r.client = old
-			r.mu.Unlock()
-			return err
+			// Logout asks WhatsApp to remove this device, which needs a
+			// connection. When the phone already removed it, or WhatsApp
+			// can't be reached, forget the device here instead: the
+			// session is useless either way, and you still get to unlink.
+			old.log.Warn("couldn't log out from WhatsApp; deleting the local session", "err", err)
+			old.WA.Disconnect()
+			if err := old.WA.Store.Delete(ctx); err != nil {
+				r.mu.Lock()
+				r.client = old
+				r.mu.Unlock()
+				return fmt.Errorf("delete the WhatsApp session: %w", err)
+			}
 		}
 	}
 	old.stop()

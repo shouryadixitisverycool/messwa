@@ -236,6 +236,16 @@ func (a *deviceAccount) Link(_ context.Context) error {
 	if a.pairing {
 		return nil
 	}
+	// When WhatsApp logs the device out (removed from the phone), whatsmeow
+	// deletes its session but keeps the client, which then fails every use
+	// with "invalid use of deleted device". Start from a fresh device.
+	var deleted bool
+	_ = a.client.Do(func(c *wa.Client) error { deleted = c.WA.Store.Deleted; return nil })
+	if deleted {
+		if err := a.client.Unlink(a.ctx); err != nil {
+			return err
+		}
+	}
 	ctx, cancel := context.WithTimeout(a.ctx, 3*time.Minute)
 	var ch <-chan whatsmeow.QRChannelItem
 	err := a.client.Do(func(c *wa.Client) error { var err error; ch, err = c.WA.GetQRChannel(ctx); return err })
