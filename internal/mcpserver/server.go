@@ -636,3 +636,9 @@ func (s *Server) FactTotals(ctx context.Context, to string) ([]store.FactTotal, 
 func (s *Server) FirstFactDate(ctx context.Context) (string, error) {
 	return s.st.FirstFactDate(ctx)
 }
+
+// SellTasksSince is every task created since since, plus the active ones,
+// newest first. The admin usage page counts them per user.
+func (s *Server) SellTasksSince(ctx context.Context, since time.Time) ([]store.SellTask, error) {
+	return s.st.SellTasks(ctx, since)
+}
