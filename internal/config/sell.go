@@ -53,6 +53,10 @@ type Sell struct {
 	// by default: a screenshot proves nothing, and a QR can't be taken
 	// back once sent.
 	AcceptPaymentImages bool `toml:"accept_payment_images"`
+	// NegotiationSilence is how long a sell task waits for a buyer to
+	// answer its last message before it stops negotiating with them. A
+	// buyer who writes later, while the meal is unsold, picks up again.
+	NegotiationSilence duration `toml:"negotiation_silence"`
 }
 
 // MinRepostGap is the shortest time between two copies in one group,
@@ -67,6 +71,14 @@ const RepostCutoff = 15 * time.Minute
 
 // MaxRepostsLimit is the most max_reposts may be.
 const MaxRepostsLimit = 12
+
+// MinNegotiationSilence and MaxNegotiationSilence bound
+// negotiation_silence. Under a minute cuts off a buyer who is typing; past
+// half an hour a quiet buyer holds a negotiation slot for most of a meal.
+const (
+	MinNegotiationSilence = time.Minute
+	MaxNegotiationSilence = 30 * time.Minute
+)
 
 // MinPostGap is the shortest pause allowed between copies of one offer.
 const MinPostGap = 3 * time.Second

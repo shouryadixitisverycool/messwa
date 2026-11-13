@@ -34,8 +34,7 @@ const (
 	maxCounters    = 2                // counter-offers before "the lowest I can do"
 	maxBotMsgs     = 6                // replies a session sends one buyer; a two-message reply counts once
 	replyDebounce  = 2 * time.Second  // a burst of messages gets one reply
-	sessionSilence = 2 * time.Minute  // buyer quiet after the bot's last message
-	sessionLimit   = 6 * time.Minute  // one negotiation, start to agreement
+	sessionLimit   = 6 * time.Minute  // one negotiation, start to agreement; never shorter than the silence
 	paidGrace      = 60 * time.Second // "paid" with no WhatsApp Pay payment yet
 	maxOfferFactor = 3                // an "offer" above 3x max_price is not a price
 )
@@ -76,11 +75,12 @@ type haggleState struct {
 	ask, rounds, botMsgs, unknowns, lastOffer int
 	quoted                                    []int
 	saidLowest                                bool
+	passCountered                             bool // see passCounter
 }
 
 func (s haggleState) store(started time.Time) store.Negotiation {
 	n := store.Negotiation{Ask: int64(s.ask) * 100, Rounds: s.rounds, BotMsgs: s.botMsgs, Unknowns: s.unknowns,
-		LastOffer: int64(s.lastOffer) * 100, SaidLowest: s.saidLowest, StartedAt: started}
+		LastOffer: int64(s.lastOffer) * 100, SaidLowest: s.saidLowest, PassCountered: s.passCountered, StartedAt: started}
 	for _, q := range s.quoted {
 		n.Quoted = append(n.Quoted, int64(q)*100)
 	}
@@ -89,7 +89,7 @@ func (s haggleState) store(started time.Time) store.Negotiation {
 
 func haggleFromStore(n store.Negotiation, maxRupees int) haggleState {
 	s := haggleState{ask: int(n.Ask / 100), rounds: n.Rounds, botMsgs: n.BotMsgs, unknowns: n.Unknowns,
-		lastOffer: int(n.LastOffer / 100), saidLowest: n.SaidLowest}
+		lastOffer: int(n.LastOffer / 100), saidLowest: n.SaidLowest, passCountered: n.PassCountered}
 	if s.ask == 0 {
 		s.ask = maxRupees
 	}
@@ -105,8 +105,28 @@ type step struct {
 	reply     reply  // to send; empty sends nothing
 	agree     int    // > 0: agreed at this price
 	pass      bool   // the buyer is out
+	passFrom  int    // > 0: the buyer passed at this ask and reply is the one lower price they get
 	park      string // non-empty: stop and hand the buyer to you, saying why
 	paidClaim bool   // the buyer says they paid
+}
+
+// passCounter is the one lower price a buyer who passes hears before the
+// bot lets them go. Above the target it is the target. At or below it, it
+// is halfway from the ask to the floor, rounded to the unit and at least
+// one unit under the ask, so ₹70 with a ₹60 floor becomes ₹65. It may go
+// under the walk-away price: a buyer who passed is lost anyway, and the
+// floor still holds. It reports false when the buyer already got one, has
+// heard no price yet, the bot already called a price its lowest, the ask
+// is at the floor, or the bot has no messages left for them.
+func (h haggle) passCounter(st haggleState) (int, bool) {
+	a := st.ask
+	if st.passCountered || st.botMsgs == 0 || st.botMsgs >= maxBotMsgs || st.saidLowest || a <= h.min {
+		return 0, false
+	}
+	if a > h.target {
+		return h.target, true
+	}
+	return max(h.min, min(a-h.unit, h.round(float64(a+h.min)/2))), true
 }
 
 // decide answers in, given st. The buyer has heard a price once the bot
@@ -152,7 +172,15 @@ func (h haggle) decide(st haggleState, in intent, now time.Time, competing bool)
 	}
 	switch in.kind {
 	case intentPass:
-		return step{next: st, pass: true}
+		k, ok := h.passCounter(st)
+		if !ok {
+			return step{next: st, pass: true}
+		}
+		next.passCountered = true
+		next.rounds++
+		s := say(k, sayCounter(k, next.rounds))
+		s.passFrom = a
+		return s
 	case intentPaid:
 		return step{next: st, paidClaim: true}
 	case intentPayOther:
@@ -221,6 +249,7 @@ type session struct {
 	buyer   types.JID
 	inbox   chan buyerMsg
 	firstID string // the reply that queued them; it may also reach inbox
+	first   string // the text to answer first when a revived session starts
 
 	// Guarded by n.mu.
 	state   string
@@ -228,6 +257,7 @@ type session struct {
 	hs      haggleState
 	joined  time.Time
 	started time.Time // first bot message
+	revived time.Time // last time a late reply revived them; zero if never
 }
 
 // negotiation runs the sessions for one task and feeds agreed buyers to the
@@ -250,6 +280,12 @@ type negotiation struct {
 	hush   context.CancelFunc
 	slots  chan struct{}
 	wg     sync.WaitGroup
+	// silence is [sell] negotiation_silence as it was when the task
+	// started: how long a buyer may be quiet before their session ends.
+	silence time.Duration
+	// revived carries buyers who wrote after timing out to reviveLoop.
+	revived  chan *session
+	reviveMu sync.Mutex
 
 	mu       sync.Mutex
 	sessions map[types.JID]*session
@@ -278,6 +314,10 @@ func newNegotiation(ctx context.Context, m *sellManager, t store.SellTask, s *sa
 		m: m, t: t, s: s, gate: gate, log: m.log.With("task", t.ID), join: join, pay: newOfferQueue(),
 		h:     newHaggle(int(t.MinPaise/100), int(t.MaxPaise/100), median, have, t.EndsAt, portalMealLabel(s.mess, s.diet, ""), offerDay(m.cfg, t.Date)),
 		slots: make(chan struct{}, maxSessions), sessions: map[types.JID]*session{}, direct: make(chan error, 1),
+		silence: m.cfg.Live().Sell.NegotiationSilence.Duration, revived: make(chan *session, maxSessions),
+	}
+	if n.silence <= 0 {
+		n.silence = config.Default().Sell.NegotiationSilence.Duration
 	}
 	n.ctx, n.cancel = context.WithCancelCause(ctx)
 	n.talk, n.hush = context.WithCancel(n.ctx)
@@ -312,7 +352,8 @@ func (n *negotiation) sessionLocked(peer types.JID) *session {
 }
 
 // restoreBuyer puts back a buyer's session after a restart. holder marks
-// the buyer whose payment turn resumes.
+// the buyer whose payment turn resumes. A buyer who timed out comes back
+// ended but with their haggle, so a late reply can revive them.
 func (n *negotiation) restoreBuyer(b store.SellBuyer, holder bool) {
 	peer, err := types.ParseJID(b.Peer)
 	if err != nil {
@@ -375,8 +416,9 @@ func (n *negotiation) start() {
 		n.wg.Add(1)
 		go ss.run("", slot)
 	}
-	n.wg.Add(1)
+	n.wg.Add(2)
 	go n.loop()
+	go n.reviveLoop()
 }
 
 // stop ends every session and waits for them.
@@ -421,6 +463,81 @@ func (n *negotiation) loop() {
 	}
 }
 
+// reviveLoop starts a session again for each buyer revive put back into
+// negotiation, once a slot is free.
+func (n *negotiation) reviveLoop() {
+	defer n.wg.Done()
+	for {
+		var ss *session
+		select {
+		case ss = <-n.revived:
+		case <-n.talk.Done():
+			return
+		}
+		select {
+		case n.slots <- struct{}{}:
+		case <-n.talk.Done():
+			return
+		}
+		n.mu.Lock()
+		first := ss.first
+		ss.first = ""
+		n.mu.Unlock()
+		n.wg.Add(1)
+		go ss.run(first, true)
+	}
+}
+
+// revive puts a buyer who timed out back into negotiation when they write
+// again, while the meal is unsold and the task active, and answers m as
+// their next message. The store keeps their haggle, so the bot carries on
+// from its last ask and doesn't contradict a price it already quoted.
+// Buyers who passed, were parked, skipped or bought stay ended: the store
+// moves only a timed_out buyer. It reports whether m was taken.
+func (n *negotiation) revive(ss *session, m buyerMsg) bool {
+	n.reviveMu.Lock()
+	defer n.reviveMu.Unlock()
+	n.mu.Lock()
+	state, sold := ss.state, n.sold
+	n.mu.Unlock()
+	if sold || n.talk.Err() != nil {
+		return false
+	}
+	if state != sessionEnded {
+		// Revived by an earlier message in the same burst.
+		return n.deliver(ss, m)
+	}
+	ok, err := n.m.st.ReviveSellTaskBuyer(n.talk, n.t.ID, ss.buyer.String())
+	if err != nil {
+		n.log.Warn("could not revive a buyer who wrote after timing out", "buyer", ss.buyer, "err", err)
+	}
+	if !ok {
+		return false
+	}
+	n.mu.Lock()
+	ss.state, ss.firstID, ss.first, ss.revived = sessionNegotiating, m.id, m.text, time.Now()
+	ask := ss.hs.ask
+	n.mu.Unlock()
+	n.log.Info("buyer wrote after timing out; negotiating again", "buyer", ss.buyer, "ask", ask)
+	n.event(ss.buyer, store.EventRevived, ask, "wrote after timing out")
+	select {
+	case n.revived <- ss:
+	case <-n.talk.Done():
+	}
+	return true
+}
+
+// deliver hands m to a session that is reading its inbox.
+func (n *negotiation) deliver(ss *session, m buyerMsg) bool {
+	select {
+	case ss.inbox <- m:
+		return true
+	default:
+		n.log.Warn("buyer is sending faster than the session reads; dropping a message", "buyer", ss.buyer)
+		return false
+	}
+}
+
 // handle routes a buyer's DM to their session, and their payments to
 // payment. Messages from anyone who never replied to a post are ignored.
 func (n *negotiation) handle(evt any) {
@@ -449,14 +566,12 @@ func (n *negotiation) handle(evt any) {
 	ss := n.sessionLocked(peer)
 	ended := ss.state == sessionEnded
 	n.mu.Unlock()
+	m := buyerMsg{id: e.Info.ID, text: text}
 	if ended {
+		n.revive(ss, m)
 		return
 	}
-	select {
-	case ss.inbox <- buyerMsg{id: e.Info.ID, text: text}:
-	default:
-		n.log.Warn("buyer is sending faster than the session reads; dropping a message", "buyer", peer)
-	}
+	n.deliver(ss, m)
 }
 
 func messageText(m *waE2E.Message) string {
@@ -666,12 +781,16 @@ func (ss *session) run(first string, slot bool) {
 	if started.IsZero() {
 		started = time.Now()
 	}
+	if ss.revived.After(started) {
+		// A revived buyer gets a fresh window from their late reply.
+		started = ss.revived
+	}
 	state := ss.state
 	n.mu.Unlock()
 
-	limit := time.NewTimer(max(sessionLimit-time.Since(started), sessionSilence))
+	limit := time.NewTimer(max(sessionLimit-time.Since(started), n.silence))
 	defer limit.Stop()
-	silence := time.NewTimer(sessionSilence)
+	silence := time.NewTimer(n.silence)
 	defer silence.Stop()
 	var debounce <-chan time.Time
 	var paidWait <-chan time.Time
@@ -679,9 +798,10 @@ func (ss *session) run(first string, slot bool) {
 	n.mu.Lock()
 	fresh := ss.hs.botMsgs == 0
 	n.mu.Unlock()
-	if state == sessionNegotiating && fresh {
+	if state == sessionNegotiating && (fresh || strings.TrimSpace(first) != "") {
 		// Restored sessions have no in-memory first message. Open with
 		// the price instead of counting the missing text as unreadable.
+		// A revived session answers the late reply that revived it.
 		if strings.TrimSpace(first) == "" {
 			first = "price?"
 		}
@@ -715,7 +835,7 @@ func (ss *session) run(first string, slot bool) {
 			case handledAgreed:
 				release()
 			case handledReplied:
-				silence.Reset(sessionSilence)
+				silence.Reset(n.silence)
 			case handledPaidClaim:
 				if paidWait == nil {
 					paidWait = time.After(paidGrace)
@@ -817,6 +937,13 @@ func (ss *session) handle(texts []string) handled {
 		return handledEnded
 	case st.paidClaim:
 		return handledPaidClaim
+	case st.passFrom > 0:
+		if !ss.say(st.next, st.reply) {
+			return handledEnded
+		}
+		n.log.Info("buyer passed; countered once", "buyer", ss.buyer, "from", st.passFrom, "ask", st.next.ask)
+		n.event(ss.buyer, store.EventPassCounter, st.next.ask, fmt.Sprintf("passed at ₹%d; one counter at ₹%d", st.passFrom, st.next.ask))
+		return handledReplied
 	case st.agree > 0:
 		return ss.agree(st)
 	case len(st.reply) > 0:
@@ -910,7 +1037,8 @@ func (ss *session) agree(st step) handled {
 	if busy && n.t.Handoff != string(config.HandoffOnAgreement) {
 		ss.sayAgreed(sayQueued(st.agree))
 	}
-	n.pay.add(ss.buyer)
+	// A revived buyer whose earlier payment turn lapsed queues again.
+	n.pay.requeue(ss.buyer)
 	return handledAgreed
 }
 

@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -168,6 +169,23 @@ func (q *offerQueue) name(peer types.JID) string {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.names[peer]
+}
+
+// requeue queues peer even if they were queued before, as when a buyer
+// whose payment turn lapsed agrees again. It does nothing once the queue
+// is closed or while peer is already waiting.
+func (q *offerQueue) requeue(peer types.JID) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed || slices.Contains(q.buyers, peer) {
+		return
+	}
+	q.seen[peer] = true
+	q.buyers = append(q.buyers, peer)
+	select {
+	case q.ready <- struct{}{}:
+	default:
+	}
 }
 
 // restore puts back a buyer who was queued before a restart, without

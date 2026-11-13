@@ -105,8 +105,18 @@ func TestHaggleDecide(t *testing.T) {
 			[]string{"60", "how about 50", "45?", "40 only / thats the least", "PARK"}},
 		{"question gets the label and price", 30, 60, 50, []string{"price?", "nv?"},
 			[]string{"60", "kadamba veg, 60"}},
-		{"pass", 30, 60, 50, []string{"price?", "sorry bought"},
-			[]string{"60", "PASS"}},
+		{"pass before any price ends", 30, 60, 50, []string{"nvm"},
+			[]string{"PASS"}},
+		{"pass at the opening gets the target once", 30, 60, 50, []string{"price?", "sorry bought"},
+			[]string{"60", "how about 50"}},
+		{"second pass ends", 30, 60, 50, []string{"price?", "nvm", "nvm"},
+			[]string{"60", "how about 50", "PASS"}},
+		{"pass after hearing the lowest ends", 30, 60, 45, []string{"price?", "35 final", "nvm"},
+			[]string{"60", "45 only / thats the least", "PASS"}},
+		{"a pass with a price is an offer", 30, 60, 50, []string{"price?", "too much, 55?"},
+			[]string{"60", "AGREE 55"}},
+		{"an offer doesn't use up the pass counter", 30, 60, 40, []string{"price?", "too much, 35?", "nvm", "nvm"},
+			[]string{"60", "how about 50", "40?", "PASS"}},
 		{"pay another way parks", 30, 60, 50, []string{"price?", "upi id?"},
 			[]string{"60", "PARK"}},
 		{"absurd number is unreadable", 30, 60, 50, []string{"price?", "500", "999"},
@@ -154,5 +164,43 @@ func TestHaggleNamesTheDay(t *testing.T) {
 	}
 	if got := replay(h, early, "35 final"); strings.Join(got, "|") != "50 only / thats the least, its for tmrw" {
 		t.Fatalf("lowest first: %q", got)
+	}
+}
+
+// The 12 Nov dinner run, task 7: kadamba non-veg, ₹60 to ₹70, no market
+// median, so the target is ₹70. Three buyers passed at the opening (or at
+// the floor) and the bot let each one go.
+func TestHagglePassGetsOneCounter(t *testing.T) {
+	end := time.Date(2026, 11, 12, 21, 30, 0, 0, time.UTC)
+	early := end.Add(-90 * time.Minute)
+	h := newHaggle(60, 70, 0, false, end, "kadamba non-veg", "")
+
+	// At the target: halfway to the floor.
+	if got := strings.Join(replay(h, early, "price?", "nvm", "nvm"), "|"); got != "70|how about 65|PASS" {
+		t.Fatalf("pass at the opening: %q", got)
+	}
+
+	// Above the target: the target.
+	h2 := newHaggle(50, 70, 60, true, end, "kadamba non-veg", "")
+	if got := strings.Join(replay(h2, early, "price?", "no"), "|"); got != "70|how about 60" {
+		t.Fatalf("pass above the target: %q", got)
+	}
+
+	// Already at the floor: nothing lower to offer.
+	s := h.decide(haggleState{ask: 60, botMsgs: 2, quoted: []int{70, 60}}, parseBuyer("nvm"), early, false)
+	if !s.pass || len(s.reply) > 0 {
+		t.Fatalf("pass at the floor: %+v", s)
+	}
+
+	// Halfway that rounds back to the ask still comes down one unit.
+	h3 := newHaggle(50, 55, 0, false, end, "kadamba non-veg", "")
+	if got := strings.Join(replay(h3, early, "price?", "nvm"), "|"); got != "55|how about 50" {
+		t.Fatalf("one unit above the floor: %q", got)
+	}
+
+	// No messages left for this buyer: let them go.
+	s = h.decide(haggleState{ask: 70, botMsgs: maxBotMsgs}, parseBuyer("nvm"), early, false)
+	if !s.pass {
+		t.Fatalf("pass at the message cap: %+v", s)
 	}
 }
