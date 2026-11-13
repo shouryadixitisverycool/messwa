@@ -104,7 +104,7 @@ func Handler(cfg *config.Config, srv *mcpserver.Server, hub *Hub, acc *accounts.
 	mux.Handle("GET /", pages(http.FileServerFS(files)))
 	member := func(h http.HandlerFunc) http.Handler { return requireRole(accounts.Member, h) }
 	regs := newRegCache(acc)
-	authRoutes(mux, acc, regs, "http://"+cfg.MCP.Listen+"/mcp")
+	authRoutes(mux, acc, srv, regs, "http://"+cfg.MCP.Listen+"/mcp")
 	settingsRoutes(mux, cfg, srv)
 	deviceRoutes(mux, srv)
 	sellActionRoutes(mux, srv)

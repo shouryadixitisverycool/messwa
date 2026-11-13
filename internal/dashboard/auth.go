@@ -9,14 +9,19 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"messwa/internal/accounts"
+	"messwa/internal/mcpserver"
+	"messwa/internal/portal"
 )
 
 const cookieName = "messwa_session"
 
-// pageRoles is the role each page needs. Paths not listed (the sign-in page,
-// styles, scripts, fonts, icons) are public: they hold no data.
+// pageRoles is the role each page needs. Paths not listed (the sign-in and
+// sign-up pages, styles, scripts, fonts, icons) are public: they hold no
+// data. Signed-in accounts an admin hasn't approved yet only get
+// welcomePage.
 var pageRoles = map[string]accounts.Role{
 	"/":              accounts.Member,
 	"/index.html":    accounts.Member,
@@ -24,6 +29,21 @@ var pageRoles = map[string]accounts.Role{
 	"/account.html":  accounts.Member,
 	"/settings.html": accounts.Member,
 	"/insights.html": accounts.Admin,
+}
+
+// welcomePage is where a new account sets itself up and asks for approval.
+const welcomePage = "/welcome.html"
+
+// checkMessKey makes one portal read with key, to catch a mistyped key
+// before it's saved. Tests replace it.
+var checkMessKey = func(ctx context.Context, key string) error {
+	c, err := portal.New(strings.TrimSpace(key))
+	if err != nil {
+		return err
+	}
+	today := time.Now().Format("2006-01-02")
+	_, err = c.Registrations(ctx, today, today)
+	return err
 }
 
 type sessKey struct{}
@@ -96,6 +116,10 @@ func requireRole(need accounts.Role, h http.Handler) http.Handler {
 			jsonError(w, "sign in first", http.StatusUnauthorized)
 			return
 		}
+		if !u.IsActive() {
+			jsonError(w, "your account is waiting for an admin to approve it", http.StatusForbidden)
+			return
+		}
 		if !u.Role.Allows(need) {
 			jsonError(w, "admins only", http.StatusForbidden)
 			return
@@ -104,13 +128,37 @@ func requireRole(need accounts.Role, h http.Handler) http.Handler {
 	})
 }
 
+// signedIn serves h to any signed-in user, approved or not. Only the
+// endpoints a new account needs to set itself up use it.
+func signedIn(h http.HandlerFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if accounts.UserFrom(r.Context()) == nil {
+			jsonError(w, "sign in first", http.StatusUnauthorized)
+			return
+		}
+		h(w, r)
+	})
+}
+
 // pages serves static files, sending visitors without a session to the
-// sign-in page and refusing pages their role doesn't allow.
+// sign-in page, unapproved accounts to the welcome page, and refusing pages
+// their role doesn't allow.
 func pages(files http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u := accounts.UserFrom(r.Context())
+		if r.URL.Path == welcomePage {
+			switch {
+			case u == nil:
+				http.Redirect(w, r, "/login.html", http.StatusSeeOther)
+				return
+			case u.IsActive():
+				http.Redirect(w, r, "/", http.StatusSeeOther)
+				return
+			}
+			w.Header().Set("Cache-Control", "no-store")
+		}
 		need, gated := pageRoles[r.URL.Path]
 		if gated {
-			u := accounts.UserFrom(r.Context())
 			if u == nil {
 				next := strings.TrimPrefix(r.URL.Path, "/")
 				to := "/login.html"
@@ -118,6 +166,10 @@ func pages(files http.Handler) http.Handler {
 					to += "?next=" + next
 				}
 				http.Redirect(w, r, to, http.StatusSeeOther)
+				return
+			}
+			if !u.IsActive() {
+				http.Redirect(w, r, welcomePage, http.StatusSeeOther)
 				return
 			}
 			if !u.Role.Allows(need) {
@@ -162,8 +214,17 @@ func setCookie(w http.ResponseWriter, r *http.Request, value string, maxAge int)
 }
 
 // authRoutes adds sign-in, the account page's API, and MCP token management.
-func authRoutes(mux *http.ServeMux, acc *accounts.Accounts, regs *regCache, mcpURL string) {
+// srv is the signed-in user's own server, whose Device is their WhatsApp.
+func authRoutes(mux *http.ServeMux, acc *accounts.Accounts, srv *mcpserver.Server, regs *regCache, mcpURL string) {
 	member := func(h http.HandlerFunc) http.Handler { return requireRole(accounts.Member, h) }
+	admin := func(h http.HandlerFunc) http.Handler { return requireRole(accounts.Admin, h) }
+	startSession := func(w http.ResponseWriter, r *http.Request, tok string, s *accounts.Session) {
+		if old := sessionFrom(r.Context()); old != nil {
+			acc.Logout(r.Context(), old.token)
+		}
+		setCookie(w, r, tok, int(accounts.SessionTTL().Seconds()))
+		writeJSON(w, r, meResp{User: s.User, CSRF: s.CSRF, CanStoreKeys: acc.CanStoreKeys(), MCPURL: mcpURL})
+	}
 
 	mux.HandleFunc("GET /api/setup", func(w http.ResponseWriter, r *http.Request) {
 		admin, err := acc.FirstAdmin(r.Context())
@@ -189,11 +250,32 @@ func authRoutes(mux *http.ServeMux, acc *accounts.Accounts, regs *regCache, mcpU
 			jsonError(w, "sign-in failed", http.StatusInternalServerError)
 			return
 		}
-		if old := sessionFrom(r.Context()); old != nil {
-			acc.Logout(r.Context(), old.token)
+		startSession(w, r, tok, s)
+	})
+
+	// Anyone who can reach the dashboard can sign up. The account can't
+	// use anything until an admin approves it.
+	mux.HandleFunc("POST /api/signup", func(w http.ResponseWriter, r *http.Request) {
+		var in struct{ Name, Password string }
+		if !readJSON(w, r, &in) {
+			return
 		}
-		setCookie(w, r, tok, int(accounts.SessionTTL().Seconds()))
-		writeJSON(w, r, meResp{User: s.User, CSRF: s.CSRF, CanStoreKeys: acc.CanStoreKeys(), MCPURL: mcpURL})
+		from, _, _ := net.SplitHostPort(r.RemoteAddr)
+		name := strings.TrimSpace(in.Name)
+		if _, err := acc.SignUp(r.Context(), name, in.Password, from); err != nil {
+			code := http.StatusBadRequest
+			if errors.Is(err, accounts.ErrSignUpLimit) {
+				code = http.StatusTooManyRequests
+			}
+			jsonError(w, err.Error(), code)
+			return
+		}
+		tok, s, err := acc.Login(r.Context(), name, in.Password, from)
+		if err != nil {
+			jsonError(w, "account created, but signing in failed; try the sign-in page", http.StatusInternalServerError)
+			return
+		}
+		startSession(w, r, tok, s)
 	})
 
 	mux.HandleFunc("POST /api/logout", func(w http.ResponseWriter, r *http.Request) {
@@ -204,12 +286,12 @@ func authRoutes(mux *http.ServeMux, acc *accounts.Accounts, regs *regCache, mcpU
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	mux.Handle("GET /api/me", member(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /api/me", signedIn(func(w http.ResponseWriter, r *http.Request) {
 		s := sessionFrom(r.Context())
 		writeJSON(w, r, meResp{User: s.User, CSRF: s.CSRF, CanStoreKeys: acc.CanStoreKeys(), MCPURL: mcpURL})
 	}))
 
-	mux.Handle("POST /api/password", member(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("POST /api/password", signedIn(func(w http.ResponseWriter, r *http.Request) {
 		var in struct{ Current, New string }
 		if !readJSON(w, r, &in) {
 			return
@@ -222,12 +304,20 @@ func authRoutes(mux *http.ServeMux, acc *accounts.Accounts, regs *regCache, mcpU
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
-	mux.Handle("PUT /api/mess-key", member(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("PUT /api/mess-key", signedIn(func(w http.ResponseWriter, r *http.Request) {
 		var in struct{ Key string }
 		if !readJSON(w, r, &in) {
 			return
 		}
 		u := accounts.UserFrom(r.Context())
+		if !acc.CanStoreKeys() {
+			jsonError(w, accounts.ErrNoSecret.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := checkMessKey(r.Context(), in.Key); err != nil {
+			jsonError(w, "the mess portal didn't accept that key: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 		if err := acc.SetMessKey(r.Context(), u.ID, in.Key); err != nil {
 			jsonError(w, err.Error(), http.StatusBadRequest)
 			return
@@ -236,13 +326,64 @@ func authRoutes(mux *http.ServeMux, acc *accounts.Accounts, regs *regCache, mcpU
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
-	mux.Handle("DELETE /api/mess-key", member(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("DELETE /api/mess-key", signedIn(func(w http.ResponseWriter, r *http.Request) {
 		u := accounts.UserFrom(r.Context())
 		if err := acc.ClearMessKey(r.Context(), u.ID); err != nil {
 			jsonError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		regs.forget(u.ID)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	mux.Handle("POST /api/approval", signedIn(func(w http.ResponseWriter, r *http.Request) {
+		linked := srv.Device != nil && srv.Device.Linked()
+		if err := acc.RequestApproval(r.Context(), accounts.UserFrom(r.Context()).ID, linked); err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	mux.Handle("GET /api/signups", admin(func(w http.ResponseWriter, r *http.Request) {
+		us, err := acc.Waiting(r.Context())
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		type signup struct {
+			Name       string    `json:"name"`
+			Status     string    `json:"status"`
+			HasMessKey bool      `json:"mess_key_set"`
+			SignedUp   time.Time `json:"signed_up"`
+			Since      time.Time `json:"since"`
+		}
+		out := make([]signup, len(us))
+		for i, u := range us {
+			out[i] = signup{u.Name, string(u.Status), u.HasMessKey, u.CreatedAt, u.StatusAt}
+		}
+		writeJSON(w, r, out)
+	}))
+
+	mux.Handle("POST /api/signups/{name}/{decision}", admin(func(w http.ResponseWriter, r *http.Request) {
+		u, err := acc.ByName(r.Context(), r.PathValue("name"))
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		switch r.PathValue("decision") {
+		case "approve":
+			err = acc.Approve(r.Context(), u.ID)
+		case "decline":
+			err = acc.Decline(r.Context(), u.ID)
+		default:
+			jsonError(w, "decide approve or decline", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusConflict)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
 

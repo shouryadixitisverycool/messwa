@@ -27,7 +27,7 @@ $('form').addEventListener('submit', async (e) => {
     });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
-    location.href = nextPage();
+    location.href = d.status === 'active' ? nextPage() : 'welcome.html';
   } catch (x) {
     err.textContent = x.message;
     err.hidden = false;

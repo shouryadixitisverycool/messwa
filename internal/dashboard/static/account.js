@@ -7,6 +7,7 @@ $('navIcon').append(svgEl(icon('prev')));
 $('keyIcon').append(svgEl(icon('ingot')));
 $('tokIcon').append(svgEl(icon('coin')));
 $('pwIcon').append(svgEl(icon('check')));
+$('suIcon').append(svgEl(icon('paper')));
 
 const when = (iso) => {
   const t = new Date(iso);
@@ -96,6 +97,47 @@ $('tokForm').addEventListener('submit', async (e) => {
   } catch (x) { showErr('tokErr', x); }
 });
 
+// Admins approve or decline sign-ups here. Requests come first, then
+// accounts still setting up.
+async function loadSignups() {
+  const m = await me();
+  if (m.role !== 'admin') return;
+  const r = await fetch('api/signups', { cache: 'no-store' });
+  if (!r.ok) return;
+  const us = await r.json();
+  $('signupsBox').hidden = false;
+  const asked = us.filter((u) => u.status === 'requested').length;
+  $('suMeta').replaceChildren(el('b', '', String(asked)), ' waiting');
+  const body = $('suBody');
+  body.replaceChildren();
+  if (!us.length) {
+    const tr = el('tr');
+    tr.append(el('td', 'dim', 'Nobody is waiting.'));
+    body.append(tr);
+    return;
+  }
+  for (const u of us) {
+    const tr = el('tr');
+    const state = u.status === 'requested'
+      ? `asked ${when(u.since)}`
+      : `still setting up${u.mess_key_set ? '' : ', no mess key yet'}`;
+    tr.append(el('td', '', u.name), el('td', u.status === 'requested' ? '' : 'dim', state));
+    const td = el('td');
+    for (const [label, decision, cls] of [['Approve', 'approve', 'btn small primary'], ['Decline', 'decline', 'btn small']]) {
+      const b = el('button', cls, label);
+      b.type = 'button';
+      b.addEventListener('click', async () => {
+        if (decision === 'decline' && !confirm(`Decline ${u.name}? They won't be able to ask again.`)) return;
+        showErr('suErr');
+        try { await send('POST', `api/signups/${encodeURIComponent(u.name)}/${decision}`); loadSignups(); } catch (x) { showErr('suErr', x); }
+      });
+      td.append(b);
+    }
+    tr.append(td);
+    body.append(tr);
+  }
+}
+
 $('pwForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   showErr('pwErr');
@@ -112,7 +154,7 @@ $('logout').addEventListener('click', async () => {
   try { await send('POST', 'api/logout'); } finally { location.href = 'login.html'; }
 });
 
-paintMe().then(loadTokens).catch(() => {});
+paintMe().then(() => Promise.all([loadTokens(), loadSignups()])).catch(() => {});
 
 async function whatsappStatus() {
   try {

@@ -34,6 +34,11 @@ type deviceAccounts struct {
 	users    map[int64]*deviceAccount
 }
 type deviceAccount struct {
+	id int64
+	// started and unlinking are guarded by deviceAccounts.mu.
+	started   bool
+	unlinking bool
+
 	mu      sync.Mutex
 	ctx     context.Context
 	stop    context.CancelFunc
@@ -80,6 +85,7 @@ func (m *deviceAccounts) server(ctx context.Context, id int64) (*mcpserver.Serve
 		return nil, fmt.Errorf("account unavailable")
 	}
 	if a := m.users[id]; a != nil {
+		m.settle(a, u)
 		return a.srv, nil
 	}
 	cfg, err := accountConfig(ctx, m.cfg, m.st, id)
@@ -160,15 +166,51 @@ func (m *deviceAccounts) server(ctx context.Context, id int64) (*mcpserver.Serve
 		a.srv.SetSellTasks(nil)
 	}
 	ready = true
+	a.id = id
 	m.users[id] = a
 	go reloadSettings(accountCtx, m.log, a.srv)
-	if c.LoggedIn() && !m.readOnly {
-		if err = sell.Resume(accountCtx, cfg.MCP.SellTasks); err != nil {
-			m.log.Error("resume user's tasks", "user", id, "err", err)
-		}
-		client.Reconnect()
-	}
+	m.settle(a, u)
 	return a.srv, nil
+}
+
+// settle brings a user's WhatsApp client in line with their sign-up status.
+// An approved account's linked client connects and resumes its sell tasks,
+// once. One an admin declined gets its device unlinked. Accounts still
+// waiting stay as they are: they can link, but run doesn't connect them at
+// start. Every dashboard request looks the user up, so an approval from the
+// CLI takes effect on that user's next page load. m.mu must be held.
+func (m *deviceAccounts) settle(a *deviceAccount, u *accounts.User) {
+	if m.readOnly {
+		return
+	}
+	switch {
+	case u.IsActive() && !a.started && a.client.LoggedIn():
+		a.started = true
+		if err := a.sell.Resume(a.ctx, a.srv.Config().MCP.SellTasks); err != nil {
+			m.log.Error("resume user's tasks", "user", a.id, "err", err)
+		}
+		if !a.client.IsConnected() {
+			a.client.Reconnect()
+		}
+	case u.Status == accounts.Declined && a.client.LoggedIn() && !a.unlinking:
+		a.unlinking = true
+		go func() {
+			if err := a.Unlink(a.ctx); err != nil {
+				m.log.Error("unlink declined user's WhatsApp", "user", a.id, "err", err)
+			}
+			m.mu.Lock()
+			a.unlinking = false
+			m.mu.Unlock()
+		}()
+	}
+}
+
+// decided is the accounts.OnDecision hook: it settles the user's client
+// right away instead of on their next page load.
+func (m *deviceAccounts) decided(ctx context.Context, id int64) {
+	if _, err := m.server(ctx, id); err != nil {
+		m.log.Error("settle user's WhatsApp after a decision", "user", id, "err", err)
+	}
 }
 
 func (a *deviceAccount) Linked() bool { a.mu.Lock(); defer a.mu.Unlock(); return a.client.LoggedIn() }

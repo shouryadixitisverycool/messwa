@@ -27,11 +27,11 @@ func TestAccountConfigKeepsLegacySessionAndIsolatesNewDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	admin, err := st.AddUser(ctx, "admin", "admin", "hash", time.Now())
+	admin, err := st.AddUser(ctx, "admin", "admin", "hash", "active", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	member, err := st.AddUser(ctx, "member", "member", "hash", time.Now())
+	member, err := st.AddUser(ctx, "member", "member", "hash", "active", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,11 +74,11 @@ func TestDeviceAccountUnlinkRewiresAllConsumers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	id, err := st.AddUser(ctx, "admin", "admin", "hash", time.Now())
+	id, err := st.AddUser(ctx, "admin", "admin", "hash", "active", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherID, err := st.AddUser(ctx, "other", "member", "hash", time.Now())
+	otherID, err := st.AddUser(ctx, "other", "member", "hash", "active", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

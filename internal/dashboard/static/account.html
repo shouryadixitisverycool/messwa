@@ -27,6 +27,19 @@
     <button class="nav-link" id="logout" type="button">Sign out</button>
   </header>
 
+  <section class="chest" id="signupsBox" aria-label="Sign-up requests" hidden>
+    <div class="chest-head">
+      <span class="head-icon" id="suIcon"></span>
+      <span class="head-name">Sign-up requests</span>
+      <span class="head-meta" id="suMeta"></span>
+    </div>
+    <div class="form">
+      <p class="note">People who made an account on the sign-up page. They can't see the board until you approve them. Declined accounts can still sign in, but only to see that you declined them; remove them with <code>messwa user remove</code>.</p>
+      <p class="err" id="suErr" role="alert" hidden></p>
+      <table class="signups"><tbody id="suBody"></tbody></table>
+    </div>
+  </section>
+
   <section class="chest" aria-label="WhatsApp">
     <div class="chest-head"><span class="head-name">Your WhatsApp account</span></div>
     <div class="form">
@@ -38,6 +51,7 @@
       <p class="err" id="deviceErr" hidden></p>
     </div>
   </section>
+
   <section class="chest" aria-label="Mess API key">
     <div class="chest-head">
       <span class="head-icon" id="keyIcon"></span>

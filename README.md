@@ -68,12 +68,22 @@ Each person saves their own mess API key on the account page (`/account.html`, t
 
 **Passwords and sessions.** Passwords are hashed with argon2id and must be at least 10 characters. Signing in sets an `HttpOnly`, `SameSite=Strict` session cookie that lasts 30 days. Sessions live in the database as SHA-256 hashes. Every change the pages make sends a per-session CSRF token and must come from the dashboard's own origin. Five wrong passwords for one name from one address lock that pair out for a minute. Changing a password signs out your other devices.
 
-**Managing accounts** is CLI-only:
+**Signing up.** Anyone who can reach the dashboard can make an account from the link on the sign-in page (`/signup.html`). A new account lands on `/welcome.html` and can't open anything else until an admin approves it:
+
+1. They save their mess API key. messwa reads today's registrations with it first, so a mistyped key is refused, and saving one needs the IIIT network.
+2. They link their WhatsApp by scanning a QR code, the same way as on the account page.
+3. They ask for approval.
+4. An admin approves or declines them under Sign-up requests on the account page, or with `messwa user approve NAME` / `decline NAME`. The welcome page checks every 20 seconds and moves them to the board once approved.
+
+Until then the API answers 403 and their MCP tokens don't work. `run` connects a waiting account's WhatsApp only while it pairs, and doesn't reconnect it after a restart until it's approved. Approval connects it and resumes its sell tasks. If you approve from the CLI, that happens the next time the user loads a page, or at the next restart. Declining unlinks the device. A declined account can still sign in, but only to see that it was declined; remove it with `user remove`. One address can sign up five times an hour. Accounts made with `user add` skip all this and start approved.
+
+**Managing accounts** from the shell:
 
 ```sh
 ./messwa user add -admin shourya    # asks for a password
 ./messwa user add asha              # a member
-./messwa user list
+./messwa user list                  # with each account's sign-up status
+./messwa user approve asha          # or decline; for accounts made on the sign-up page
 ./messwa user passwd asha           # set a new password, sign asha out everywhere
 ./messwa user role asha admin
 ./messwa user disable asha          # blocks sign-in and MCP tokens; enable undoes it

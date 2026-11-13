@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -32,6 +33,14 @@ type testDash struct {
 func startDashboard(t *testing.T, cfg *config.Config, st *store.Store, ms *mcpserver.Server, hub *Hub) *testDash {
 	t.Helper()
 	accounts.CheapHashing()
+	saved := checkMessKey
+	checkMessKey = func(_ context.Context, key string) error {
+		if key == "wrong-key" {
+			return errors.New("mess portal rejected the mess API key")
+		}
+		return nil
+	}
+	t.Cleanup(func() { checkMessKey = saved })
 	acc, err := accounts.New(st, testSecret)
 	if err != nil {
 		t.Fatal(err)
@@ -337,3 +346,116 @@ func mustURL(s string) *url.URL {
 	}
 	return u
 }
+
+func TestSignUpAndApproval(t *testing.T) {
+	cfg := config.Default()
+	st := newTestStore(t)
+	ms := mcpserver.New(cfg, st, nil)
+	wa := &linkDevice{}
+	ms.Device = wa
+	d := startDashboard(t, cfg, st, ms, NewHub())
+	admin := d.as(t, accounts.Admin)
+	member := d.as(t, accounts.Member)
+
+	jar, _ := cookiejar.New(nil)
+	c := &testClient{Client: &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, d: d}
+	res := c.send(t, "POST", "/api/signup", map[string]string{"name": "asha", "password": "short"})
+	res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("short password: %d", res.StatusCode)
+	}
+	res = c.send(t, "POST", "/api/signup", map[string]string{"name": "asha", "password": "asha's password"})
+	var me struct{ CSRF, Status string }
+	json.NewDecoder(res.Body).Decode(&me)
+	res.Body.Close()
+	if res.StatusCode != 200 || me.Status != "pending" || me.CSRF == "" {
+		t.Fatalf("sign up: %d %+v", res.StatusCode, me)
+	}
+	c.csrf = me.CSRF
+	res = c.send(t, "POST", "/api/signup", map[string]string{"name": "ASHA", "password": "another password"})
+	res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Errorf("taken name: %d", res.StatusCode)
+	}
+
+	// Until approved, pages go to the welcome page and the API refuses.
+	expectStatus := func(who *testClient, method, path string, want int) {
+		t.Helper()
+		var res *http.Response
+		if method == "GET" {
+			res = who.get(t, path, nil)
+		} else {
+			res = who.send(t, method, path, nil)
+			res.Body.Close()
+		}
+		if res.StatusCode != want {
+			t.Errorf("%s %s: %d, want %d", method, path, res.StatusCode, want)
+		}
+	}
+	res = c.get(t, "/sales.html", nil)
+	if loc := res.Header.Get("Location"); res.StatusCode != http.StatusSeeOther || loc != "/welcome.html" {
+		t.Errorf("pending page: %d %q", res.StatusCode, loc)
+	}
+	expectStatus(c, "GET", "/welcome.html", 200)
+	expectStatus(c, "GET", "/api/me", 200)
+	expectStatus(c, "GET", "/api/state", http.StatusForbidden)
+	expectStatus(c, "GET", "/api/mcp-tokens", http.StatusForbidden)
+	expectStatus(c, "POST", "/api/mcp-tokens", http.StatusForbidden)
+
+	// Asking needs a key the portal accepts.
+	expectStatus(c, "POST", "/api/approval", http.StatusBadRequest)
+	res = c.send(t, "PUT", "/api/mess-key", map[string]string{"key": "wrong-key"})
+	res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Errorf("wrong key saved: %d", res.StatusCode)
+	}
+	res = c.send(t, "PUT", "/api/mess-key", map[string]string{"key": "good-key"})
+	res.Body.Close()
+	if res.StatusCode != http.StatusNoContent {
+		t.Fatalf("save key: %d", res.StatusCode)
+	}
+	expectStatus(c, "POST", "/api/approval", http.StatusBadRequest)
+
+	// So does a linked WhatsApp, which they can link before approval.
+	expectStatus(c, "GET", "/api/whatsapp", 200)
+	expectStatus(c, "POST", "/api/whatsapp", 200)
+	expectStatus(c, "POST", "/api/approval", http.StatusNoContent)
+
+	// Only admins see and decide requests.
+	expectStatus(member, "GET", "/api/signups", http.StatusForbidden)
+	expectStatus(member, "POST", "/api/signups/asha/approve", http.StatusForbidden)
+	var waiting []struct{ Name, Status string }
+	admin.get(t, "/api/signups", &waiting)
+	if len(waiting) != 1 || waiting[0].Name != "asha" || waiting[0].Status != "requested" {
+		t.Fatalf("signups: %+v", waiting)
+	}
+	expectStatus(admin, "POST", "/api/signups/asha/approve", http.StatusNoContent)
+	expectStatus(admin, "POST", "/api/signups/asha/approve", http.StatusConflict)
+
+	expectStatus(c, "GET", "/api/state", 200)
+	res = c.get(t, "/welcome.html", nil)
+	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/" {
+		t.Errorf("approved welcome: %d %q", res.StatusCode, res.Header.Get("Location"))
+	}
+
+	// A declined account can sign in but can't use anything or ask again.
+	jar2, _ := cookiejar.New(nil)
+	r := &testClient{Client: &http.Client{Jar: jar2}, d: d}
+	res = r.send(t, "POST", "/api/signup", map[string]string{"name": "ravi", "password": "ravi's password"})
+	json.NewDecoder(res.Body).Decode(&me)
+	res.Body.Close()
+	r.csrf = me.CSRF
+	expectStatus(admin, "POST", "/api/signups/ravi/decline", http.StatusNoContent)
+	res = r.send(t, "PUT", "/api/mess-key", map[string]string{"key": "good-key"})
+	res.Body.Close()
+	expectStatus(r, "POST", "/api/approval", http.StatusBadRequest)
+	expectStatus(r, "GET", "/api/state", http.StatusForbidden)
+}
+
+// linkDevice is a WhatsApp that links when asked.
+type linkDevice struct{ linked bool }
+
+func (d *linkDevice) Linked() bool                 { return d.linked }
+func (d *linkDevice) Status() any                  { return map[string]bool{"linked": d.linked} }
+func (d *linkDevice) Link(context.Context) error   { d.linked = true; return nil }
+func (d *linkDevice) Unlink(context.Context) error { d.linked = false; return nil }
