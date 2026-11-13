@@ -428,6 +428,10 @@ func TestNegotiationSilenceEndsSession(t *testing.T) {
 		synctest.Wait()
 		f.conn.emit(f.reply(buyerA, "price?"))
 		settle()
+		// A writes again, so the nudges for a buyer quiet since the first
+		// message don't apply.
+		f.conn.emit(dm(buyerA, "nv?"))
+		settle()
 		// Still negotiating just before the silence runs out.
 		time.Sleep(f.silence() - 10*time.Second)
 		synctest.Wait()
@@ -457,6 +461,8 @@ func TestNegotiationSilenceSetting(t *testing.T) {
 		synctest.Wait()
 		f.conn.emit(f.reply(buyerA, "price?"))
 		settle()
+		f.conn.emit(dm(buyerA, "nv?"))
+		settle()
 		time.Sleep(3 * time.Minute)
 		synctest.Wait()
 		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerTimedOut {
@@ -481,8 +487,9 @@ func eventsFor(t *testing.T, f *sellFixture, id int64, peer types.JID) []string 
 	return out
 }
 
-// timeOutA starts a negotiating task in which buyer A haggles once and then
-// goes quiet until they time out. The bot's last ask to A was 45.
+// timeOutA starts a negotiating task in which buyer A haggles once, sends
+// a message the bot can't read, and then goes quiet until they time out.
+// The bot's last ask to A was 45, in two messages.
 func timeOutA(t *testing.T, f *sellFixture, ctx context.Context) (*sellManager, int64) {
 	t.Helper()
 	m := f.negotiatingManager(ctx, 40)
@@ -496,6 +503,8 @@ func timeOutA(t *testing.T, f *sellFixture, ctx context.Context) (*sellManager, 
 	if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 1 || got[0] != "how about 45" {
 		t.Fatalf("A got %q", got)
 	}
+	f.conn.emit(dm(buyerA, "what do you think about the weather"))
+	settle()
 	time.Sleep(f.silence() + time.Second)
 	synctest.Wait()
 	if b := buyerState(t, f, id, buyerA); b.State != store.BuyerTimedOut {
@@ -517,14 +526,14 @@ func TestNegotiationRevivesLateReply(t *testing.T) {
 		f.conn.emit(dm(buyerA, "35?"))
 		settle()
 		toA := texts(sentTo(f.conn.messages(), buyerA))
-		if strings.Join(toA, "|") != "how about 45|40|final offer" {
+		if strings.Join(toA, "|") != "how about 45|45, want it?|40|final offer" {
 			t.Fatalf("A got %q", toA)
 		}
 		b := buyerState(t, f, id, buyerA)
 		if b.State != store.BuyerNegotiating {
 			t.Fatalf("A = %+v", b)
 		}
-		if b.LastOffer != 3500 || b.BotMsgs != 2 || b.Rounds != 1 || !b.SaidLowest {
+		if b.LastOffer != 3500 || b.BotMsgs != 3 || b.Rounds != 1 || !b.SaidLowest {
 			t.Fatalf("A's haggle = %+v", b.Negotiation)
 		}
 		evs := eventsFor(t, f, id, buyerA)
@@ -547,7 +556,7 @@ func TestNegotiationRevivedBuyerAgreesAtLastAsk(t *testing.T) {
 		f.conn.emit(dm(buyerA, "ok"))
 		settle()
 		toA := texts(sentTo(f.conn.messages(), buyerA))
-		if len(toA) != 4 || toA[1] != "ok 45" {
+		if len(toA) != 5 || toA[2] != "ok 45" {
 			t.Fatalf("A got %q", toA)
 		}
 		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerOffered || b.Amount != "45.00" {
@@ -682,7 +691,7 @@ func TestNegotiationRevivesAfterRestart(t *testing.T) {
 		f.conn.emit(dm(buyerA, "ok"))
 		settle()
 		toA := texts(sentTo(f.conn.messages(), buyerA))
-		if len(toA) != 4 || toA[1] != "ok 45" {
+		if len(toA) != 5 || toA[2] != "ok 45" {
 			t.Fatalf("A got %q", toA)
 		}
 		if b := buyerState(t, f, id, buyerA); b.Agreed != "45.00" {

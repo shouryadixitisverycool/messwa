@@ -36,6 +36,7 @@ const (
 	EventParked        = "parked"         // Text: why they need you
 	EventPassed        = "passed"         // the buyer dropped out
 	EventPassCounter   = "pass_counter"   // the buyer passed and got one lower price; N: paise, Text: what they passed at
+	EventNudged        = "nudged"         // the buyer stayed quiet after the first message; N: the ask or the lower price, paise; Text: which follow-up
 	EventTimedOut      = "timed_out"      // no payment in their turn, or went quiet
 	EventRevived       = "revived"        // a timed-out buyer wrote again and is negotiating; N: the bot's ask, paise
 	EventPayment       = "payment"        // a matching WhatsApp Pay payment; N: paise
