@@ -604,7 +604,7 @@ func TestNegotiationNoReviveAfterCancel(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		m, id := timeOutA(t, f, ctx)
-		if err := m.Cancel(ctx, id); err != nil {
+		if err := m.Cancel(ctx, id, false); err != nil {
 			t.Fatal(err)
 		}
 		synctest.Wait()
@@ -639,6 +639,9 @@ func TestNegotiationNoReviveAfterPass(t *testing.T) {
 		synctest.Wait()
 		f.conn.emit(f.reply(buyerA, "price?"))
 		settle()
+		f.conn.emit(dm(buyerA, "not interested"))
+		settle()
+		// The first pass gets one lower counter; decline it to end the buyer.
 		f.conn.emit(dm(buyerA, "not interested"))
 		settle()
 		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerPassed {
