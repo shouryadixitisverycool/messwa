@@ -195,14 +195,16 @@ function renderLedger() {
     h.append(days.has(date) ? el('span', total ? '' : 'none', total ? rupees(total) : '-') : el('span', 'none', ' '));
     g.append(h);
   }
-  for (const meal of meals()) {
+  // Skip a meal row when nothing in it was registered this week.
+  const cellAt = (date, meal) => { const day = days.get(date); return day && day.cells.find((x) => x.meal === meal); };
+  const shown = meals().filter((meal) => dates.some((date) => { const c = cellAt(date, meal); return c && c.state !== 'none'; }));
+  for (const meal of shown) {
     const mh = el('div', 'mh');
     mh.append(svgEl(icon(meal)));
     mh.title = cap(meal);
     g.append(mh);
     for (const date of dates) {
-      const day = days.get(date);
-      const c = day && day.cells.find((x) => x.meal === meal);
+      const c = cellAt(date, meal);
       if (!c) { g.append(el('div', 'slot out')); continue; }
       if (c.state === 'none') { g.append(el('div', 'slot')); continue; }
       cells.push([date, c]);
