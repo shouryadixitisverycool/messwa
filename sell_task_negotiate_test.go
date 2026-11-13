@@ -639,6 +639,9 @@ func TestNegotiationNoReviveAfterPass(t *testing.T) {
 		synctest.Wait()
 		f.conn.emit(f.reply(buyerA, "price?"))
 		settle()
+		// The first pass gets one lower price; the second ends A as passed.
+		f.conn.emit(dm(buyerA, "not interested"))
+		settle()
 		f.conn.emit(dm(buyerA, "not interested"))
 		settle()
 		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerPassed {
@@ -885,6 +888,72 @@ func TestNegotiationPayOtherWay(t *testing.T) {
 		synctest.Wait()
 		if got := texts(sentTo(f.conn.messages(), buyerB)); got[len(got)-1] != "[QR]" {
 			t.Fatalf("B got %q", got)
+		}
+	})
+}
+
+// A buyer who passes on the bot's price hears one lower price, recorded in
+// the event log and the buyer's row so a restart can't send a second. A
+// second pass, or a pass after the bot's lowest, ends them as passed.
+func TestNegotiationCountersAPassOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m := f.negotiatingManager(ctx, 40)
+		id, err := m.Start(ctx, 0, f.date, "lunch", 30, 60, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+
+		f.conn.emit(f.reply(buyerA, "price?"))
+		settle()
+		f.conn.emit(dm(buyerA, "nah"))
+		settle()
+		if got := texts(sentTo(f.conn.messages(), buyerA)); strings.Join(got, "|") != "60|how about 40" {
+			t.Fatalf("A got %q", got)
+		}
+		b := buyerState(t, f, id, buyerA)
+		if b.State != store.BuyerNegotiating || !b.PassCountered || b.Ask != 4000 {
+			t.Fatalf("A = %+v after the first pass", b)
+		}
+		evs, err := f.st.SellTaskEvents(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var counters []store.SellEvent
+		for _, e := range evs {
+			if e.Kind == store.EventPassCounter {
+				counters = append(counters, e)
+			}
+		}
+		if len(counters) != 1 || counters[0].Peer != buyerA.String() || counters[0].N != 4000 || counters[0].Text != "passed at ₹60; one counter at ₹40" {
+			t.Fatalf("pass counters = %+v", counters)
+		}
+
+		f.conn.emit(dm(buyerA, "nvm"))
+		settle()
+		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 2 {
+			t.Fatalf("A got %q after the second pass", got)
+		}
+		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerPassed {
+			t.Fatalf("A = %+v after the second pass", b)
+		}
+
+		// B already heard the lowest, so a pass ends them.
+		f.conn.emit(f.reply(buyerB, "price?"))
+		settle()
+		f.conn.emit(dm(buyerB, "25 final"))
+		settle()
+		f.conn.emit(dm(buyerB, "nvm"))
+		settle()
+		if got := texts(sentTo(f.conn.messages(), buyerB)); strings.Join(got, "|") != "60|40 only|thats the least" {
+			t.Fatalf("B got %q", got)
+		}
+		if b := buyerState(t, f, id, buyerB); b.State != store.BuyerPassed || b.PassCountered {
+			t.Fatalf("B = %+v", b)
 		}
 	})
 }

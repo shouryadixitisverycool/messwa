@@ -86,11 +86,12 @@ type haggleState struct {
 	ask, rounds, botMsgs, unknowns, lastOffer int
 	quoted                                    []int
 	saidLowest                                bool
+	passCountered                             bool // see passCounter
 }
 
 func (s haggleState) store(started time.Time) store.Negotiation {
 	n := store.Negotiation{Ask: int64(s.ask) * 100, Rounds: s.rounds, BotMsgs: s.botMsgs, Unknowns: s.unknowns,
-		LastOffer: int64(s.lastOffer) * 100, SaidLowest: s.saidLowest, StartedAt: started}
+		LastOffer: int64(s.lastOffer) * 100, SaidLowest: s.saidLowest, PassCountered: s.passCountered, StartedAt: started}
 	for _, q := range s.quoted {
 		n.Quoted = append(n.Quoted, int64(q)*100)
 	}
@@ -99,7 +100,7 @@ func (s haggleState) store(started time.Time) store.Negotiation {
 
 func haggleFromStore(n store.Negotiation, maxRupees int) haggleState {
 	s := haggleState{ask: int(n.Ask / 100), rounds: n.Rounds, botMsgs: n.BotMsgs, unknowns: n.Unknowns,
-		lastOffer: int(n.LastOffer / 100), saidLowest: n.SaidLowest}
+		lastOffer: int(n.LastOffer / 100), saidLowest: n.SaidLowest, passCountered: n.PassCountered}
 	if s.ask == 0 {
 		s.ask = maxRupees
 	}
@@ -115,8 +116,29 @@ type step struct {
 	reply     reply  // to send; empty sends nothing
 	agree     int    // > 0: agreed at this price
 	pass      bool   // the buyer is out
+	passFrom  int    // > 0: the buyer passed at this ask and reply is the one lower price they get
 	park      string // non-empty: stop and hand the buyer to you, saying why
 	paidClaim bool   // the buyer says they paid
+}
+
+// passCounter is the one lower price a buyer who passes hears before the
+// bot lets them go. Above the target it is the target. At or below it, it
+// is halfway from the ask to the floor, rounded to the unit and at least
+// one unit under the ask, so ₹70 with a ₹60 floor becomes ₹65. It may go
+// under the walk-away price: a buyer who passed is lost anyway, and the
+// floor still holds. It reports false when the buyer already got one, has
+// heard no price yet, the bot already called a price its lowest, the ask
+// is at the floor, or the bot has no messages left for them.
+func (h haggle) passCounter(st haggleState) (int, bool) {
+	// Capped like decide's ask, after a range edit lowered max.
+	a := min(st.ask, h.max)
+	if st.passCountered || st.botMsgs == 0 || st.botMsgs >= maxBotMsgs || st.saidLowest || a <= h.min {
+		return 0, false
+	}
+	if a > h.target {
+		return h.target, true
+	}
+	return max(h.min, min(a-h.unit, h.round(float64(a+h.min)/2))), true
 }
 
 // decide answers in, given st. The buyer has heard a price once the bot
@@ -169,7 +191,15 @@ func (h haggle) decide(st haggleState, in intent, now time.Time, competing bool)
 	}
 	switch in.kind {
 	case intentPass:
-		return step{next: st, pass: true}
+		k, ok := h.passCounter(st)
+		if !ok {
+			return step{next: st, pass: true}
+		}
+		next.passCountered = true
+		next.rounds++
+		s := say(k, sayCounter(k, next.rounds))
+		s.passFrom = a
+		return s
 	case intentPaid:
 		return step{next: st, paidClaim: true}
 	case intentPayOther:
@@ -997,6 +1027,13 @@ func (ss *session) handle(texts []string) handled {
 		return handledEnded
 	case st.paidClaim:
 		return handledPaidClaim
+	case st.passFrom > 0:
+		if !ss.say(st.next, st.reply) {
+			return handledEnded
+		}
+		n.log.Info("buyer passed; countered once", "buyer", ss.buyer, "from", st.passFrom, "ask", st.next.ask)
+		n.event(ss.buyer, store.EventPassCounter, st.next.ask, fmt.Sprintf("passed at ₹%d; one counter at ₹%d", st.passFrom, st.next.ask))
+		return handledReplied
 	case st.agree > 0:
 		return ss.agree(st)
 	case len(st.reply) > 0:

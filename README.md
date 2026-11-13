@@ -855,9 +855,11 @@ Buyers message several sellers at once and leave within a minute, so the bot ans
 | `ok`, `fine`, `done` (after a price), `same number?`, `gpay?`, `paying` | Agrees to its current price |
 | `nv?`, `kadamba?` | `bakul non-veg, 50` |
 | `upi id?`, `send qr`, `cash?`, `can i pay in other ways` | `only whatsapp pay sorry`, once. Asking again hands them to you |
-| `nvm`, `sorry bought`, `got from other`, `no thanks` | Stops talking to them |
+| `nvm`, `sorry bought`, `got from other`, `no thanks` | Counters once with a lower price. A second pass, or a pass after its lowest or at `min_price`, stops talking to them |
 
 After two counters the next one is its lowest. A buyer still below that after the bot says so is handed to you.
+
+**A buyer who passes** gets one lower price before the bot lets them go. Above the target, that's the target. At or below the target, it's halfway from the current price to `min_price` in ₹5 steps, at least one step down: `70` with a floor of 60 becomes `how about 65`. This can go under the lowest the bot would otherwise take right now, since the buyer is leaving anyway; `min_price` still holds. A buyer who has heard `thats the least`, or whose price is already `min_price`, ends as `passed` with no counter. The counter shows in the task's events as `pass_counter`. A pass that names a price (`too much, 40?`) is an offer and goes through the offer rules instead.
 
 **Agreeing and paying.** A buyer who agrees joins the pay queue. If nobody is paying, they get the usual payment prompt at once, at the agreed price. If someone is, they hear `ok 50`, then `someone else is paying rn, if they dont in 2 min its yours`, and get the prompt when their turn comes. A buyer who pays a price the bot quoted them before their turn gets the meal if nobody holds it. If someone does, that payment isn't honoured, and the buyer shows in `needs_you` with the amount to send back.
 

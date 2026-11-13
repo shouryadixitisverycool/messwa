@@ -23,7 +23,8 @@ var sellBuyerColumns = []string{
 	"last_offer INTEGER NOT NULL DEFAULT 0", // paise the buyer last offered
 	"quoted TEXT NOT NULL DEFAULT ''",       // every price the bot stated, paise, comma separated
 	"said_lowest INTEGER NOT NULL DEFAULT 0",
-	"started_at INTEGER", // first bot message
+	"pass_countered INTEGER NOT NULL DEFAULT 0", // the buyer passed once and got a lower price
+	"started_at INTEGER",                        // first bot message
 	"agreed TEXT NOT NULL DEFAULT ''",
 	"agreed_at INTEGER",
 	"note TEXT NOT NULL DEFAULT ''",   // why the buyer needs you
@@ -49,7 +50,10 @@ type Negotiation struct {
 	LastOffer  int64 // paise; 0 when none
 	Quoted     []int64
 	SaidLowest bool
-	StartedAt  time.Time
+	// PassCountered: the buyer passed once and the bot answered with a
+	// lower price. A second pass ends the haggle.
+	PassCountered bool
+	StartedAt     time.Time
 }
 
 func joinPaise(xs []int64) string {
@@ -104,10 +108,10 @@ func (s *Store) ClaimNegotiationMessage(ctx context.Context, id int64, peer stri
 		return false, errors.New("a claim adds exactly one message")
 	}
 	r, err := s.db.ExecContext(ctx, `UPDATE sell_task_buyers SET state=CASE WHEN state='queued' THEN 'negotiating' ELSE state END,
- ask=?,rounds=?,bot_msgs=?,unknowns=?,last_offer=?,quoted=?,said_lowest=?,started_at=coalesce(started_at,?)
+ ask=?,rounds=?,bot_msgs=?,unknowns=?,last_offer=?,quoted=?,said_lowest=?,pass_countered=?,started_at=coalesce(started_at,?)
  WHERE task_id=? AND peer=? AND bot_msgs=? AND state IN ('queued','negotiating','agreed') AND `+activeTask+`
  AND `+honoured,
-		append([]any{n.Ask, n.Rounds, n.BotMsgs, n.Unknowns, n.LastOffer, joinPaise(n.Quoted), n.SaidLowest, n.StartedAt.Unix(),
+		append([]any{n.Ask, n.Rounds, n.BotMsgs, n.Unknowns, n.LastOffer, joinPaise(n.Quoted), n.SaidLowest, n.PassCountered, n.StartedAt.Unix(),
 			id, peer, sent, id}, honouredArgs(id, peer, n.Ask)...)...)
 	if err != nil {
 		return false, err
@@ -141,10 +145,10 @@ func (s *Store) AgreeSellTaskBuyer(ctx context.Context, id int64, peer, amount s
 	if err != nil {
 		return false, err
 	}
-	r, err := s.db.ExecContext(ctx, `UPDATE sell_task_buyers SET state='agreed',agreed=?,agreed_at=?,ask=?,rounds=?,bot_msgs=?,unknowns=?,last_offer=?,quoted=?,said_lowest=?
+	r, err := s.db.ExecContext(ctx, `UPDATE sell_task_buyers SET state='agreed',agreed=?,agreed_at=?,ask=?,rounds=?,bot_msgs=?,unknowns=?,last_offer=?,quoted=?,said_lowest=?,pass_countered=?
  WHERE task_id=? AND peer=? AND state IN ('queued','negotiating') AND `+activeTask+`
  AND `+honoured,
-		append([]any{amount, at.UnixNano(), n.Ask, n.Rounds, n.BotMsgs, n.Unknowns, n.LastOffer, joinPaise(n.Quoted), n.SaidLowest,
+		append([]any{amount, at.UnixNano(), n.Ask, n.Rounds, n.BotMsgs, n.Unknowns, n.LastOffer, joinPaise(n.Quoted), n.SaidLowest, n.PassCountered,
 			id, peer, id}, honouredArgs(id, peer, paise)...)...)
 	if err != nil {
 		return false, err
