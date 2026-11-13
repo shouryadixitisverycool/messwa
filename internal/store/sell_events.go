@@ -35,6 +35,7 @@ const (
 	EventParked        = "parked"         // Text: why they need you
 	EventPassed        = "passed"         // the buyer dropped out
 	EventTimedOut      = "timed_out"      // no payment in their turn, or went quiet
+	EventRevived       = "revived"        // a timed-out buyer wrote again and is negotiating; N: the bot's ask, paise
 	EventPayment       = "payment"        // a matching WhatsApp Pay payment; N: paise
 	EventPayUnreadable = "pay_unreadable" // a payment whose amount the bot couldn't read
 	EventRecovery      = "recovery"       // asked the phone for the full payment; N: attempt
