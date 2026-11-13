@@ -15,6 +15,15 @@ function showErr(id, e) {
   p.hidden = !e;
 }
 
+// A "?" in a step's header shows or hides that step's explanation.
+for (const b of document.querySelectorAll('.help')) {
+  b.addEventListener('click', () => {
+    const open = b.getAttribute('aria-expanded') !== 'true';
+    b.setAttribute('aria-expanded', String(open));
+    $(b.getAttribute('aria-controls')).hidden = !open;
+  });
+}
+
 let polling = null;
 let waLinked = false;
 let waTimer = null;

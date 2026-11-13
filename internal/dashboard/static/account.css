@@ -80,3 +80,11 @@ code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--t
 .form .unit input { flex: 1; min-width: 0; }
 .form .unit span { color: var(--dim); font-size: 13px; min-width: 1em; }
 .signups td.empty { text-align: left; }
+
+.help {
+  margin-left: auto; width: 22px; height: 22px; padding: 0; border-radius: 50%; flex: none;
+  display: inline-grid; place-items: center; cursor: pointer;
+  background: var(--slot-hi); border: 1px solid var(--line); color: var(--muted);
+  font: 700 12px var(--sans);
+}
+.help:hover, .help[aria-expanded="true"] { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 55%, transparent); }
