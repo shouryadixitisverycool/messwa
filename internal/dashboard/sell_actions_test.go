@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"testing"
+	"time"
 
 	"messwa/internal/accounts"
 	"messwa/internal/config"
@@ -29,6 +30,33 @@ type dashboardOperator struct {
 	tasks []string // start, prices and cancel calls, as text
 	// failStart makes Start fail.
 	failStart error
+	// scheduleAt makes StartOrSchedule schedule for then instead of
+	// starting.
+	scheduleAt time.Time
+}
+
+func (o *dashboardOperator) StartOrSchedule(ctx context.Context, user int64, date, meal string, min, max int, _ bool) (int64, time.Time, error) {
+	if o.scheduleAt.IsZero() {
+		id, err := o.Start(ctx, user, date, meal, min, max, "")
+		return id, time.Time{}, err
+	}
+	o.tasks = append(o.tasks, fmt.Sprintf("schedule %d %s %s %d-%d", user, date, meal, min, max))
+	return 4, o.scheduleAt, nil
+}
+func (o *dashboardOperator) StartNow(ctx context.Context, user int64, date, meal string, min, max int, autopilot bool) (int64, error) {
+	if autopilot {
+		o.tasks = append(o.tasks, fmt.Sprintf("autopilot start %d %s %s %d-%d", user, date, meal, min, max))
+		return 9, nil
+	}
+	return o.Start(ctx, user, date, meal, min, max, "")
+}
+func (o *dashboardOperator) SetScheduleAutopilot(_ context.Context, id int64, on bool) error {
+	o.tasks = append(o.tasks, fmt.Sprintf("autopilot %d %v", id, on))
+	return nil
+}
+func (o *dashboardOperator) CancelSchedule(_ context.Context, id int64) error {
+	o.tasks = append(o.tasks, fmt.Sprintf("unschedule %d", id))
+	return nil
 }
 
 func (o *dashboardOperator) Start(_ context.Context, user int64, date, meal string, min, max int, handoff string) (int64, error) {
@@ -131,6 +159,40 @@ func TestSellActionsAPI(t *testing.T) {
 	if fmt.Sprint(op.tasks) != fmt.Sprint(want) {
 		t.Fatalf("task calls %q, want %q", op.tasks, want)
 	}
+
+	// A meal that hasn't started is scheduled, unless the click says now.
+	op.tasks = nil
+	op.scheduleAt = time.Unix(1_800_000_000, 0)
+	for _, c := range []struct {
+		in     map[string]any
+		id, at int64
+	}{
+		{map[string]any{"action": "start", "date": "2026-11-03", "meal": "dinner", "min": 50, "max": 80}, 4, 1_800_000_000},
+		{map[string]any{"action": "start", "date": "2026-11-03", "meal": "dinner", "min": 50, "max": 80, "now": true}, 9, 0},
+		{map[string]any{"action": "autopilot", "id": 4, "autopilot": true}, 0, 0},
+		{map[string]any{"action": "start", "date": "2026-11-03", "meal": "dinner", "min": 50, "max": 80, "now": true, "autopilot": true}, 9, 0},
+		{map[string]any{"action": "unschedule", "id": 4}, 0, 0},
+	} {
+		if res := member.send(t, "POST", "/api/sell-action", c.in); res.StatusCode != 403 {
+			t.Fatalf("member %v = %d", c.in, res.StatusCode)
+		}
+		res := admin.send(t, "POST", "/api/sell-action", c.in)
+		if res.StatusCode != 200 {
+			t.Fatalf("admin %v = %d", c.in, res.StatusCode)
+		}
+		var out struct{ ID, At int64 }
+		json.NewDecoder(res.Body).Decode(&out)
+		res.Body.Close()
+		if out.ID != c.id || out.At != c.at {
+			t.Errorf("%v answered %+v, want id %d at %d", c.in, out, c.id, c.at)
+		}
+	}
+	want = []string{fmt.Sprintf("schedule %d 2026-11-03 dinner 50-80", admin.user.ID), fmt.Sprintf("start %d 2026-11-03 dinner 50-80 \"\"", admin.user.ID),
+		"autopilot 4 true", fmt.Sprintf("autopilot start %d 2026-11-03 dinner 50-80", admin.user.ID), "unschedule 4"}
+	if fmt.Sprint(op.tasks) != fmt.Sprint(want) {
+		t.Fatalf("task calls %q, want %q", op.tasks, want)
+	}
+	op.scheduleAt = time.Time{}
 
 	cfg.MCP.SellTasks = false
 	// Live config without saved settings reads the config itself.

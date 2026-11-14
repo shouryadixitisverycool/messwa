@@ -24,7 +24,7 @@ const fmt = (date, o) => new Intl.DateTimeFormat('en-GB', { ...o, timeZone: 'UTC
 const fmtDay = (date) => fmt(date, { weekday: 'short', day: 'numeric', month: 'short' });
 const fmtShort = (date) => fmt(date, { day: 'numeric', month: 'short' });
 const addDays = (date, n) => { const d = dayOf(date); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
-const dayWord = (date) => (date === D.today ? 'today' : date === addDays(D.today, -1) ? 'yesterday' : fmtDay(date));
+const dayWord = (date) => (date === D.today ? 'today' : date === addDays(D.today, -1) ? 'yesterday' : date === addDays(D.today, 1) ? 'tomorrow' : fmtDay(date));
 
 function dur(sec) {
   sec = Math.max(0, Math.round(sec));
@@ -86,7 +86,8 @@ function openFromHash() {
   history.replaceState(null, '', location.pathname + location.search);
   const [date, meal] = decodeURIComponent(m[1]).split('|');
   const day = D.days.find((d) => d.date === date);
-  const c = day && day.cells.find((x) => x.meal === meal);
+  let c = day && day.cells.find((x) => x.meal === meal);
+  if (!c && D.ahead && D.ahead.date === date && D.ahead.cell.meal === meal) c = D.ahead.cell;
   if (c && canSell(c)) openSell(date, c);
 }
 
@@ -123,6 +124,7 @@ function render() {
   for (const id of ['regSec', 'pcSec', 'earnSec']) $(id).hidden = !D.owner;
   for (const e of document.querySelectorAll('.own')) e.hidden = !D.owner;
   renderSaved();
+  renderAhead();
   renderLedger();
   if (D.owner) {
     renderFriends();
@@ -297,6 +299,15 @@ function cellNode(date, c) {
     p.append(el('span', 'r', '₹'), t.min === t.max ? String(t.min) : `${t.min}-${t.max}`);
     if (c.diet) n.append(span('diet', dietMark(c.diet)));
     n.append(span('messg', messIcon(c.mess)), p, el('div', 'glint'), el('span', 'sell-tag', 'SELLING'));
+    if (t.autopilot) n.append(el('span', 'auto-tag', '✈'));
+  } else if (c.state === 'scheduled') {
+    const sc = c.schedule;
+    const p = el('div', 'price range');
+    p.append(el('span', 'r', '₹'), sc.min === sc.max ? String(sc.min) : `${sc.min}-${sc.max}`);
+    if (c.diet) n.append(span('diet', dietMark(c.diet)));
+    // No mess icon: the tag's time needs the room.
+    n.append(p, el('span', 'sell-tag', hm(sc.at)));
+    if (sc.autopilot) n.append(el('span', 'auto-tag', '✈'));
   } else if (c.state === 'unknown') {
     n.append(el('div', 'ghost', '?'));
   } else {
@@ -311,7 +322,8 @@ function cellNode(date, c) {
     n.classList.add('sellable');
     n.tabIndex = 0;
     n.setAttribute('role', 'button');
-    n.setAttribute('aria-label', c.task ? `Manage the sale of ${c.meal}: mark sold, edit prices or stop` : `Sell ${c.meal}`);
+    n.setAttribute('aria-label', c.task ? `Manage the sale of ${c.meal}: mark sold, edit prices or stop`
+      : c.schedule ? `Manage the scheduled sale of ${c.meal}, going up at ${hm(c.schedule.at)}` : `Sell ${c.meal}`);
   }
   return n;
 }
@@ -369,8 +381,20 @@ function cellLines(date, c) {
     lines.push([{ t: 'Window closes ', c: 'c7' }, { t: hm(c.end), c: 'ce' }, { t: ` (in ${dur(c.end - now())})`, c: 'c8' }]);
     lines.push(null, [{ t: 'Click to mark it sold, edit the prices or stop selling.', c: 'lore' }]);
     lines.push({ rar: 'SELLING', c: 'c6' });
+  } else if (c.state === 'scheduled') {
+    const sc = c.schedule;
+    lines.push([{ t: 'Goes up at ', c: 'c7' }, { t: hm(sc.at), c: 'ce' }, { t: ` (in ${dur(sc.at - now())})`, c: 'c8' }]);
+    lines.push([{ t: 'Price ', c: 'c7' }, { t: priceText(sc), c: 'c6' }]);
+    const a = askLine('Median ask ');
+    if (a) lines.push(a);
+    lines.push([{ t: 'Sells till ', c: 'c7' }, { t: hm(c.end), c: 'cf' }]);
+    if (sc.autopilot) lines.push([{ t: 'Autopilot ', c: 'c7' }, { t: 'on, never waits on you', c: 'cb' }]);
+    lines.push(null, [{ t: 'Click to start it now, turn autopilot on or off, edit the prices or unschedule it.', c: 'lore' }]);
+    lines.push({ rar: 'SCHEDULED', c: 'ce' });
   } else if (c.state === 'open') {
     lines.push([{ t: now() >= c.start ? 'Being served now. Still yours to sell.' : 'Registered. Not sold yet.', c: 'c7' }]);
+    const at = canSell(c) && listAt(c);
+    if (at) lines.push([{ t: 'Sell it and it goes up at ', c: 'c7' }, { t: hm(at), c: 'ce' }, { t: `, ${listWord(c.meal)}.`, c: 'c8' }]);
     const a = askLine('Median ask ');
     if (a) lines.push(a);
     if (canSell(c)) lines.push(null, [{ t: 'Click to put it up for sale.', c: 'lore' }]);
@@ -400,11 +424,57 @@ $('lgrid').addEventListener('keydown', (e) => {
   if (hit) { e.preventDefault(); openSell(...hit); }
 });
 
+// ---------- up next ----------
+
+// After today's last meal the ledger has nothing left to sell, so
+// tomorrow's first meal shows above it, to sell or schedule the night
+// before. It stays out of the grid and every total.
+function renderAhead() {
+  const b = $('ahead');
+  const a = D.owner && D.ahead;
+  b.hidden = !a;
+  if (!a) { b.replaceChildren(); aheadLines = null; return; }
+  const { date, cell: c } = a;
+  b.style.setProperty('--m', messColor(c.mess));
+  const ic = el('span', 'ah-ic');
+  ic.append(svgEl(icon(c.meal)));
+  const what = el('span', 'ah-what');
+  const nm = el('b', '', `${messName(c.mess)}${c.diet ? ` ${DIET_LABEL[c.diet].toLowerCase()}` : ''} ${c.meal}`);
+  what.append(el('span', 'ah-k', 'UP NEXT'), nm, el('span', 'ah-when', `${dayWord(date)}, ${hm(c.start)}-${hm(c.end)}`));
+  const act = el('span', 'ah-act');
+  if (c.schedule) act.append(el('b', 'gold', `GOES UP ${hm(c.schedule.at)}`), el('small', '', `${priceText(c.schedule)}${c.schedule.autopilot ? ' · ✈ autopilot' : ''}`));
+  else if (c.task) act.append(el('b', 'gold', 'SELLING'), el('small', '', priceText(c.task)));
+  else if (c.state === 'open') act.append(el('b', 'gold', 'SELL ›'), listAt(c) ? el('small', '', `goes up ${hm(listAt(c))}`) : '');
+  else act.append(el('b', '', c.state.toUpperCase()));
+  b.replaceChildren(ic, what, act);
+  b.disabled = !canSell(c);
+  b.onclick = () => openSell(date, c);
+  b.setAttribute('aria-label', c.schedule ? `Tomorrow's ${c.meal} goes up at ${hm(c.schedule.at)}. Manage it`
+    : c.task ? `Manage the sale of tomorrow's ${c.meal}` : `Sell tomorrow's ${c.meal}`);
+  aheadLines = () => cellLines(date, c);
+}
+let aheadLines = null;
+
 // ---------- selling from the ledger ----------
 
 // canSell: the meal being served now or the next one, while it's still
 // open, or any meal with a task running (to mark sold, reprice or stop it).
-const canSell = (c) => D.owner && (c.task != null || (c.state === 'open' && c.sellable));
+const canSell = (c) => D.owner && (c.task != null || c.schedule != null || (c.state === 'open' && c.sellable));
+
+// listAt is when selling c now would put the offer up: 0 when it would go
+// up straight away (the meal is being served, or list_at around its start
+// has passed), else that time. It matches StartOrSchedule on the server.
+function listAt(c) {
+  let at = c.start + (D.list_at || 0);
+  if (at >= c.end) at = c.start;
+  return now() >= c.start || now() >= at ? 0 : at;
+}
+// listWord says where list_at puts the offer: "15 min before lunch starts".
+function listWord(meal) {
+  const s = D.list_at || 0;
+  return s === 0 ? `when ${meal} starts` : `${dur(Math.abs(s))} ${s < 0 ? 'before' : 'after'} ${meal} starts`;
+}
+const startedToast = (meal, res) => (res && res.at ? `Scheduled. Your ${meal} goes up at ${hm(res.at)}` : `Selling your ${meal}`);
 
 const modal = $('modal');
 const sheet = $('sheet');
@@ -423,6 +493,7 @@ function sellBounds(c) {
 // quarter above it, or the running task's range.
 function sellDefaults(c, b) {
   if (c.task) return [c.task.min, c.task.max];
+  if (c.schedule) return [c.schedule.min, c.schedule.max];
   if (c.ask == null) return [40, 80];
   const r5 = (v) => Math.max(b.lo, Math.min(b.hi, Math.round(v / 5) * 5));
   return [r5(c.ask * 0.85), r5(c.ask * 1.25)];
@@ -444,14 +515,15 @@ function openSell(date, c, view = 'menu') {
   sellOpen = `${date}|${c.meal}`;
   const t = c.task;
   const head = el('div', 'sell-head');
-  const h = el('h2', '', `${t ? 'Selling' : 'Sell'} ${messName(c.mess)} ${c.meal}${c.friend != null ? ` for ${c.friend || 'a friend'}` : ''}`);
+  const h = el('h2', '', `${t ? 'Selling' : c.schedule ? 'Scheduled' : 'Sell'} ${messName(c.mess)} ${c.meal}${c.friend != null ? ` for ${c.friend || 'a friend'}` : ''}`);
   h.id = 'sellTitle';
   h.style.setProperty('color', messColor(c.mess));
   const live = now() >= c.start;
   head.append(h, el('div', 'sub', `${fmtDay(date)}, ${hm(c.start)}-${hm(c.end)} · ${live ? `ends in ${dur(c.end - now())}` : `starts in ${dur(c.start - now())}`}`));
   sheet.setAttribute('aria-labelledby', 'sellTitle');
   sheet.replaceChildren(head);
-  if (!t) priceView(date, c);
+  if (!t && c.schedule && view !== 'prices') scheduleView(date, c);
+  else if (!t) priceView(date, c);
   else if (view === 'prices') priceView(date, c);
   else if (view === 'sold') soldView(date, c);
   else menuView(date, c);
@@ -474,14 +546,17 @@ function sellParts() {
     if (D.sell_off && (cls === 'gold' || cls === 'red')) x.disabled = true;
     return x;
   };
+  // run sends body, or each of a list of bodies in turn, then closes. done
+  // is the toast, or makes it from the last answer.
   const run = async (body, done) => {
     const btns = [...sheet.querySelectorAll('button')];
     for (const k of btns) k.disabled = true;
     error.textContent = '';
     try {
-      await send('POST', 'api/sell-action', body);
+      let res;
+      for (const b of Array.isArray(body) ? body : [body]) res = await send('POST', 'api/sell-action', b);
       closeModal();
-      toast(done);
+      toast(typeof done === 'function' ? done(res) : done);
       load();
     } catch (err) {
       error.textContent = err.message;
@@ -528,7 +603,62 @@ function menuView(date, c) {
   if (D.sell_off) for (const x of tools.children) x.disabled = true;
 
   acts.append(btn('CLOSE', '', closeModal));
-  sheet.append(sum, list, tools, error, acts);
+  const auto = el('p', 'sell-note auto-note');
+  auto.hidden = !t.autopilot;
+  auto.append(el('b', '', 'On autopilot. '), "Buyers who'd need you are skipped, and only WhatsApp Pay counts.");
+  sheet.append(sum, list, tools, auto, error, acts);
+}
+
+// scheduleView is a sale waiting for its meal: when it goes up, at what
+// price, and buttons to start it now, change the price or drop it.
+function scheduleView(date, c) {
+  const sc = c.schedule;
+  const { error, acts, btn, run } = sellParts();
+  const sum = el('div', 'sell-sum');
+  const stat = (k, v, cls) => { const d = el('div', 'st'); d.append(el('span', '', k), el('b', cls || '', v)); return d; };
+  sum.append(stat('PRICE', priceText(sc), 'gold'), stat('GOES UP', hm(sc.at)), stat('ENDS', hm(c.end)));
+  const note = el('p', 'sell-note', `Nothing is posted until ${hm(sc.at)}, in ${dur(sc.at - now())}. Then it sells like any other sale till ${hm(c.end)}.`);
+
+  const tools = el('div', 'sell-tools');
+  const tool = (glyph, label, hint, cls, fn) => {
+    const x = btn('', 'sell-tool ' + cls, fn);
+    x.append(el('b', '', glyph), el('span', '', label), el('small', '', hint));
+    return x;
+  };
+  const go = tool('▶', 'START NOW', sc.autopilot ? 'On autopilot' : 'Post the offer now', 'grn', () =>
+    run({ action: 'start', date, meal: c.meal, min: sc.min, max: sc.max, now: true, autopilot: !!sc.autopilot }, `Selling your ${c.meal}${sc.autopilot ? ' on autopilot' : ''}`));
+  go.dataset.focus = '1';
+  // Autopilot is a switch: it saves at once and keeps the sheet open.
+  const auto = tool('✈', 'AUTOPILOT', sc.autopilot ? 'On · never waits on you' : 'Off', 'auto' + (sc.autopilot ? ' on' : ''), async () => {
+    auto.disabled = true;
+    error.textContent = '';
+    try {
+      await send('POST', 'api/sell-action', { action: 'autopilot', id: sc.id, autopilot: !sc.autopilot });
+      sc.autopilot = !sc.autopilot;
+      openSell(date, c);
+      load();
+    } catch (err) {
+      error.textContent = err.message;
+      auto.disabled = false;
+    }
+  });
+  auto.setAttribute('role', 'switch');
+  auto.setAttribute('aria-checked', String(!!sc.autopilot));
+  const drop = tool('✕', 'UNSCHEDULE', 'Keep the meal', 'red', () => {
+    if (drop.dataset.sure) return run({ action: 'unschedule', id: sc.id }, `Unscheduled. Your ${c.meal} won't go up.`);
+    drop.dataset.sure = '1';
+    drop.querySelector('span').textContent = 'SURE?';
+    drop.querySelector('small').textContent = 'Click again to drop it';
+  });
+  tools.classList.add('pairs');
+  tools.append(go, auto, tool('₹', 'EDIT PRICES', priceText(sc), 'gold-o', () => openSell(date, c, 'prices')), drop);
+  if (D.sell_off) for (const x of tools.children) x.disabled = true;
+
+  const autoNote = el('p', 'sell-note auto-note');
+  autoNote.hidden = !sc.autopilot;
+  autoNote.append(el('b', '', 'Autopilot. '), "Sells without waiting on you. Anyone who'd need you is skipped, even at a higher price: paying some other way, going below your lowest, replies the bot can't read, saying they paid when no payment came. Only WhatsApp Pay counts, never a screenshot.");
+  acts.append(btn('CLOSE', '', closeModal));
+  sheet.append(sum, note, tools, autoNote, error, acts);
 }
 
 // priceSlider is the two-handle price range for a cell-like c (ask,
@@ -611,9 +741,26 @@ function priceView(date, c) {
   if (t) {
     acts.append(btn('BACK', '', () => openSell(date, c)),
       btn('SAVE PRICES', 'gold', () => { const [min, max] = slider.get(); run({ action: 'prices', id: t.id, min, max }, 'Prices updated'); }));
+  } else if (c.schedule) {
+    // A schedule's prices change by scheduling it again.
+    acts.append(btn('BACK', '', () => openSell(date, c)),
+      btn('SAVE', 'gold', () => {
+        const [min, max] = slider.get();
+        // The new schedule keeps autopilot.
+        run([{ action: 'unschedule', id: c.schedule.id }, { action: 'start', date, meal: c.meal, min, max, autopilot: !!c.schedule.autopilot }],
+          (res) => startedToast(c.meal, res));
+      }));
+  } else if (listAt(c)) {
+    const at = listAt(c);
+    const when = el('p', 'sell-when');
+    when.append('Goes up at ', el('b', '', hm(at)), `, ${listWord(c.meal)}, and sells till ${hm(c.end)}. Nothing is posted before then.`);
+    slider.nodes.push(when);
+    acts.append(btn('CANCEL', '', closeModal),
+      btn('START NOW', '', () => { const [min, max] = slider.get(); run({ action: 'start', date, meal: c.meal, min, max, now: true }, `Selling your ${c.meal}`); }),
+      btn(`SCHEDULE ${hm(at)}`, 'gold', () => { const [min, max] = slider.get(); run({ action: 'start', date, meal: c.meal, min, max }, (res) => startedToast(c.meal, res)); }));
   } else {
     acts.append(btn('CANCEL', '', closeModal),
-      btn('CONFIRM SALE', 'gold', () => { const [min, max] = slider.get(); run({ action: 'start', date, meal: c.meal, min, max }, `Selling your ${c.meal}`); }));
+      btn('CONFIRM SALE', 'gold', () => { const [min, max] = slider.get(); run({ action: 'start', date, meal: c.meal, min, max }, (res) => startedToast(c.meal, res)); }));
   }
   sheet.append(...slider.nodes, error, acts);
 }
@@ -674,10 +821,10 @@ function soldView(date, c) {
 // listed here and nowhere else on the page, so they never count as yours.
 
 const FRIEND_LOOK = {
-  selling: ['SELLING', 'c6'], armed: ['ARMED', 'ce'], sending: ['PAID · SENDING', 'c6'], sold: ['SOLD', 'ca'],
+  scheduled: ['SCHEDULED', 'ce'], selling: ['SELLING', 'c6'], armed: ['ARMED', 'ce'], sending: ['PAID · SENDING', 'c6'], sold: ['SOLD', 'ca'],
   handoff: ['HANDED OFF', 'c6'], ended: ['ENDED UNSOLD', 'c8'],
 };
-const friendCell = (f) => ({ meal: f.meal, mess: f.mess, diet: f.diet, start: f.start, end: f.end, ask: f.ask, task: f.task, friend: f.friend || '' });
+const friendCell = (f) => ({ meal: f.meal, mess: f.mess, diet: f.diet, start: f.start, end: f.end, ask: f.ask, task: f.task, schedule: f.schedule, friend: f.friend || '' });
 
 function renderFriends() {
   const box = $('friends');
@@ -691,11 +838,13 @@ function renderFriends() {
     return;
   }
   for (const f of fs) {
-    const row = el(f.task ? 'button' : 'div', 'friend' + (f.task ? ' live' : ''));
+    const open = f.task || f.schedule;
+    const row = el(open ? 'button' : 'div', 'friend' + (open ? ' live' : ''));
     row.style.setProperty('--m', messColor(f.mess));
-    if (f.task) {
+    if (open) {
       row.type = 'button';
-      row.setAttribute('aria-label', `Manage the sale of ${f.friend || 'a friend'}'s ${f.meal}: mark sold, edit prices or stop`);
+      row.setAttribute('aria-label', f.task ? `Manage the sale of ${f.friend || 'a friend'}'s ${f.meal}: mark sold, edit prices or stop`
+        : `Manage the scheduled sale of ${f.friend || 'a friend'}'s ${f.meal}, going up at ${hm(f.schedule.at)}`);
       row.addEventListener('click', () => openSell(f.date, friendCell(f)));
     }
     const ic = el('span', 'fr-ic');
@@ -706,8 +855,8 @@ function renderFriends() {
     what.append(nm, el('span', '', `${f.friend ? `for ${f.friend} · ` : ''}${dayWord(f.date)}${f.start ? `, ${hm(f.start)}-${hm(f.end)}` : ''}${f.extras && f.extras.length ? ` · + ${f.extras.join(', ')}` : ''}`));
     const [word, cls] = FRIEND_LOOK[f.state] || [f.state.toUpperCase(), 'c8'];
     const right = el('div', 'fr-right');
-    const price = f.task ? priceText(f.task) : f.amount ? rupees(f.amount) : '';
-    right.append(el('span', 'pill ' + cls, word), el('span', 'fr-amt', price));
+    const price = f.task ? priceText(f.task) : f.schedule ? priceText(f.schedule) : f.amount ? rupees(f.amount) : '';
+    right.append(el('span', 'pill ' + cls, f.schedule ? `${word} ${hm(f.schedule.at)}` : word), el('span', 'fr-amt', price));
     if (f.buyer && (f.state === 'sold' || f.state === 'armed' || f.state === 'sending' || f.state === 'handoff')) right.append(el('span', 'fr-buyer', fmtPhone(f.buyer)));
     row.append(ic, what, right);
     box.append(row);
@@ -844,7 +993,8 @@ function openFriendForm() {
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
       closeModal();
-      toast(`Selling ${friend.value.trim() ? `${friend.value.trim()}'s` : "your friend's"} ${w.meal}`);
+      const whose = friend.value.trim() ? `${friend.value.trim()}'s` : "your friend's";
+      toast(data.at ? `Scheduled. ${cap(whose)} ${w.meal} goes up at ${hm(data.at)}` : `Selling ${whose} ${w.meal}`);
       load();
     } catch (err) {
       error.textContent = err.message;
@@ -1146,6 +1296,7 @@ $('regIcon').append(svgEl(icon('paper')));
 $('pcIcon').append(svgEl(icon('chart')));
 $('cardIcon').append(svgEl(icon('chart')));
 tip($('xpBar'), () => (D ? savedTip() : []));
+tip($('ahead'), () => (aheadLines ? aheadLines() : []));
 // The phone layout draws at the box's pixel width, so redraw when the box
 // resizes, not only when it crosses into or out of the narrow layout.
 new ResizeObserver(() => {

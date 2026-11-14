@@ -254,6 +254,15 @@ func (s *Store) ParkSellTaskBuyer(ctx context.Context, id int64, peer, note stri
 	return err
 }
 
+// SkipSellTaskBuyer drops a buyer an autopilot task won't wait on, with
+// why. A buyer asked to pay is left to the turn that asked them.
+func (s *Store) SkipSellTaskBuyer(ctx context.Context, id int64, peer, note string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE sell_task_buyers SET note=?,
+ state=CASE WHEN state IN ('queued','negotiating','agreed') THEN 'skipped' ELSE state END
+ WHERE task_id=? AND peer=?`, note, id, peer)
+	return err
+}
+
 // RefundSellTaskBuyer records a payment the bot could not honour, so the
 // status tells you to send it back, and parks the buyer.
 func (s *Store) RefundSellTaskBuyer(ctx context.Context, id int64, peer, amount, note string) error {
@@ -416,7 +425,7 @@ func (s *Store) ToldSoldLate(ctx context.Context, id int64, peer string) (bool, 
 }
 
 // sellTaskColsT is sellTaskCols for a query that names sell_tasks t.
-const sellTaskColsT = `t.id,t.date,t.meal,t.min_paise,t.max_paise,t.user_id,t.account_hash,t.mess,t.diet,t.handoff,t.state,t.detail,t.created_at,t.ends_at,coalesce(t.ended_at,0),t.target_paise`
+const sellTaskColsT = `t.id,t.date,t.meal,t.min_paise,t.max_paise,t.user_id,t.account_hash,t.mess,t.diet,t.handoff,t.state,t.detail,t.created_at,t.ends_at,coalesce(t.ended_at,0),t.target_paise,t.autopilot`
 
 // prefixScan scans extra leading columns before a sell task's.
 type prefixScan struct {

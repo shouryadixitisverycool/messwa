@@ -107,6 +107,8 @@ type sellManager struct {
 	dead map[string]deadPost
 	// pricesMu serializes SetPrices.
 	pricesMu sync.Mutex
+	// timers start waiting sell schedules, by schedule id. Guarded by mu.
+	timers map[int64]*time.Timer
 }
 
 type runningTask struct {
@@ -139,8 +141,17 @@ func newSellManager(ctx context.Context, cfg *config.Config, log *slog.Logger, s
 	m := &sellManager{
 		cfg: cfg, log: log.With("component", "sell"), st: st, conn: conn, send: send, connected: connected,
 		portalFor: portalFor, prices: st.Prices, limits: newSendLimits(), own: own, base: ctx, running: map[int64]*runningTask{},
-		dead: map[string]deadPost{},
+		dead: map[string]deadPost{}, timers: map[int64]*time.Timer{},
 	}
+	// Schedules resume from the store on the next start.
+	context.AfterFunc(ctx, func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		for id, t := range m.timers {
+			t.Stop()
+			delete(m.timers, id)
+		}
+	})
 	if conn != nil {
 		id := conn.AddEventHandler(m.lateReply)
 		context.AfterFunc(ctx, func() { conn.RemoveEventHandler(id) })
@@ -222,6 +233,15 @@ func (m *sellManager) answerLate(info types.MessageInfo) {
 // task at the first private reply and hands that buyer's chat to you; or
 // "on_agreement", which hands you the first buyer who agrees a price.
 func (m *sellManager) Start(ctx context.Context, userID int64, date, meal string, minRupees, maxRupees int, handoff string) (int64, error) {
+	return m.start(ctx, userID, date, meal, minRupees, maxRupees, handoff, false)
+}
+
+// start is Start, on autopilot or not (see store.SellTask.Autopilot). An
+// autopilot task never hands off.
+func (m *sellManager) start(ctx context.Context, userID int64, date, meal string, minRupees, maxRupees int, handoff string, autopilot bool) (int64, error) {
+	if autopilot {
+		handoff = ""
+	}
 	if minRupees <= 0 || maxRupees < minRupees || maxRupees > 10000 {
 		return 0, errors.New("min_price must be at least 1 and max_price between min_price and 10000")
 	}
@@ -253,13 +273,19 @@ func (m *sellManager) Start(ctx context.Context, userID int64, date, meal string
 		return 0, err
 	}
 	t := store.SellTask{Date: date, Meal: meal, MinPaise: int64(minRupees) * 100, MaxPaise: int64(maxRupees) * 100,
-		UserID: userID, AccountHash: s.accountHash, Mess: s.mess, Diet: s.diet, Handoff: string(h), CreatedAt: time.Now(), EndsAt: slot.End}
+		UserID: userID, AccountHash: s.accountHash, Mess: s.mess, Diet: s.diet, Handoff: string(h), CreatedAt: time.Now(), EndsAt: slot.End, Autopilot: autopilot}
 	if t.ID, err = m.st.CreateSellTask(ctx, t); err != nil {
 		return 0, err
 	}
 	t.State = store.TaskActive
+	// Selling it now replaces a schedule still waiting for this meal.
+	if sid, err := m.st.EndWaitingSellSchedule(ctx, date, meal, store.ScheduleStarted, t.ID, "started early", time.Now()); err != nil {
+		m.log.Warn("could not end the meal's sell schedule", "task", t.ID, "err", err)
+	} else if sid != 0 {
+		m.disarm(sid)
+	}
 	m.launch(t, s, nil)
-	m.log.Info("sell task started", "task", t.ID, "date", date, "meal", meal, "min", minRupees, "max", maxRupees, "handoff", h)
+	m.log.Info("sell task started", "task", t.ID, "date", date, "meal", meal, "min", minRupees, "max", maxRupees, "handoff", h, "autopilot", autopilot)
 	m.poolChanged(t)
 	return t.ID, nil
 }
@@ -438,6 +464,9 @@ func (m *sellManager) Resume(ctx context.Context, enabled bool) error {
 			m.launch(t, nil, ready)
 		}
 	}
+	if err := m.resumeSchedules(ctx, enabled); err != nil {
+		m.log.Error("resume sell schedules", "err", err)
+	}
 	timeout := time.After(10 * time.Second)
 	for _, ready := range listening {
 		select {
@@ -594,7 +623,9 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, rt
 	if err != nil {
 		return err
 	}
-	s.acceptImages = settings.AcceptPaymentImages
+	// A screenshot only counts once you check your UPI app, so autopilot
+	// takes WhatsApp Pay alone.
+	s.acceptImages = settings.AcceptPaymentImages && !t.Autopilot
 	queue := newOfferQueue()
 	queue.join = func(peer, chat types.JID) bool {
 		if gate.turnsAway(ctx, peer, chat) {

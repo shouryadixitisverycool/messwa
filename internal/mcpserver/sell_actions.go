@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -35,6 +36,24 @@ func (s *Server) SellControl() (SellTasks, error) {
 		return nil, errors.New("sell tasks are turned off; an admin can turn them on in the dashboard's settings")
 	}
 	return s.sell, nil
+}
+
+// SellScheduler returns what schedules sell tasks while sell tasks are on.
+func (s *Server) SellScheduler() (SellScheduler, error) {
+	sell, err := s.SellControl()
+	if err != nil {
+		return nil, err
+	}
+	sc, ok := sell.(SellScheduler)
+	if !ok {
+		return nil, errors.New("this messwa can't schedule sell tasks")
+	}
+	return sc, nil
+}
+
+// SellSchedules lists waiting schedules and those made in the last day.
+func (s *Server) SellSchedules(ctx context.Context) ([]store.SellSchedule, error) {
+	return s.st.SellSchedules(ctx, s.now().Add(-24*time.Hour))
 }
 
 // SellOperator returns the sell task actions while sell tasks are on.
@@ -125,30 +144,32 @@ func (s *Server) resendSellTaskOffer(ctx context.Context, req *mcp.CallToolReque
 }
 
 // StartFriendSale saves a friend's meal and starts a sell task for it as
-// userID. m.Slot names the meal ("dinner"); the meal gets its own slot so
-// it never touches your own registration. Nothing stays saved when the
-// task can't start. It returns the task id and the slot.
-func (s *Server) StartFriendSale(ctx context.Context, userID int64, m store.FriendMeal, minRupees, maxRupees int) (int64, string, error) {
-	sell, err := s.SellControl()
+// userID, or schedules one when the meal hasn't started (see
+// SellScheduler). m.Slot names the meal ("dinner"); the meal gets its own
+// slot so it never touches your own registration. Nothing stays saved when
+// the task can't start or be scheduled. It returns the task or schedule
+// id, the slot, and when a scheduled task starts (zero when it started).
+func (s *Server) StartFriendSale(ctx context.Context, userID int64, m store.FriendMeal, minRupees, maxRupees int) (int64, string, time.Time, error) {
+	sell, err := s.SellScheduler()
 	if err != nil {
-		return 0, "", err
+		return 0, "", time.Time{}, err
 	}
 	if err := s.checkAccount(userID); err != nil {
-		return 0, "", err
+		return 0, "", time.Time{}, err
 	}
 	m.CreatedAt = s.now()
 	slot, err := s.st.AddFriendMeal(ctx, m)
 	if err != nil {
-		return 0, "", err
+		return 0, "", time.Time{}, err
 	}
-	id, err := sell.Start(ctx, userID, m.Date, slot, minRupees, maxRupees, "")
+	id, at, err := sell.StartOrSchedule(ctx, userID, m.Date, slot, minRupees, maxRupees, false)
 	if err != nil {
 		if derr := s.st.DeleteFriendMeal(context.WithoutCancel(ctx), m.Date, slot); derr != nil {
 			err = errors.Join(err, derr)
 		}
-		return 0, "", err
+		return 0, "", time.Time{}, err
 	}
-	return id, slot, nil
+	return id, slot, at, nil
 }
 
 // FriendMeals lists friends' meals from the date from, without QR images.

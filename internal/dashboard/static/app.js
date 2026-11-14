@@ -1140,7 +1140,9 @@ function nextSellable() {
   if (!D.nudge || !N || !N.owner || N.sell_off) return null;
   const n = now();
   const out = [];
-  for (const d of N.days) for (const c of d.cells) {
+  // Tomorrow's first meal comes as ahead once today's last one is over.
+  const days = N.ahead ? [...N.days, { date: N.ahead.date, cells: [N.ahead.cell] }] : N.days;
+  for (const d of days) for (const c of d.cells) {
     if (c.state === 'open' && c.sellable && c.end > n && !skipped.has(`${d.date}|${c.meal}`)) out.push({ date: d.date, c });
   }
   out.sort((a, b) => a.c.start - b.c.start);

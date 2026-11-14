@@ -184,6 +184,7 @@ func Default() *Config {
 			// buyer there is.
 			MessageBuyPosts: true,
 			Nudge:           true,
+			ListAt:          duration{-15 * time.Minute},
 			Repost:          true,
 			RepostMessages:  10,
 			RepostListings:  3,
@@ -231,6 +232,9 @@ func (c *Config) validateSell() error {
 	}
 	if s.PostGap.Duration < MinPostGap {
 		return fmt.Errorf("sell.post_gap must be at least %s", MinPostGap)
+	}
+	if d := s.ListAt.Duration; d < MinListAt || d > MaxListAt {
+		return fmt.Errorf("sell.list_at must be between %s and %s", MinListAt, MaxListAt)
 	}
 	if d := s.NegotiationSilence.Duration; d < MinNegotiationSilence || d > MaxNegotiationSilence {
 		return fmt.Errorf("sell.negotiation_silence must be between %s and %s", MinNegotiationSilence, MaxNegotiationSilence)

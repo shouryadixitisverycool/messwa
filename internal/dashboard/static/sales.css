@@ -141,6 +141,28 @@
   .price { font-size: 16px; }
 }
 
+/* ---------- up next: tomorrow's first meal, after today's last ---------- */
+
+.ahead {
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; width: 100%;
+  margin: 0 0 14px; padding: 10px 14px; border-radius: 12px; text-align: left; font: inherit; color: var(--text); cursor: pointer;
+  background: color-mix(in srgb, var(--gold) 6%, var(--slot)); border: 1px dashed color-mix(in srgb, var(--gold) 55%, transparent);
+}
+.ahead[hidden] { display: none; }
+.ahead:hover:not(:disabled), .ahead:focus-visible { border-style: solid; }
+.ahead:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.ahead:disabled { cursor: default; }
+.ah-ic { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; background: var(--slot); border: 1px solid #2a3140; }
+.ah-ic svg { width: 18px; height: 18px; }
+.ah-what { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; row-gap: 2px; min-width: 0; }
+.ah-k { width: 100%; font: 700 8px Pixel; letter-spacing: .5px; color: var(--muted); }
+.ah-what b { color: var(--m); font-weight: 600; font-size: 14px; }
+.ah-when { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.ah-act { display: grid; justify-items: end; gap: 2px; white-space: nowrap; }
+.ah-act b { font: 700 11px Pixel; letter-spacing: .4px; color: var(--muted); }
+.ah-act b.gold { color: var(--gold); }
+.ah-act small { color: var(--muted); font-size: 12px; }
+
 /* ---------- selling from the ledger ---------- */
 
 .sw.l { border-color: color-mix(in srgb, var(--gold) 70%, transparent); box-shadow: 0 0 6px rgba(255, 197, 61, .35); }
@@ -157,6 +179,11 @@
 .cell.is-selling { border-color: color-mix(in srgb, var(--gold) 55%, transparent); animation: ring 2.4s ease-out infinite; }
 .cell.is-selling .price.range { font-size: 8px; padding-bottom: 6px; }
 .cell.is-selling .price.range .r { font-size: 9px; }
+/* A sale waiting for its meal: gold but dashed and still, since nothing is up yet. */
+.cell.is-scheduled { border: 1px dashed color-mix(in srgb, var(--gold) 70%, transparent); background: color-mix(in srgb, var(--gold) 5%, var(--slot)); }
+.cell.is-scheduled .price.range { font-size: 8px; padding-bottom: 6px; opacity: .8; }
+.cell.is-scheduled .price.range .r { font-size: 9px; }
+.sw.q { border: 1px dashed color-mix(in srgb, var(--gold) 70%, transparent); }
 
 .sell-sheet { width: min(460px, 100%); }
 .sell-head h2 { margin: 0; font: 700 15px Pixel, var(--sans); letter-spacing: .3px; }
@@ -170,6 +197,11 @@
 .sell-axis { display: flex; justify-content: space-between; margin: 4px 2px 0; font-size: 11px; color: var(--dim); }
 .sell-axis .med-l { color: var(--muted); }
 .sell-note { margin: 16px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.sell-when {
+  margin: 12px 0 0; padding: 9px 12px; border-radius: 10px; font-size: 12.5px; line-height: 1.5; color: var(--muted);
+  border: 1px dashed color-mix(in srgb, var(--gold) 55%, transparent); background: color-mix(in srgb, var(--gold) 6%, transparent);
+}
+.sell-when b { color: var(--gold); }
 .sell-err { margin: 8px 0 0; color: #ff6b5b; font-size: 12.5px; min-height: 1em; }
 .sell-err:empty { display: none; }
 .sell-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
@@ -210,6 +242,15 @@
 .sell-form input:not([type=range], [type=radio], [type=file]):focus-visible, .sell-form select:focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; }
 .sell-form .sell-note, .sell-form .sell-err, .sell-form .sell-acts { margin-top: 0; }
 @media (max-width: 420px) { .sell-tools { grid-template-columns: 1fr; } }
+/* A schedule's tools: START NOW beside AUTOPILOT, then prices and unschedule. */
+.sell-tools.pairs { grid-template-columns: 1fr 1fr; }
+.sell-tool.auto b { color: var(--dim); }
+.sell-tool.auto.on { border-color: color-mix(in srgb, var(--blue, #5aa9ff) 70%, transparent); background: color-mix(in srgb, #5aa9ff 10%, var(--slot)); }
+.sell-tool.auto.on b, .sell-tool.auto.on span { color: #5aa9ff; }
+.auto-note b { color: #5aa9ff; font-weight: 600; }
+.auto-note[hidden] { display: none; }
+/* Autopilot on a ledger cell. */
+.auto-tag { position: absolute; top: 3px; right: 4px; font-size: 9px; line-height: 1; color: #5aa9ff; }
 
 /* ---------- friends' meals ---------- */
 

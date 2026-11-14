@@ -116,6 +116,10 @@ message_buy_posts = true
 # Show a card on the dashboard board asking you to sell your next
 # registered meal that nobody is selling yet.
 nudge = true
+# When a sale you start from the dashboard before its meal begins goes up,
+# counted from the meal's start: "-15m" posts 15 minutes before it, "30m"
+# half an hour in. -30m to 1h30m. It sells till the meal ends either way.
+list_at = "-15m"
 # Who may buy. "anyone" sells to whoever replies privately to the offer.
 # "unsaved_only" skips anyone in your address book, matched by number or
 # LID: the bot logs that they replied and sends them nothing. It applies to

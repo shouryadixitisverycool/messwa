@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"messwa/internal/accounts"
 	"messwa/internal/config"
@@ -18,6 +19,14 @@ import (
 
 // maxQR is the largest friend's QR image accepted, as WhatsApp sends it.
 const maxQR = 5 << 20
+
+// startedResp answers a sell start. At is when a scheduled task starts,
+// with ID the schedule's; 0 means the task started now and ID is its own.
+type startedResp struct {
+	ID   int64  `json:"id"`
+	Slot string `json:"slot,omitempty"`
+	At   int64  `json:"at,omitempty"`
+}
 
 // sellActionRoutes shares the task operations with MCP: starting, repricing
 // and stopping a task from the sales ledger, selling a friend's meal, and
@@ -34,15 +43,12 @@ func sellActionRoutes(mux *http.ServeMux, cfg *config.Config, srv *mcpserver.Ser
 			jsonError(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		id, slot, err := srv.StartFriendSale(r.Context(), accounts.UserFrom(r.Context()).ID, m, min, max)
+		id, slot, at, err := srv.StartFriendSale(r.Context(), accounts.UserFrom(r.Context()).ID, m, min, max)
 		if err != nil {
 			jsonError(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		writeJSON(w, r, struct {
-			ID   int64  `json:"id"`
-			Slot string `json:"slot"`
-		}{id, slot})
+		writeJSON(w, r, startedResp{ID: id, Slot: slot, At: unix(at)})
 	})))
 
 	mux.Handle("POST /api/sell-action", requireRole(accounts.Member, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -59,6 +65,12 @@ func sellActionRoutes(mux *http.ServeMux, cfg *config.Config, srv *mcpserver.Ser
 			Meal string `json:"meal"`
 			Min  int    `json:"min"`
 			Max  int    `json:"max"`
+			// start: Now starts the task straight away even when the
+			// meal hasn't begun, instead of scheduling it. Autopilot
+			// starts it on autopilot; autopilot: turns it on or off for
+			// schedule ID.
+			Now       bool `json:"now"`
+			Autopilot bool `json:"autopilot"`
 		}
 		if !readJSON(w, r, &in) {
 			return
@@ -68,22 +80,58 @@ func sellActionRoutes(mux *http.ServeMux, cfg *config.Config, srv *mcpserver.Ser
 			return
 		}
 		switch in.Action {
-		case "start", "prices", "cancel":
+		case "start":
+			if !picksGroups(cfg.Live()) {
+				jsonError(w, "pick the groups to post in first, under Settings, Offer", http.StatusBadRequest)
+				return
+			}
+			var id int64
+			var at time.Time
+			var err error
+			userID := accounts.UserFrom(r.Context()).ID
+			if in.Now {
+				var sc mcpserver.SellScheduler
+				if sc, err = srv.SellScheduler(); err == nil {
+					id, err = sc.StartNow(r.Context(), userID, in.Date, in.Meal, in.Min, in.Max, in.Autopilot)
+				}
+			} else {
+				var sc mcpserver.SellScheduler
+				if sc, err = srv.SellScheduler(); err == nil {
+					id, at, err = sc.StartOrSchedule(r.Context(), userID, in.Date, in.Meal, in.Min, in.Max, in.Autopilot)
+				}
+			}
+			if err != nil {
+				jsonError(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, r, startedResp{ID: id, At: unix(at)})
+			return
+		case "autopilot":
+			sc, err := srv.SellScheduler()
+			if err == nil {
+				err = sc.SetScheduleAutopilot(r.Context(), in.ID, in.Autopilot)
+			}
+			if err != nil {
+				jsonError(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, r, struct{}{})
+			return
+		case "unschedule":
+			sc, err := srv.SellScheduler()
+			if err == nil {
+				err = sc.CancelSchedule(r.Context(), in.ID)
+			}
+			if err != nil {
+				jsonError(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, r, struct{}{})
+			return
+		case "prices", "cancel":
 			sell, err := srv.SellControl()
 			if err == nil {
 				switch in.Action {
-				case "start":
-					if !picksGroups(cfg.Live()) {
-						jsonError(w, "pick the groups to post in first, under Settings, Offer", http.StatusBadRequest)
-						return
-					}
-					var id int64
-					if id, err = sell.Start(r.Context(), accounts.UserFrom(r.Context()).ID, in.Date, in.Meal, in.Min, in.Max, ""); err == nil {
-						writeJSON(w, r, struct {
-							ID int64 `json:"id"`
-						}{id})
-						return
-					}
 				case "prices":
 					err = sell.SetPrices(r.Context(), in.ID, in.Min, in.Max)
 				case "cancel":

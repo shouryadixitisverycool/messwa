@@ -30,7 +30,7 @@ const EventEdited = "edited"
 
 // pooledCond holds for a task alias x that can pool.
 func pooledCond(x string) string {
-	return x + `.max_paise>` + x + `.min_paise AND ` + x + `.handoff IN ('','never') AND ` + x + `.mess!=''`
+	return x + `.max_paise>` + x + `.min_paise AND ` + x + `.handoff IN ('','never') AND ` + x + `.mess!='' AND ` + x + `.autopilot=0`
 }
 
 // baseMealOf is the configured meal behind alias x's slot name.

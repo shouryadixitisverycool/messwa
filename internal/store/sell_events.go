@@ -34,6 +34,7 @@ const (
 	EventAgreed        = "agreed"         // N: paise
 	EventPrompt        = "prompt"         // asked to pay; N: paise
 	EventParked        = "parked"         // Text: why they need you
+	EventAutoSkipped   = "auto_skipped"   // autopilot dropped a buyer who would need you; Text: why
 	EventPassed        = "passed"         // the buyer dropped out
 	EventPassCounter   = "pass_counter"   // the buyer passed and got one lower price; N: paise, Text: what they passed at
 	EventNudged        = "nudged"         // the buyer stayed quiet after the first message; N: the ask or the lower price, paise; Text: which follow-up
