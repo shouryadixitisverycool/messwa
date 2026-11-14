@@ -73,6 +73,10 @@ func sellActionRoutes(mux *http.ServeMux, cfg *config.Config, srv *mcpserver.Ser
 			if err == nil {
 				switch in.Action {
 				case "start":
+					if !picksGroups(cfg.Live()) {
+						jsonError(w, "pick the groups to post in first, under Settings, Offer", http.StatusBadRequest)
+						return
+					}
 					var id int64
 					if id, err = sell.Start(r.Context(), accounts.UserFrom(r.Context()).ID, in.Date, in.Meal, in.Min, in.Max, ""); err == nil {
 						writeJSON(w, r, struct {

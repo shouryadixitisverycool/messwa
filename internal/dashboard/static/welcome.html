@@ -69,14 +69,61 @@
     </div>
   </section>
 
+  <section class="chest step" id="groupStep" aria-label="Groups to post in">
+    <div class="chest-head">
+      <span class="head-icon" id="groupIcon"></span>
+      <span class="head-name">3. Groups to post in</span>
+      <span class="head-meta" id="groupMeta"></span>
+      <button class="help" type="button" aria-expanded="false" aria-controls="groupHelp" title="What's this?">?</button>
+    </div>
+    <div class="form">
+      <p class="note" id="groupHelp" hidden>When you sell a meal, messwa posts the offer in these groups, top to bottom. It can only post in groups your WhatsApp is in. Change them later in Settings, Offer.</p>
+      <p class="note" id="groupNote">Link WhatsApp first.</p>
+      <div class="group-list" id="groupList" role="group" aria-label="Groups"></div>
+      <p class="err" id="groupErr" role="alert" hidden></p>
+    </div>
+  </section>
+
+  <section class="chest step" id="howStep" aria-label="How you sell">
+    <div class="chest-head">
+      <span class="head-icon" id="howIcon"></span>
+      <span class="head-name">4. How you sell</span>
+      <span class="head-meta" id="howMeta"></span>
+    </div>
+    <div class="form">
+      <div class="h-lbl">When a buyer replies</div>
+      <div class="choices" id="handoff" role="radiogroup" aria-label="When a buyer replies"></div>
+      <div class="h-lbl">Who can buy</div>
+      <div class="choices" id="buyers" role="radiogroup" aria-label="Who can buy"></div>
+      <p class="err" id="howErr" role="alert" hidden></p>
+    </div>
+  </section>
+
+  <section class="chest step" id="payStep" aria-label="WhatsApp Pay">
+    <div class="chest-head">
+      <span class="head-icon" id="payIcon"></span>
+      <span class="head-name">5. WhatsApp Pay</span>
+      <span class="head-meta" id="payMeta"></span>
+    </div>
+    <div class="form">
+      <p class="note">Buyers pay you with WhatsApp Pay, and messwa sends the QR once the payment shows up in the chat. It can't see GPay or other UPI apps. Turn WhatsApp Pay on for the number you linked:</p>
+      <ol class="steps-list">
+        <li>Open WhatsApp and go to Payments: under Settings on iPhone, in the ⋮ menu on Android.</li>
+        <li>Tap Add payment method and pick your bank.</li>
+        <li>Verify your number and set or confirm your UPI PIN.</li>
+      </ol>
+      <label class="check"><input type="checkbox" id="payReady"><span>WhatsApp Pay is set up on this number</span></label>
+    </div>
+  </section>
+
   <section class="chest step" id="askStep" aria-label="Approval">
     <div class="chest-head">
       <span class="head-icon" id="askIcon"></span>
-      <span class="head-name">3. Approval</span>
+      <span class="head-name">6. Approval</span>
       <span class="head-meta" id="askMeta"></span>
     </div>
     <div class="form">
-      <p class="note" id="askNote">Once your key is saved and WhatsApp is linked, ask the admins to approve you.</p>
+      <p class="note" id="askNote">Finish the steps above, then ask the admins to approve you.</p>
       <p class="err" id="askErr" role="alert" hidden></p>
       <div class="actions"><button class="btn primary" type="button" id="ask">Ask for approval</button></div>
     </div>

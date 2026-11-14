@@ -633,3 +633,13 @@ a.copy.linked:hover .copy-go { color: var(--gold); }
 }
 .dual input:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(255, 197, 61, .5); }
 .dual input:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(255, 197, 61, .5); }
+
+/* The board's warning when selling would post in no group. */
+.setup-warn {
+  display: block; padding: 10px 14px; border-radius: 12px; text-decoration: none;
+  background: color-mix(in srgb, #ff6b5b 10%, var(--panel)); border: 1px solid color-mix(in srgb, #ff6b5b 45%, transparent);
+  color: var(--muted); font-size: 13px; line-height: 1.45;
+}
+.setup-warn[hidden] { display: none; }
+.setup-warn b { color: var(--text); font-weight: 600; }
+.setup-warn .go { color: var(--gold); white-space: nowrap; }

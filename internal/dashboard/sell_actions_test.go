@@ -99,6 +99,12 @@ func TestSellActionsAPI(t *testing.T) {
 	if res := admin.send(t, "POST", "/api/sell-action", map[string]any{"action": "bad"}); res.StatusCode != 400 {
 		t.Fatalf("bad action = %d", res.StatusCode)
 	}
+	// A start with no groups picked would post nowhere useful.
+	cfg.Groups = []string{"a@g.us"}
+	if res := admin.send(t, "POST", "/api/sell-action", map[string]any{"action": "start", "date": "2026-11-03", "meal": "dinner", "min": 50, "max": 80}); res.StatusCode != 400 {
+		t.Fatalf("start without groups = %d, want 400", res.StatusCode)
+	}
+	cfg.Sell.GroupCount = 1
 	// The ledger starts, reprices and stops tasks as the signed-in user.
 	for _, in := range []map[string]any{
 		{"action": "start", "date": "2026-11-03", "meal": "dinner", "min": 50, "max": 80},

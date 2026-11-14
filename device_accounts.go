@@ -404,3 +404,28 @@ func (m *deviceAccounts) prune(ctx context.Context, now time.Time) {
 		}
 	}
 }
+
+// JoinedGroups lists the groups this WhatsApp is in, JID to name, for the
+// welcome page's group step. An account that isn't approved yet has no
+// running client, so this connects it when needed and asks to try again.
+func (a *deviceAccount) JoinedGroups(ctx context.Context) (map[string]string, error) {
+	a.mu.Lock()
+	c := a.client
+	a.mu.Unlock()
+	if !c.LoggedIn() {
+		return nil, fmt.Errorf("link WhatsApp first")
+	}
+	if !c.IsConnected() {
+		c.Reconnect()
+		return nil, dashboard.ErrConnecting
+	}
+	gs, err := accountConn{c}.GetJoinedGroups(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(gs))
+	for _, g := range gs {
+		out[g.JID.String()] = g.Name
+	}
+	return out, nil
+}
