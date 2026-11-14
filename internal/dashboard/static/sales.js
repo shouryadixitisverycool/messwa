@@ -939,9 +939,17 @@ function buyerLines(b) {
 
 // ---------- price check ----------
 
+// pricesNarrow is whether the price check is too narrow for its desktop
+// layout. A narrow chart puts each row's label and verdict on one line with
+// the bar under it at full width, drawn at the box's own pixel width.
+let pricesNarrow = false;
+const pricesTooNarrow = () => $('pplot').clientWidth < 620;
+
 function renderPrices() {
   const box = $('pplot');
   box.replaceChildren();
+  pricesNarrow = pricesTooNarrow();
+  const narrow = pricesNarrow;
   const mine = recentSales();
   // A row per meal and diet you sold in: the market's asks in that diet
   // against your sales in it.
@@ -964,20 +972,28 @@ function renderPrices() {
   }
   let lo = Math.floor(Math.min(...vals) / 10) * 10, hi = Math.ceil(Math.max(...vals) / 10) * 10;
   if (hi - lo < 20) { lo = Math.max(0, lo - 10); hi = lo + 30; }
-  const W = 860, x0 = 136, x1 = W - 168, top = 22, rowH = 40, H = top + rows.length * rowH + 16;
+  const W = narrow ? Math.max(260, box.clientWidth) : 860;
+  const x0 = narrow ? 14 : 136, x1 = narrow ? W - 14 : W - 168;
+  const top = narrow ? 8 : 22, rowH = narrow ? 64 : 40, H = top + rows.length * rowH + (narrow ? 10 : 16);
   const X = (v) => x0 + ((v - lo) / (hi - lo)) * (x1 - x0);
-  const step = [5, 10, 20, 25, 50, 100].find((s) => (hi - lo) / s <= 6) || 100;
+  const step = [5, 10, 20, 25, 50, 100].find((s) => (hi - lo) / s <= (narrow ? 4 : 6)) || 100;
+  const ticks = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) ticks.push(v);
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Your sale prices against the market's asking prices, by meal and diet">`;
-  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
-    svg += `<line x1="${X(v)}" x2="${X(v)}" y1="4" y2="${H - 22}" stroke="#252c3a" stroke-dasharray="2 4"/>`
-      + `<text x="${X(v)}" y="${H - 6}" fill="#586076" font-size="10.5" text-anchor="middle">₹${v}</text>`;
+  for (const v of ticks) {
+    if (!narrow) svg += `<line x1="${X(v)}" x2="${X(v)}" y1="4" y2="${H - 22}" stroke="#252c3a" stroke-dasharray="2 4"/>`;
+    svg += `<text x="${X(v)}" y="${H - 6}" fill="#586076" font-size="10.5" text-anchor="middle">₹${v}</text>`;
   }
   const verdicts = [];
   rows.forEach(({ meal, diet, m, ms }, i) => {
-    const y = top + i * rowH + 6;
-    svg += icon(meal).replace('<svg ', `<svg x="2" y="${y - 6}" width="12" height="12" `)
-      + dietMark(diet).replace('<svg ', `<svg x="18" y="${y - 6}" width="12" height="12" `)
-      + `<text class="px" x="36" y="${y + 4}" fill="#8b94a7">${meal.toUpperCase()}</text>`;
+    // ly is the label line, y the bar's middle. They share a line on desktop.
+    const ly = top + i * rowH + (narrow ? 8 : 6), y = narrow ? ly + 28 : ly;
+    svg += icon(meal).replace('<svg ', `<svg x="2" y="${ly - 6}" width="12" height="12" `)
+      + dietMark(diet).replace('<svg ', `<svg x="18" y="${ly - 6}" width="12" height="12" `)
+      + `<text class="px" x="36" y="${ly + 4}" fill="#8b94a7">${meal.toUpperCase()}</text>`;
+    if (narrow) {
+      for (const v of ticks) svg += `<line x1="${X(v)}" x2="${X(v)}" y1="${y - 14}" y2="${y + 14}" stroke="#252c3a" stroke-dasharray="2 4"/>`;
+    }
     if (m) {
       svg += `<rect x="${X(m.q1)}" y="${y - 9}" width="${Math.max(2, X(m.q3) - X(m.q1))}" height="18" rx="4" fill="rgba(232,236,243,.14)"/>`
         + `<line x1="${X(m.median)}" x2="${X(m.median)}" y1="${y - 12}" y2="${y + 12}" stroke="#e8ecf3" stroke-opacity=".8" stroke-width="2" stroke-linecap="round"/>`;
@@ -991,9 +1007,10 @@ function renderPrices() {
     const word = d == null ? 'NO ASKS' : d <= -3 ? 'UNDERCUT' : d >= 3 ? 'PREMIUM' : 'AT MARKET';
     const hot = word === 'UNDERCUT';
     const pw = word.length * 7 + 14;
-    svg += `<g transform="translate(${W - 150} ${y - 9})"><rect width="${pw}" height="18" rx="9" fill="none" stroke="${hot ? 'rgba(255,197,61,.55)' : '#252c3a'}"/>`
+    const px = narrow ? W - (d == null ? 0 : 42) - pw : W - 150;
+    svg += `<g transform="translate(${px} ${ly - 9})"><rect width="${pw}" height="18" rx="9" fill="none" stroke="${hot ? 'rgba(255,197,61,.55)' : '#252c3a'}"/>`
       + `<text class="px pill" x="${pw / 2}" y="12.5" text-anchor="middle" font-size="8" fill="${hot ? '#ffc53d' : d == null ? '#586076' : '#8b94a7'}">${word}</text></g>`;
-    if (d != null) svg += `<text x="${W}" y="${y + 4}" text-anchor="end" fill="#8b94a7" font-size="11">${signed(d)}</text>`;
+    if (d != null) svg += `<text x="${W}" y="${ly + 4}" text-anchor="end" fill="#8b94a7" font-size="11">${signed(d)}</text>`;
     verdicts.push({ meal, diet, d, word, m, n: ms.length });
   });
   svg += '</svg>';
@@ -1111,6 +1128,13 @@ $('regIcon').append(svgEl(icon('paper')));
 $('pcIcon').append(svgEl(icon('chart')));
 $('cardIcon').append(svgEl(icon('chart')));
 tip($('xpBar'), () => (D ? savedTip() : []));
+// The phone layout draws at the box's pixel width, so redraw when the box
+// resizes, not only when it crosses into or out of the narrow layout.
+new ResizeObserver(() => {
+  if (!D || !D.owner || !(pricesNarrow || pricesTooNarrow())) return;
+  renderPrices();
+  if (tipFor && !tipFor.isConnected) hideTip();
+}).observe($('pplot'));
 $('pgPrev').addEventListener('click', () => { if (D) { page = Math.min(pages() - 1, page + 1); renderLedger(); if (D.owner) renderEarnings(); } });
 $('pgNext').addEventListener('click', () => { if (D) { page = Math.max(0, page - 1); renderLedger(); if (D.owner) renderEarnings(); } });
 addEventListener('keydown', (e) => {
