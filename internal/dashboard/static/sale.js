@@ -161,7 +161,7 @@ function chest(v) {
 
   const top = el('div', 'ms-top');
   top.append(...mealHead(v, 'ms-meal'));
-  const tag = paying ? ['grn', 'PAYING'] : needs ? ['red', `${needs} NEEDS YOU`] : failed ? ['red', `${failed} ${failed === 1 ? 'POST' : 'POSTS'} FAILED`] : null;
+  const tag = paying ? ['grn', 'PAYING'] : needs ? ['red', `${needs} NEEDS YOU`] : failed ? ['red', `${failed} ${failed === 1 ? 'POST' : 'POSTS'} FAILED`] : v.autopilot ? ['auto', '✈ AUTOPILOT'] : null;
   if (tag) top.append(el('span', 'ms-tag ' + tag[0], tag[1]));
   top.append(timeBadge(v));
   c.append(top);
@@ -761,7 +761,7 @@ function haggleRounds(b, v) {
       row.bot = e.n;
       row.lock = row.lock || /lowest/.test(e.text || '');
       row.deal = row.deal || e.kind === 'agreed';
-    } else if (e.kind === 'parked' && row) {
+    } else if ((e.kind === 'parked' || e.kind === 'auto_skipped') && row) {
       row.stop = true;
     }
   }

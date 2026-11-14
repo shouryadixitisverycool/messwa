@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS sell_schedules (
  task_id INTEGER NOT NULL DEFAULT 0,
  detail TEXT NOT NULL DEFAULT '',
  created_at INTEGER NOT NULL,
- ended_at INTEGER NOT NULL DEFAULT 0
+ ended_at INTEGER NOT NULL DEFAULT 0,
+ autopilot INTEGER NOT NULL DEFAULT 0
 );
 CREATE UNIQUE INDEX IF NOT EXISTS sell_schedules_one_waiting ON sell_schedules(date, meal) WHERE state='waiting';
 `
@@ -52,14 +53,16 @@ type SellSchedule struct {
 	Detail    string
 	CreatedAt time.Time
 	EndedAt   time.Time // zero while waiting
+	// Autopilot starts the task on autopilot; see SellTask.Autopilot.
+	Autopilot bool
 }
 
-const sellScheduleCols = `id,date,meal,min_paise,max_paise,user_id,handoff,starts_at,ends_at,state,task_id,detail,created_at,ended_at`
+const sellScheduleCols = `id,date,meal,min_paise,max_paise,user_id,handoff,starts_at,ends_at,state,task_id,detail,created_at,ended_at,autopilot`
 
 func scanSellSchedule(row interface{ Scan(...any) error }) (SellSchedule, error) {
 	var s SellSchedule
 	var starts, ends, created, ended int64
-	err := row.Scan(&s.ID, &s.Date, &s.Meal, &s.MinPaise, &s.MaxPaise, &s.UserID, &s.Handoff, &starts, &ends, &s.State, &s.TaskID, &s.Detail, &created, &ended)
+	err := row.Scan(&s.ID, &s.Date, &s.Meal, &s.MinPaise, &s.MaxPaise, &s.UserID, &s.Handoff, &starts, &ends, &s.State, &s.TaskID, &s.Detail, &created, &ended, &s.Autopilot)
 	s.StartsAt, s.EndsAt, s.CreatedAt = time.Unix(starts, 0), time.Unix(ends, 0), time.Unix(created, 0)
 	if ended != 0 {
 		s.EndedAt = time.Unix(ended, 0)
@@ -94,8 +97,8 @@ func (s *Store) CreateSellSchedule(ctx context.Context, sc SellSchedule) (int64,
 			return 0, errors.New(c.msg)
 		}
 	}
-	r, err := tx.ExecContext(ctx, `INSERT INTO sell_schedules(date,meal,min_paise,max_paise,user_id,handoff,starts_at,ends_at,created_at)
- VALUES(?,?,?,?,?,?,?,?,?)`, sc.Date, sc.Meal, sc.MinPaise, sc.MaxPaise, sc.UserID, sc.Handoff, sc.StartsAt.Unix(), sc.EndsAt.Unix(), sc.CreatedAt.Unix())
+	r, err := tx.ExecContext(ctx, `INSERT INTO sell_schedules(date,meal,min_paise,max_paise,user_id,handoff,starts_at,ends_at,created_at,autopilot)
+ VALUES(?,?,?,?,?,?,?,?,?,?)`, sc.Date, sc.Meal, sc.MinPaise, sc.MaxPaise, sc.UserID, sc.Handoff, sc.StartsAt.Unix(), sc.EndsAt.Unix(), sc.CreatedAt.Unix(), sc.Autopilot)
 	if err != nil {
 		return 0, err
 	}
@@ -169,4 +172,15 @@ func (s *Store) EndWaitingSellSchedule(ctx context.Context, date, meal, state st
 		return 0, nil
 	}
 	return id, err
+}
+
+// SetSellScheduleAutopilot turns autopilot on or off for a waiting
+// schedule. It reports false when the schedule isn't waiting.
+func (s *Store) SetSellScheduleAutopilot(ctx context.Context, id int64, on bool) (bool, error) {
+	r, err := s.db.ExecContext(ctx, `UPDATE sell_schedules SET autopilot=? WHERE id=? AND state='waiting'`, on, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := r.RowsAffected()
+	return n == 1, err
 }

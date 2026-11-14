@@ -233,6 +233,15 @@ func (m *sellManager) answerLate(info types.MessageInfo) {
 // task at the first private reply and hands that buyer's chat to you; or
 // "on_agreement", which hands you the first buyer who agrees a price.
 func (m *sellManager) Start(ctx context.Context, userID int64, date, meal string, minRupees, maxRupees int, handoff string) (int64, error) {
+	return m.start(ctx, userID, date, meal, minRupees, maxRupees, handoff, false)
+}
+
+// start is Start, on autopilot or not (see store.SellTask.Autopilot). An
+// autopilot task never hands off.
+func (m *sellManager) start(ctx context.Context, userID int64, date, meal string, minRupees, maxRupees int, handoff string, autopilot bool) (int64, error) {
+	if autopilot {
+		handoff = ""
+	}
 	if minRupees <= 0 || maxRupees < minRupees || maxRupees > 10000 {
 		return 0, errors.New("min_price must be at least 1 and max_price between min_price and 10000")
 	}
@@ -261,7 +270,7 @@ func (m *sellManager) Start(ctx context.Context, userID int64, date, meal string
 		return 0, err
 	}
 	t := store.SellTask{Date: date, Meal: meal, MinPaise: int64(minRupees) * 100, MaxPaise: int64(maxRupees) * 100,
-		UserID: userID, AccountHash: s.accountHash, Mess: s.mess, Diet: s.diet, Handoff: string(h), CreatedAt: time.Now(), EndsAt: slot.End}
+		UserID: userID, AccountHash: s.accountHash, Mess: s.mess, Diet: s.diet, Handoff: string(h), CreatedAt: time.Now(), EndsAt: slot.End, Autopilot: autopilot}
 	if t.ID, err = m.st.CreateSellTask(ctx, t); err != nil {
 		return 0, err
 	}
@@ -273,7 +282,7 @@ func (m *sellManager) Start(ctx context.Context, userID int64, date, meal string
 		m.disarm(sid)
 	}
 	m.launch(t, s, nil)
-	m.log.Info("sell task started", "task", t.ID, "date", date, "meal", meal, "min", minRupees, "max", maxRupees, "handoff", h)
+	m.log.Info("sell task started", "task", t.ID, "date", date, "meal", meal, "min", minRupees, "max", maxRupees, "handoff", h, "autopilot", autopilot)
 	m.poolChanged(t)
 	return t.ID, nil
 }
@@ -611,7 +620,9 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, rt
 	if err != nil {
 		return err
 	}
-	s.acceptImages = settings.AcceptPaymentImages
+	// A screenshot only counts once you check your UPI app, so autopilot
+	// takes WhatsApp Pay alone.
+	s.acceptImages = settings.AcceptPaymentImages && !t.Autopilot
 	queue := newOfferQueue()
 	queue.join = func(peer, chat types.JID) bool {
 		if gate.turnsAway(ctx, peer, chat) {

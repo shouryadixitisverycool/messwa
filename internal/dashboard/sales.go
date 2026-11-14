@@ -126,6 +126,8 @@ type cellTask struct {
 	Min    float64     `json:"min"`
 	Max    float64     `json:"max"`
 	Buyers []taskBuyer `json:"buyers"`
+	// Autopilot skips buyers who would need you.
+	Autopilot bool `json:"autopilot,omitempty"`
 }
 
 // aheadCell is a meal on a day after Days.
@@ -137,10 +139,11 @@ type aheadCell struct {
 // cellSchedule is a sale waiting for its meal: it starts a sell task at
 // At (unix seconds) with this price range in rupees.
 type cellSchedule struct {
-	ID  int64   `json:"id"`
-	At  int64   `json:"at"`
-	Min float64 `json:"min"`
-	Max float64 `json:"max"`
+	ID        int64   `json:"id"`
+	At        int64   `json:"at"`
+	Min       float64 `json:"min"`
+	Max       float64 `json:"max"`
+	Autopilot bool    `json:"autopilot,omitempty"`
 }
 
 // taskBuyer is one of a running task's buyers. Key is what the sell
@@ -366,7 +369,7 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 			if v.State != store.TaskActive {
 				continue
 			}
-			t := &cellTask{ID: v.ID, Min: v.Min, Max: v.Max, Buyers: []taskBuyer{}}
+			t := &cellTask{ID: v.ID, Min: v.Min, Max: v.Max, Buyers: []taskBuyer{}, Autopilot: v.Autopilot}
 			for _, b := range v.Buyers {
 				price := b.Agreed
 				if price == 0 {
@@ -385,7 +388,7 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 		}
 		for _, sc := range scs {
 			if sc.State == store.ScheduleWaiting {
-				waiting[sc.Date+"|"+sc.Meal] = &cellSchedule{ID: sc.ID, At: sc.StartsAt.Unix(), Min: float64(sc.MinPaise) / 100, Max: float64(sc.MaxPaise) / 100}
+				waiting[sc.Date+"|"+sc.Meal] = &cellSchedule{ID: sc.ID, At: sc.StartsAt.Unix(), Min: float64(sc.MinPaise) / 100, Max: float64(sc.MaxPaise) / 100, Autopilot: sc.Autopilot}
 			}
 		}
 		if _, err := srv.SellControl(); err != nil {
