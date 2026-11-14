@@ -241,6 +241,24 @@ func TestSales(t *testing.T) {
 	if len(b.Mine) != 1 || b.Mine[0].Meal != "lunch" || b.Mine[0].State != "armed" || b.Mine[0].Amount != 60 {
 		t.Errorf("mine %+v", b.Mine)
 	}
+	if len(b.Scheduled) != 0 {
+		t.Errorf("scheduled sales with none waiting: %+v", b.Scheduled)
+	}
+
+	// A waiting schedule shows on the board before anything is posted.
+	scID, err := st.CreateSellSchedule(ctx, store.SellSchedule{Date: "2026-11-03", Meal: "dinner", MinPaise: 4000, MaxPaise: 6000, Autopilot: true,
+		StartsAt: time.Date(2026, 11, 3, 19, 15, 0, 0, loc), EndsAt: time.Date(2026, 11, 3, 21, 30, 0, 0, loc), CreatedAt: time.Date(2026, 11, 3, 13, 0, 0, 0, loc)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin.get(t, "/api/state", &b)
+	if len(b.Scheduled) != 1 || b.Scheduled[0].ID != scID || b.Scheduled[0].BaseMeal != "dinner" || b.Scheduled[0].Min != 40 || b.Scheduled[0].Max != 60 ||
+		!b.Scheduled[0].Autopilot || b.Scheduled[0].At != time.Date(2026, 11, 3, 19, 15, 0, 0, loc).Unix() {
+		t.Errorf("scheduled %+v", b.Scheduled)
+	}
+	if _, err := st.EndSellSchedule(ctx, scID, store.ScheduleCancelled, 0, "test", time.Date(2026, 11, 3, 13, 1, 0, 0, loc)); err != nil {
+		t.Fatal(err)
+	}
 
 	// Handed-off meals show as handoff and earn nothing, unless you ate it.
 	for _, h := range []store.Delivery{

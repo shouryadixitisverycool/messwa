@@ -11,12 +11,14 @@
 package dashboard
 
 import (
+	"cmp"
 	"compress/gzip"
 	"context"
 	"embed"
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +27,7 @@ import (
 	"messwa/internal/config"
 	"messwa/internal/mcpserver"
 	"messwa/internal/meals"
+	"messwa/internal/store"
 )
 
 //go:embed static
@@ -57,12 +60,69 @@ type state struct {
 	// Sales are your running sell tasks, and ones that just ended, for the
 	// "my sale" chest. Admins only, like the rest of the linked account.
 	Sales []mcpserver.SaleView `json:"sales,omitempty"`
+	// Scheduled are your sales waiting for their meal to start, so the
+	// board shows them before anything is posted.
+	Scheduled []scheduledSale `json:"scheduled,omitempty"`
 	// NoGroups is true when your selling settings pick no group to post
 	// offers in, so the board can say so before a sale goes nowhere.
 	NoGroups bool `json:"no_groups,omitempty"`
 	// Nudge is true when the board should ask you to sell your next meal
 	// ([sell] nudge).
 	Nudge bool `json:"nudge,omitempty"`
+}
+
+// scheduledSale is a waiting sell schedule as the board's sale cards draw
+// it. Prices are rupees, times unix seconds. Mess is known only for a
+// friend's meal; for your own the page takes it from the sales ledger.
+type scheduledSale struct {
+	ID        int64   `json:"id"`
+	Date      string  `json:"date"`
+	Meal      string  `json:"meal"`
+	BaseMeal  string  `json:"base_meal"`
+	ForFriend bool    `json:"for_friend,omitempty"`
+	Friend    string  `json:"friend,omitempty"`
+	Mess      string  `json:"mess,omitempty"`
+	At        int64   `json:"at"`
+	Ends      int64   `json:"ends"`
+	Min       float64 `json:"min"`
+	Max       float64 `json:"max"`
+	Autopilot bool    `json:"autopilot,omitempty"`
+}
+
+func scheduledSales(ctx context.Context, srv *mcpserver.Server) ([]scheduledSale, error) {
+	scs, err := srv.SellSchedules(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []scheduledSale
+	var friends []store.FriendMeal
+	read := false
+	for _, sc := range scs {
+		if sc.State != store.ScheduleWaiting {
+			continue
+		}
+		v := scheduledSale{ID: sc.ID, Date: sc.Date, Meal: sc.Meal, At: sc.StartsAt.Unix(), Ends: sc.EndsAt.Unix(),
+			Min: float64(sc.MinPaise) / 100, Max: float64(sc.MaxPaise) / 100, Autopilot: sc.Autopilot}
+		v.BaseMeal, _, _ = strings.Cut(sc.Meal, "#")
+		if store.IsFriendSlot(sc.Meal) {
+			v.ForFriend = true
+			if !read {
+				read = true
+				if friends, err = srv.FriendMeals(ctx, srv.Now().Add(-24*time.Hour).Format(time.DateOnly)); err != nil {
+					return nil, err
+				}
+			}
+			for _, f := range friends {
+				if f.Date == sc.Date && f.Slot == sc.Meal {
+					v.Friend, v.Mess = f.Friend, f.Mess
+				}
+			}
+		}
+		out = append(out, v)
+	}
+	// Soonest first.
+	slices.SortFunc(out, func(a, b scheduledSale) int { return cmp.Compare(a.At, b.At) })
+	return out, nil
 }
 
 type mine struct {
@@ -141,6 +201,10 @@ func Handler(cfg *config.Config, srv *mcpserver.Server, hub *Hub, acc *accounts.
 				return
 			}
 			if st.Sales, err = srv.SaleViews(r.Context()); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if st.Scheduled, err = scheduledSales(r.Context(), srv); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}

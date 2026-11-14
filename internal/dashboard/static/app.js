@@ -204,9 +204,11 @@ function render() {
   renderDay();
   $('noGroups').hidden = !D.no_groups;
   renderSales();
-  if (!D.nudge) { N = null; nudgeAt = 0; }
+  // The ledger feeds the nudge and the mess of a scheduled sale's card.
+  const ledger = D.nudge || (D.scheduled || []).length > 0;
+  if (!ledger) { N = null; nudgeAt = 0; }
   if (N || !D.nudge) renderNudge();
-  if (D.nudge) loadNudge();
+  if (ledger) loadNudge();
   renderTabs();
   renderGrid();
   renderControls();
@@ -1130,6 +1132,7 @@ async function loadNudge(force) {
     N = r.ok ? await r.json() : null;
   } catch { N = null; }
   renderNudge();
+  if (D && (D.scheduled || []).length) renderSales();
 }
 
 function nextSellable() {

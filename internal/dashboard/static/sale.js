@@ -13,7 +13,8 @@
 //   posted     ✓ / ✗ / … per group; red with ↓N once buried.
 //   market     the other listings for the meal, yours in gold.
 //
-// Finished sales fold to one line under ENDED.
+// Sales waiting for their meal get a dashed card after the running ones
+// (scheduledCard). Finished sales fold to one line under ENDED.
 //
 // Uses app.js's globals (D, now, hm, dur, sheet, modal, closeModal,
 // messagingApp, digits, toast, openListing). Buyer names are untrusted and
@@ -110,14 +111,15 @@ function renderSales() {
   const box = $('sales');
   if (!box) return;
   const list = (D && D.sales) || [];
-  box.hidden = !list.length;
+  const waiting = (D && D.scheduled) || [];
+  box.hidden = !list.length && !waiting.length;
   const live = list.filter((v) => !isOver(v)), over = list.filter(isOver);
   if (rangeEdit && !live.some((v) => v.id === rangeEdit.id && v.state === 'active')) rangeEdit = null;
   const kept = rangeEdit && box.querySelector(`.mysale[data-id="${rangeEdit.id}"] .ms-edit`)?.closest('.mysale');
   const parts = [];
-  if (live.length) {
+  if (live.length || waiting.length) {
     const grid = el('div', 'ms-grid');
-    grid.append(...live.map((v) => (kept && v.id === rangeEdit.id ? kept : chest(v))));
+    grid.append(...live.map((v) => (kept && v.id === rangeEdit.id ? kept : chest(v))), ...waiting.map(scheduledCard));
     parts.push(grid);
   }
   if (over.length) {
@@ -196,6 +198,87 @@ function chest(v) {
   if (mk) c.append(mk);
   c.append(cardActions(v));
   return c;
+}
+
+// scheduledCard is a sale waiting for its meal: nothing is posted yet. It
+// says when the offer goes up and at what price, and can start it now or
+// switch autopilot. ··· opens the sales page's sheet to change the price
+// or unschedule. The mess and diet come from the ledger the nudge reads
+// (N in app.js), when it has loaded.
+function scheduledCard(s) {
+  const cell = ledgerCell(s.date, s.meal);
+  const v = { ...s, mess: s.mess || (cell && cell.mess), diet: cell && cell.diet };
+  const c = el('section', 'mysale sched');
+  c.dataset.schedule = s.id;
+  c.setAttribute('aria-label', `Your ${mealLabel(v)} sale, scheduled for ${hm(s.at)}`);
+
+  const top = el('div', 'ms-top');
+  top.append(...mealHead(v, 'ms-meal'));
+  top.append(el('span', 'ms-tag ' + (s.autopilot ? 'auto' : 'sch'), s.autopilot ? '✈ AUTOPILOT' : 'SCHEDULED'));
+  const t = el('span', 'ms-time');
+  const b = el('b', 'dim');
+  b.dataset.until = s.at;
+  b.dataset.fmt = 'mins';
+  t.append(el('small', '', 'IN'), b);
+  tip(t, () => [[{ t: `Goes up at ${hm(s.at)}, in ${dur(s.at - now())}`, c: 'c7' }]]);
+  top.append(t);
+  c.append(top);
+
+  const price = el('div', 'ms-price');
+  price.append(el('b', 'sch', rangeText(s.min, s.max)));
+  price.append(el('span', 'what', `goes up ${hm(s.at)} · sells till ${hm(s.ends)}`));
+  tip(price, () => [
+    [{ t: `${v.mess ? cap(v.mess) + ' ' : ''}${mealLabel(v)}`, c: 'nm', color: messColor(v.mess) }, { t: ` ${dayWord(s.date)}`, c: 'c8' }],
+    [{ t: `Nothing is posted until ${hm(s.at)}, in ${dur(s.at - now())}.`, c: 'c7' }],
+    [{ t: `Then it sells till ${hm(s.ends)}, opening at ${rup(s.max)} with a floor of ${rup(s.min)}.`, c: 'c7' }],
+    s.autopilot ? [{ t: 'On autopilot: it skips any buyer who would need you.', c: 'cc' }] : null,
+  ].filter(Boolean));
+  c.append(price);
+
+  const err = el('p', 'ms-err');
+  err.setAttribute('role', 'alert');
+  const a = el('div', 'ms-acts');
+  const act = async (x, body, done) => {
+    for (const k of a.querySelectorAll('button')) k.disabled = true;
+    err.textContent = '';
+    try {
+      await send('POST', 'api/sell-action', body);
+      if (done) toast(done);
+      load();
+    } catch (e) {
+      err.textContent = e.message;
+      for (const k of a.querySelectorAll('button')) k.disabled = false;
+    }
+  };
+  const btn = (cls, text, fn) => {
+    const x = el('button', 'ms-btn ' + cls, text);
+    x.type = 'button';
+    x.addEventListener('click', () => fn(x));
+    a.append(x);
+    return x;
+  };
+  btn('grn', '▶ Start now', (x) => act(x, { action: 'start', date: s.date, meal: s.meal, min: s.min, max: s.max, now: true, autopilot: !!s.autopilot },
+    `Selling your ${mealOf(v)}${s.autopilot ? ' on autopilot' : ''}`));
+  const auto = btn('auto' + (s.autopilot ? ' on' : ''), s.autopilot ? '✈ Autopilot on' : '✈ Autopilot off', (x) =>
+    act(x, { action: 'autopilot', id: s.id, autopilot: !s.autopilot }));
+  auto.setAttribute('role', 'switch');
+  auto.setAttribute('aria-checked', String(!!s.autopilot));
+  auto.title = 'Autopilot sells without waiting on you: it skips any buyer who would need you, even one offering more.';
+  const more = el('a', 'ms-btn ghost more', '···');
+  more.href = s.for_friend ? 'sales.html' : `sales.html#sell=${encodeURIComponent(`${s.date}|${s.meal}`)}`;
+  more.setAttribute('aria-label', 'Change the price or unschedule');
+  more.title = 'Change the price or unschedule';
+  a.append(more);
+  c.append(a, err);
+  return c;
+}
+
+// ledgerCell finds a meal in the sales ledger app.js loaded for the nudge.
+function ledgerCell(date, meal) {
+  if (typeof N === 'undefined' || !N) return null;
+  const days = N.ahead ? [...N.days, { date: N.ahead.date, cells: [N.ahead.cell] }] : N.days;
+  const d = days.find((x) => x.date === date);
+  return (d && d.cells.find((x) => x.meal === meal)) || null;
 }
 
 // timeBadge is the minutes left in the meal, with a ring that empties.
