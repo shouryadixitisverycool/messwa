@@ -7,7 +7,7 @@
 <meta name="theme-color" content="#0b0d12">
 <title>Settings · Mess Auction House</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
-<link rel="preload" href="silkscreen-700.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="preload" href="silkscreen-700.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="account.css">
 <link rel="stylesheet" href="settings.css">
@@ -43,6 +43,11 @@
       <div class="h">Open chats in</div>
       <div class="pick" id="via" role="radiogroup" aria-label="Messaging app"></div>
       <p class="s-hint" id="viaNote" hidden>Beeper only opens on desktop, so this device uses WhatsApp.</p>
+    </div>
+    <div class="master" data-mine hidden>
+      <span class="ic" aria-hidden="true">🍪</span>
+      <div class="lbl">Hide snacks<small>Board, sales and MCP skip snacks; dinner comes after lunch</small></div>
+      <button class="tg" type="button" data-key="hide_snacks" aria-label="Hide snacks"></button>
     </div>
     <div class="tiles">
       <a class="box tile" href="account.html"><span class="ic" aria-hidden="true">🔑</span><div><b id="keyState">…</b><small>Mess API key</small></div></a>

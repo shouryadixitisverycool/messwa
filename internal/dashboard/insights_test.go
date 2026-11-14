@@ -67,15 +67,13 @@ func TestInsights(t *testing.T) {
 	if s.First != "2026-11-03" || s.From != "2026-11-03" || s.Today != "2026-11-03" {
 		t.Fatalf("dates first %q from %q today %q", s.First, s.From, s.Today)
 	}
-	if len(s.Rows) != 1 || len(s.Sellers) != 1 {
-		t.Fatalf("rows %v sellers %v: want only the ended bakul lunch", s.Rows, s.Sellers)
+	f := s.Facts
+	if len(f.Date) != 1 || len(s.Sellers) != 1 {
+		t.Fatalf("facts %+v sellers %v: want only the ended bakul lunch", f, s.Sellers)
 	}
-	row := map[string]any{}
-	for i, c := range s.Cols {
-		row[c] = s.Rows[0][i]
-	}
-	if row["mess"] != "bakul" || row["meal"] != "lunch" || row["price"] != 25.0 || row["sold"] != float64(posted.Add(5*time.Minute).Unix()) {
-		t.Fatalf("row %v", row)
+	first := f.End[0] + f.First[0]
+	if f.Mess[0] != "bakul" || f.Meal[0] != "lunch" || f.Price[0] != 25 || f.Sold[0] == nil || first+*f.Sold[0] != posted.Add(5*time.Minute).Unix() {
+		t.Fatalf("facts %+v", f)
 	}
 	if s.Sellers[0].Name != "Asha" || s.Sellers[0].Phone != "+911" {
 		t.Fatalf("seller %+v", s.Sellers[0])
@@ -134,8 +132,8 @@ func TestInsightsSeasons(t *testing.T) {
 		if res := c.get(t, "/api/insights?"+tc.q, &s); res.StatusCode != 200 {
 			t.Fatalf("%s: %d", tc.q, res.StatusCode)
 		}
-		if s.Season != tc.season || s.From != tc.from || s.To != tc.to || len(s.Rows) != tc.rows {
-			t.Errorf("%s: season %q %s..%s, %d rows", tc.q, s.Season, s.From, s.To, len(s.Rows))
+		if s.Season != tc.season || s.From != tc.from || s.To != tc.to || len(s.Facts.Date) != tc.rows {
+			t.Errorf("%s: season %q %s..%s, %d rows", tc.q, s.Season, s.From, s.To, len(s.Facts.Date))
 		}
 		if s.Current != "2026-12-08" || s.Next.Name != "Spring term" {
 			t.Errorf("%s: current %q next %+v", tc.q, s.Current, s.Next)

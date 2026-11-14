@@ -1,7 +1,7 @@
 'use strict';
 
 // The settings page. Everyone gets the YOU tab, which is saved in this
-// browser, and the OFFER, REPOST and BUYERS tabs, which set how messwa
+// browser apart from Hide snacks, and the OFFER, REPOST and BUYERS tabs, which set how messwa
 // sells from their own WhatsApp. Admins also get MARKET and CALENDAR,
 // which change messwa for everyone. Edits collect in a draft until Save
 // sends them to /api/settings. A value that matches the default isn't

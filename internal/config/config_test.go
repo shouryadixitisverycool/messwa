@@ -72,3 +72,16 @@ func TestSellSettings(t *testing.T) {
 		}
 	}
 }
+
+func TestHiddenMeal(t *testing.T) {
+	c := Default()
+	if c.HiddenMeal("snacks") {
+		t.Error("snacks hidden with hide_snacks off")
+	}
+	c.HideSnacks = true
+	for meal, want := range map[string]bool{"snacks": true, "snacks#f1": true, "dinner": false, "": false} {
+		if got := c.HiddenMeal(meal); got != want {
+			t.Errorf("HiddenMeal(%q) = %v, want %v", meal, got, want)
+		}
+	}
+}

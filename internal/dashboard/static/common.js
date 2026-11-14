@@ -246,8 +246,8 @@ const ART = {
 ART.prev = [ART.next[0].map((r) => [...r].reverse().join('')), ART.next[1]];
 const icon = (name) => pix(ART[name][0], ART[name][1]);
 
-function mealsAllIcon() {
-  const sub = ['breakfast', 'lunch', 'snacks', 'dinner'].map((m, i) => {
+function mealsAllIcon(meals = MEALS) {
+  const sub = meals.map((m, i) => {
     const s = icon(m).replace('<svg ', `<svg x="${(i % 2) * 8}" y="${Math.floor(i / 2) * 8}" width="7" height="7" `);
     return s;
   }).join('');
