@@ -69,6 +69,9 @@ type state struct {
 	// Nudge is true when the board should ask you to sell your next meal
 	// ([sell] nudge).
 	Nudge bool `json:"nudge,omitempty"`
+	// Meals is every meal the board shows, in serving order. Settings can
+	// hide snacks.
+	Meals []string `json:"meals"`
 }
 
 type mine struct {
@@ -154,8 +157,10 @@ func Handler(cfg *config.Config, srv *mcpserver.Server, hub *Hub, acc *accounts.
 			st.Nudge = cfg.Live().Sell.Nudge
 		}
 		sc := srv.Schedule()
+		st.Meals = []string{}
 		for _, s := range sc.Today {
 			st.Today = append(st.Today, toSlot(&s))
+			st.Meals = append(st.Meals, s.Meal)
 		}
 		if sc.Current != nil {
 			c := toSlot(sc.Current)

@@ -1,6 +1,7 @@
 package meals
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -38,5 +39,27 @@ func TestNext(t *testing.T) {
 	}
 	if cur, ok := s.Current(at("13:00")); !ok || cur.Meal != "lunch" {
 		t.Errorf("Current(13:00) = %+v", cur)
+	}
+}
+
+func TestWithoutSnacks(t *testing.T) {
+	cfg := config.Default()
+	cfg.HideSnacks = true
+	s := New(cfg).Without(cfg.HiddenMeal)
+	at, _ := time.ParseInLocation("2006-01-02 15:04", "2026-11-02 15:00", cfg.Location())
+	if got, ok := s.Next(at, ""); !ok || got.Meal != "dinner" {
+		t.Errorf("Next(15:00) = %+v, want dinner", got)
+	}
+	var names []string
+	for _, w := range s.Windows(at) {
+		names = append(names, w.Meal)
+	}
+	if want := []string{"breakfast", "lunch", "dinner"}; !slices.Equal(names, want) {
+		t.Errorf("Windows = %v, want %v", names, want)
+	}
+	cfg.HideSnacks = false
+	full := New(cfg)
+	if full.Without(cfg.HiddenMeal) != full {
+		t.Error("Without should return the same schedule when nothing is hidden")
 	}
 }

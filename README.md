@@ -158,11 +158,14 @@ Everyone edits their own selling settings on the OFFER, REPOST and BUYERS tabs: 
 
 | Tab | Settings |
 | --- | --- |
+| YOU | messaging app (this browser only), `hide_snacks` |
 | OFFER | `[mcp] sell_tasks`, `[sell] groups` or `group_count`, `post_gap`, `show_price`, `mention_extras`, `[sales] monthly_fee`, `[sell] nudge`, with a preview of the group post |
 | REPOST | `[sell] repost`, `repost_messages`, `repost_listings`, `max_reposts` |
 | BUYERS | `[sell] buyers`, `handoff`, `accept_plain_dms`, `message_buy_posts`, `accept_payment_images`, `[dms] retention` |
 | MARKET | `[sold]` emojis, closed emojis, words and `admins_count`, `[dedupe] window` |
 | CALENDAR | meal times, `[[seasons]]`, each mess's `veg_only` |
+
+`hide_snacks` is for people who never register for snacks. With it on, that user's board, day track, meal filter, market pulse, sales page, sell reminders and insights act as if snacks don't exist, so dinner is the next meal after lunch. Their MCP `meal_schedule`, `list_listings` and `my_registrations` leave snacks out, and sell tasks refuse snacks. Listings are still classified the same for everyone; a snacks post stays a snacks post. A sell task already running for snacks keeps running and stays visible until it ends.
 
 Edits wait for SAVE. messwa stores what you save in a `settings` table in the user's private `messwa.db`, on top of `config.toml`: a value equal to the file's isn't stored, so it keeps following the file. Every command reads the saved values when it starts, and `deliver-qr` flags still override them for one run.
 
