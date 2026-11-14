@@ -72,7 +72,7 @@ func accountConfig(ctx context.Context, cfg *config.Config, st *store.Store, id 
 	c.IsolateSettings()
 	c.StateDir = dir
 	if dir != cfg.StateDir {
-		c.MCP.SellTasks = false
+		c.MCP.SellTasks = cfg.Live().MCP.NewUserSellTasks
 		c.Sell = config.Default().Sell
 		c.Sales = config.Sales{}
 	}

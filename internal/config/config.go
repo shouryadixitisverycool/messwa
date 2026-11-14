@@ -90,6 +90,9 @@ type MCP struct {
 	// cancel_sell_task tools, for admins only. Off by default: they let an
 	// agent post in a group and message buyers from the linked account.
 	SellTasks bool `toml:"sell_tasks"`
+	// NewUserSellTasks is the sell_tasks default for every other account.
+	// A user's own switch on the account page overrides it.
+	NewUserSellTasks bool `toml:"new_user_sell_tasks"`
 }
 
 type Dash struct {

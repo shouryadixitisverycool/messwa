@@ -48,6 +48,9 @@ token_env = "MESSWA_MCP_TOKEN"
 # who reply to it, from that user's linked WhatsApp account. Off by default, and every
 # other MCP tool stays read-only either way.
 sell_tasks = false
+# The same default for every other user. Each user can still turn it off or
+# on for their own account on /account.html.
+new_user_sell_tasks = false
 
 [dashboard]
 # The listings dashboard, behind sign-in. It shows sellers' phone numbers,
