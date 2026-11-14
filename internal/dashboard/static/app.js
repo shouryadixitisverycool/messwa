@@ -168,20 +168,24 @@ function layout() {
   // the visual viewport, which widens when anything overflows; sizing the grid
   // from it then makes the overflow permanent.
   const w = document.documentElement.clientWidth || window.innerWidth;
-  let s, gap, cols;
-  if (w < 640) {
-    // Phones: a fixed column count, with slots stretched to fill the width.
-    // Budget = app padding 20 + chest padding 20 + chest border 2, then the tab
-    // column (one slot plus a double gap) beside the grid.
+  // The board's content width: the tab column (one slot plus a double gap)
+  // then the grid. Slots stretch so the two fill it edge to edge.
+  const chest = $('chest');
+  const cs = getComputedStyle(chest);
+  const inner = chest.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  let gap, cols;
+  if (w <= 640) {
+    // Phones: a fixed column count.
     gap = 5;
-    cols = w < 360 ? 4 : 5;
-    s = Math.max(44, Math.min(72, Math.floor((w - 42 - (cols + 1) * gap) / (cols + 1))));
+    cols = w < 360 ? 4 : w < 500 ? 5 : 6;
   } else {
-    s = w < 1000 ? 64 : 72;
+    // Wider screens: as many columns of about the target size as fit.
+    const target = w < 1000 ? 64 : 72;
     gap = 6;
-    const avail = Math.min(w, 1280) - 74 - s - gap * 2;
-    cols = Math.max(4, Math.min(12, Math.floor((avail + gap) / (s + gap))));
+    cols = Math.max(4, Math.min(20, Math.floor((inner - target - gap) / (target + gap))));
   }
+  // cols + 1 slots (tab column included) and cols + 1 gaps across.
+  const s = Math.max(44, Math.min(88, Math.floor((inner - (cols + 1) * gap) / (cols + 1))));
   const rows = cols <= 6 ? 7 : 5;
   L = { s, gap, cols, rows };
   const st = document.documentElement.style;
