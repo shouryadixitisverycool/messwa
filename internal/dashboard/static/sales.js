@@ -71,10 +71,23 @@ async function load() {
     failed = false;
     lastOK = Date.now();
     render();
+    openFromHash();
   } catch (e) {
     failed = true;
   }
   tickLive();
+}
+
+// The board's "sell it" link lands here as #sell=date|meal and opens that
+// meal's sell menu once.
+function openFromHash() {
+  const m = /^#sell=(.+)$/.exec(location.hash);
+  if (!m) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  const [date, meal] = decodeURIComponent(m[1]).split('|');
+  const day = D.days.find((d) => d.date === date);
+  const c = day && day.cells.find((x) => x.meal === meal);
+  if (c && canSell(c)) openSell(date, c);
 }
 
 function connect() {
@@ -305,11 +318,12 @@ function cellNode(date, c) {
 
 function cellLines(date, c) {
   const s = c.sale != null ? D.sales[c.sale] : null;
-  const diet = c.diet ? ` · ${DIET_LABEL[c.diet].toUpperCase()}` : '';
+  // The row already says which meal it is, so the title names the diet,
+  // and the meal moves down to the time line.
   const who = (x) => ({ t: x.name || fmtPhone(x.phone) || 'Unknown buyer', c: 'cf' });
   const lines = [
-    [{ t: `${messName(c.mess)} ${c.meal}`, c: 'nm', color: messColor(c.mess) }],
-    [{ t: `${fmtDay(date)}, ${hm(c.start)}-${hm(c.end)}`, c: 'c8' }],
+    [{ t: `${messName(c.mess)} ${c.diet ? DIET_LABEL[c.diet].toLowerCase() : c.meal}`, c: 'nm', color: messColor(c.mess) }],
+    [{ t: `${fmtDay(date)}, ${c.meal} ${hm(c.start)}-${hm(c.end)}`, c: 'c8' }],
     null,
   ];
   const askLine = (label) => (c.ask != null ? [{ t: label, c: 'c7' }, { t: rupees(Math.round(c.ask)), c: 'c6' }] : null);
@@ -325,7 +339,7 @@ function cellLines(date, c) {
       lines.push(null, [{ t: 'Paid, but the QR send was interrupted. Check the chat before doing anything else.', c: 'c6' }]);
       lines.push({ rar: 'PAID · SEND UNCERTAIN', c: 'c6' });
     } else {
-      lines.push({ rar: 'SOLD' + (s.paid_by === 'image' ? ' · UNVERIFIED' : '') + diet, c: 'ca' });
+      lines.push({ rar: 'SOLD' + (s.paid_by === 'image' ? ' · UNVERIFIED' : ''), c: 'ca' });
     }
   } else if (c.state === 'armed') {
     lines.push([{ t: 'Armed for ', c: 'c7' }, who(s)]);
@@ -333,20 +347,20 @@ function cellLines(date, c) {
     if (s.offer_at) lines.push([{ t: 'Offer sent ', c: 'c7' }, { t: hm(s.offer_at), c: 'c8' }]);
     lines.push([{ t: 'Window closes ', c: 'c7' }, { t: hm(c.end), c: 'ce' }, { t: ` (in ${dur(c.end - now())})`, c: 'c8' }]);
     if (c.task) lines.push(null, [{ t: 'Click to mark it sold, edit the prices or stop selling.', c: 'lore' }]);
-    lines.push({ rar: 'ARMED' + diet, c: 'ce' });
+    lines.push({ rar: 'ARMED', c: 'ce' });
   } else if (c.state === 'handoff') {
     lines.push([{ t: 'Handed to you ', c: 'c7' }, { t: hm(s.armed_at), c: 'c8' }, { t: ' when ', c: 'c7' }, who(s), { t: ' replied', c: 'c7' }]);
     if (s.phone && s.name) lines.push([{ t: 'Phone ', c: 'c7' }, { t: fmtPhone(s.phone), c: 'c8' }]);
     lines.push([{ t: 'Offer asked ', c: 'c7' }, { t: rupees(s.amount), c: 'c6' }]);
     lines.push(null, [{ t: 'The bot sent this buyer nothing. Finish with deliver-qr -peer, or free the meal with release-handoff.', c: 'c8' }]);
-    lines.push({ rar: 'HANDED OFF' + diet, c: 'c6' });
+    lines.push({ rar: 'HANDED OFF', c: 'c6' });
   } else if (c.state === 'ate') {
-    lines.push([{ t: 'You ate this one.', c: 'c7' }], { rar: 'EATEN' + diet, c: 'c7' });
+    lines.push([{ t: 'You ate this one.', c: 'c7' }], { rar: 'EATEN', c: 'c7' });
   } else if (c.state === 'wasted') {
     lines.push([{ t: 'Registered, never sold, never eaten.', c: 'cc' }]);
     if (s) lines.push([{ t: `Your offer of ${rupees(s.amount)} to ${s.name || fmtPhone(s.phone) || 'the buyer'} lapsed.`, c: 'c8' }]);
     if (c.ask != null) lines.push([{ t: `Would have fetched about ${rupees(Math.round(c.ask))} at the median ask.`, c: 'lore' }]);
-    lines.push({ rar: 'WASTED' + diet, c: 'cc' });
+    lines.push({ rar: 'WASTED', c: 'cc' });
   } else if (c.state === 'selling') {
     const t = c.task;
     lines.push([{ t: 'Selling now for ', c: 'c7' }, { t: t.min === t.max ? rupees(t.min) : `${rupees(t.min)}-${rupees(t.max)}`, c: 'c6' }]);
@@ -354,13 +368,13 @@ function cellLines(date, c) {
     if (a) lines.push(a);
     lines.push([{ t: 'Window closes ', c: 'c7' }, { t: hm(c.end), c: 'ce' }, { t: ` (in ${dur(c.end - now())})`, c: 'c8' }]);
     lines.push(null, [{ t: 'Click to mark it sold, edit the prices or stop selling.', c: 'lore' }]);
-    lines.push({ rar: 'SELLING' + diet, c: 'c6' });
+    lines.push({ rar: 'SELLING', c: 'c6' });
   } else if (c.state === 'open') {
     lines.push([{ t: now() >= c.start ? 'Being served now. Still yours to sell.' : 'Registered. Not sold yet.', c: 'c7' }]);
     const a = askLine('Median ask ');
     if (a) lines.push(a);
     if (canSell(c)) lines.push(null, [{ t: 'Click to put it up for sale.', c: 'lore' }]);
-    lines.push({ rar: 'REGISTERED' + diet, c: 'c8' });
+    lines.push({ rar: 'REGISTERED', c: 'c8' });
   } else {
     lines.push([{ t: "The portal couldn't be read, so this could be eaten, wasted or not registered.", c: 'c8' }]);
     if (s) lines.push([{ t: `Your offer of ${rupees(s.amount)} lapsed.`, c: 'c8' }]);
