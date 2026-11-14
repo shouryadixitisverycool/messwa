@@ -1,6 +1,16 @@
 /* The "my sale" cards above the board, and their sheets. See sale.js. */
 
 .ms-tag.auto { color: #5aa9ff; background: rgba(90, 169, 255, .14); }
+.ms-tag.sch { color: var(--gold); background: rgba(255, 197, 61, .12); }
+/* a sale waiting for its meal, dashed like its ledger cell */
+.mysale.sched { border-style: dashed; border-color: color-mix(in srgb, var(--gold) 55%, transparent); }
+.ms-price > b.sch { color: var(--gold); font-size: 18px; }
+.ms-time small { font: 700 8px Pixel; color: var(--muted); }
+.ms-btn.auto { color: var(--muted); }
+.ms-btn.auto.on { border-color: rgba(90, 169, 255, .6); color: var(--blue); background: rgba(90, 169, 255, .12); }
+a.ms-btn { text-decoration: none; display: inline-flex; align-items: center; }
+.ms-err { margin: 0; font-size: 12px; color: var(--red); }
+.ms-err:empty { display: none; }
 .sales-box { --red: #ff6b5b; --egg: #f2b51b; --gold: #ffc53d; --blue: #5aa9ff; display: flex; flex-direction: column; gap: 8px; }
 .ms-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: 10px; align-items: start; }
 .mysale {
