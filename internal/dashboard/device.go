@@ -14,13 +14,24 @@ import (
 func AccountHandler(cfg *config.Config, root *mcpserver.Server, hub *Hub, acc *accounts.Accounts, lookup func(context.Context, int64) (*mcpserver.Server, error)) http.Handler {
 	fallback := Handler(cfg, root, hub, acc)
 	usage := headers(requireRole(accounts.Admin, newUsage(cfg, root, acc, lookup)))
+	live := headers(requireRole(accounts.Admin, newLive(root, acc, lookup)))
+	liveStream := requireRole(accounts.Admin, liveEvents(hub, acc))
 	var mu sync.Mutex
 	handlers := map[int64]http.Handler{}
 	return withSession(acc, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Usage spans every account, so it can't live in one user's handler.
-		if r.Method == http.MethodGet && r.URL.Path == "/api/usage" {
-			usage.ServeHTTP(w, r)
-			return
+		if r.Method == http.MethodGet {
+			switch r.URL.Path {
+			case "/api/usage":
+				usage.ServeHTTP(w, r)
+				return
+			case "/api/usage/live":
+				live.ServeHTTP(w, r)
+				return
+			case "/api/usage/events":
+				liveStream.ServeHTTP(w, r)
+				return
+			}
 		}
 		u := accounts.UserFrom(r.Context())
 		if u == nil {

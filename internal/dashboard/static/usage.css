@@ -74,3 +74,72 @@
 @media (max-width: 860px) {
   .u-two { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ---------- live now ---------- */
+
+.lv-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--u-sold); box-shadow: 0 0 0 3px rgba(53, 168, 72, .22); }
+.lv-dot.off { background: var(--dim); box-shadow: none; }
+.lv-wins { padding-left: 0; border-left: 0; flex-wrap: wrap; }
+
+.kpis.lv-kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); margin-bottom: 14px; }
+.lv-kpis .kpi { padding: 10px 12px; border-radius: 12px; background: var(--slot); border: 1px solid #1e2431; }
+.lv-kpis .kpi em { display: block; margin-top: 4px; font-size: 11px; font-style: normal; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lv-kpis .kpi b.ok { color: #80ff20; }
+.lv-kpis .kpi b.bad { color: #ff6b5b; }
+.lv-kpis .kpi b.hand { color: #7fb3ff; }
+
+.lv-meal + .lv-meal { margin-top: 14px; }
+.lv-mh { display: flex; align-items: center; gap: 10px; margin: 0 2px 8px; font-size: 12px; color: var(--muted); }
+.lv-mh b { font: 700 10px Pixel; letter-spacing: .4px; color: var(--text); white-space: nowrap; }
+.lv-mh .track { flex: 1; max-width: 220px; height: 4px; border-radius: 2px; background: #0f1218; overflow: hidden; }
+.lv-mh .track i { display: block; height: 100%; border-radius: 2px; }
+.lv-empty { margin: 4px 2px; color: var(--dim); font-size: 12.5px; }
+
+.lv-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.lv-card { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 12px; padding: 10px 12px 10px 10px; border-radius: 14px; background: var(--slot); border: 1px solid #1e2431; }
+.lv-card.warn { border-color: #5a2a26; }
+
+.lv-tile { position: relative; width: 64px; height: 64px; border-radius: 11px; background: #12161f; border: 1px solid color-mix(in srgb, var(--m) 55%, #1e2431); box-shadow: 0 0 14px color-mix(in srgb, var(--m) 14%, transparent), inset 0 2px 0 rgba(0, 0, 0, .32); }
+.lv-tile .price { --s: 64px; }
+.lv-mess { position: absolute; left: 6px; top: 6px; width: 8px; height: 8px; border-radius: 2px; background: var(--m); }
+.lv-diet { position: absolute; right: 5px; top: 5px; width: 11px; height: 11px; }
+.lv-diet svg { display: block; width: 100%; height: 100%; }
+.lv-bar { position: absolute; left: 6px; right: 6px; bottom: 5px; height: 3px; border-radius: 2px; background: rgba(0, 0, 0, .55); overflow: hidden; }
+.lv-bar i { display: block; height: 100%; }
+
+.lv-body { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.lv-l1 { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.lv-l1 .who { font-weight: 600; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lv-l1 .mn { font-size: 12px; white-space: nowrap; }
+.lv-l1 .ago { margin-left: auto; font-size: 11px; color: var(--dim); white-space: nowrap; }
+.lv-l2 { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lv-l2 .pos { color: #ff9a8f; }
+.lv-l2 .neg { color: #80ff20; }
+.lv-l2 .eq { color: var(--dim); }
+.lv-st { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; max-width: 100%; margin-top: 2px; padding: 2px 8px 2px 7px; border-radius: 6px; font-size: 11.5px; font-weight: 600; background: #11151d; color: var(--muted); }
+.lv-st i { flex: none; width: 7px; height: 7px; border-radius: 2px; background: var(--dim); }
+.lv-st span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lv-st.pay { color: #9be7a6; }
+.lv-st.pay i { background: var(--u-sold); }
+.lv-st.line { color: #a9c8ff; }
+.lv-st.line i { background: var(--u-hand); }
+.lv-st.bad { color: #ff9a8f; }
+.lv-st.bad i { background: var(--u-waste); }
+.lv-st.slow { color: #f1cf7e; }
+.lv-st.slow i { background: var(--u-lapse); }
+
+@media (max-width: 1000px) {
+  .lv-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .lv-cards { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .lv-card { grid-template-columns: 56px minmax(0, 1fr); gap: 10px; padding: 9px 10px 9px 9px; }
+  .lv-tile { width: 56px; height: 56px; }
+  .lv-tile .price { --s: 56px; font-size: 16px; }
+  .kpis.lv-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .lv-kpis .kpi { padding: 8px 9px; }
+  .lv-kpis .kpi em { display: none; }
+  .lv-wins { flex-wrap: nowrap; overflow-x: auto; width: 100%; scrollbar-width: none; }
+  .lv-wins .win { flex: none; }
+  .lv-mh .track { max-width: none; }
+}
