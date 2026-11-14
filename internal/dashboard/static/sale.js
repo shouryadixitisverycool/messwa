@@ -99,6 +99,8 @@ let saleSheet = null; // {id, key} or {id, meal: true} while a sale sheet is ope
 // progress isn't cut off.
 let rangeEdit = null;
 const showGone = new Set(); // sale ids whose finished buyers are listed
+const ENDED_SHOWN = 3; // ended sales listed before the rest fold away
+let allEnded = false;
 
 const payingNow = (v) => (v.state === 'active' && v.buyers.some((b) => b.state === 'offered')) || (v.pay && LIVE_PAY.includes(v.pay.state) && v.pay.paid);
 const isOver = (v) => v.state !== 'active' && !payingNow(v);
@@ -118,7 +120,16 @@ function renderSales() {
     grid.append(...live.map((v) => (kept && v.id === rangeEdit.id ? kept : chest(v))));
     parts.push(grid);
   }
-  if (over.length) parts.push(el('div', 'ms-sec', 'ENDED'), ...over.map(endedRow));
+  if (over.length) {
+    const shown = allEnded ? over : over.slice(0, ENDED_SHOWN);
+    parts.push(el('div', 'ms-sec', 'ENDED'), ...shown.map(endedRow));
+    if (over.length > ENDED_SHOWN) {
+      const more = el('button', 'ms-more', allEnded ? 'Show fewer' : `+${over.length - ENDED_SHOWN} more ended`);
+      more.type = 'button';
+      more.addEventListener('click', () => { allEnded = !allEnded; renderSales(); });
+      parts.push(more);
+    }
+  }
   box.replaceChildren(...parts);
   tickSales();
   if (saleSheet && !saleSheet.editing && !modal.hidden) {

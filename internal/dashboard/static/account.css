@@ -80,3 +80,6 @@ code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--t
   user-select: all;
 }
 .mode-toggle { align-self: center; padding: 0; background: none; border: 0; color: var(--gold); font: 13px var(--sans); text-decoration: underline; cursor: pointer; }
+
+/* style.css's .empty is the board's overlay; a table cell stays in the flow. */
+td.empty { position: static; display: table-cell; text-align: left; }
