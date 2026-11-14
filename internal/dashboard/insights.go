@@ -8,20 +8,71 @@ import (
 
 	"messwa/internal/config"
 	"messwa/internal/mcpserver"
+	"messwa/internal/store"
 )
 
-// insightsCols names the fields of each row in /api/insights, in order.
-// Rows are arrays because a month of the market is ~25,000 of them.
-var insightsCols = []string{
-	"date", "meal", "mess", "diet", "kind", "price", "qty",
-	"first", "last", "end", "sold", "posts", "groups", "seller", "closed", "others", "deleted",
+// factCols holds the listing facts in /api/insights a column at a time,
+// because a month of the market is ~25,000 of them and runs of one value
+// compress far better than rows do. Times are stored as differences, which
+// are small numbers: End from the previous fact's End (the first from 0),
+// First from its own End, Last and Sold from its own First. Sold is null
+// for a fact that never sold.
+type factCols struct {
+	Date    []string `json:"date"`
+	Meal    []string `json:"meal"`
+	Mess    []string `json:"mess"`
+	Diet    []string `json:"diet"`
+	Kind    []string `json:"kind"`
+	Price   []int    `json:"price"`
+	Qty     []int    `json:"qty"`
+	End     []int64  `json:"end"`
+	First   []int64  `json:"first"`
+	Last    []int64  `json:"last"`
+	Sold    []*int64 `json:"sold"`
+	Posts   []int    `json:"posts"`
+	Groups  []int    `json:"groups"`
+	Seller  []int    `json:"seller"`
+	Closed  []int    `json:"closed"`
+	Others  []int    `json:"others"`
+	Deleted []int    `json:"deleted"`
+
+	lastEnd int64
+}
+
+func (c *factCols) add(f *store.Fact, seller int) {
+	end, first := f.End.Unix(), f.FirstSeen.Unix()
+	prev := c.lastEnd
+	c.lastEnd = end
+	var sold *int64
+	if !f.SoldAt.IsZero() {
+		d := f.SoldAt.Unix() - first
+		sold = &d
+	}
+	c.Date = append(c.Date, f.Date)
+	c.Meal = append(c.Meal, f.Meal)
+	c.Mess = append(c.Mess, f.Mess)
+	c.Diet = append(c.Diet, f.Diet)
+	c.Kind = append(c.Kind, f.Kind)
+	c.Price = append(c.Price, f.Price)
+	c.Qty = append(c.Qty, f.Qty)
+	c.End = append(c.End, end-prev)
+	c.First = append(c.First, first-end)
+	c.Last = append(c.Last, f.LastSeen.Unix()-first)
+	c.Sold = append(c.Sold, sold)
+	c.Posts = append(c.Posts, f.Posts)
+	c.Groups = append(c.Groups, f.Groups)
+	c.Seller = append(c.Seller, seller)
+	c.Closed = append(c.Closed, b2i(f.Closed))
+	c.Others = append(c.Others, f.OtherTicks)
+	c.Deleted = append(c.Deleted, b2i(f.Deleted))
 }
 
 // totalCols names the fields of each row in Totals. season indexes Seasons.
 var totalCols = []string{"season", "mess", "diet", "offers", "sold", "wanted", "ask_sum", "asks"}
 
+// It has no clock reading, so it stays byte for byte the same until the
+// facts or the date change, and a revisit costs a 304.
 type insightsState struct {
-	Now   int64  `json:"now"`
 	TZ    string `json:"tz"`
 	Today string `json:"today"`
 	// From..To are the meal dates Rows cover, First the earliest one stored.
@@ -40,8 +91,7 @@ type insightsState struct {
 	// Sellers are indexed by each row's seller field. Names are untrusted
 	// push names.
 	Sellers []seller `json:"sellers"`
-	Cols    []string `json:"cols"`
-	Rows    [][]any  `json:"rows"`
+	Facts   factCols `json:"facts"`
 	// Totals sum the stored facts before today per season, mess and diet,
 	// whatever the range, so the page can compare seasons under its own
 	// filters. Seasons[i].Days counts the same dates.
@@ -94,9 +144,9 @@ func insightsHandler(cfg *config.Config, srv *mcpserver.Server) http.HandlerFunc
 				return
 			}
 		}
-		st := insightsState{Now: now.Unix(), TZ: cfg.Timezone, Today: today, First: first,
+		st := insightsState{TZ: cfg.Timezone, Today: today, First: first,
 			Current: cur.Key, Next: next, Seasons: []seasonStat{},
-			Messes: []mess{}, Windows: []window{}, Sellers: []seller{}, Cols: insightsCols, Rows: [][]any{},
+			Messes: []mess{}, Windows: []window{}, Sellers: []seller{},
 			TotalCols: totalCols, Totals: [][]any{}}
 		for _, m := range cfg.Messes {
 			st.Messes = append(st.Messes, mess{m.Name, m.VegOnly})
@@ -124,7 +174,7 @@ func insightsHandler(cfg *config.Config, srv *mcpserver.Server) http.HandlerFunc
 		}
 		if first == "" {
 			st.From = st.To
-			writeJSON(w, r, st)
+			writeJSONRevalidate(w, r, st)
 			return
 		}
 
@@ -153,7 +203,8 @@ func insightsHandler(cfg *config.Config, srv *mcpserver.Server) http.HandlerFunc
 			return
 		}
 		idx := map[string]int{}
-		for _, f := range facts {
+		for k := range facts {
+			f := &facts[k]
 			i, ok := idx[f.Seller]
 			if !ok {
 				i = len(st.Sellers)
@@ -164,13 +215,9 @@ func insightsHandler(cfg *config.Config, srv *mcpserver.Server) http.HandlerFunc
 			if f.SellerName != "" {
 				st.Sellers[i].Name = f.SellerName
 			}
-			st.Rows = append(st.Rows, []any{
-				f.Date, f.Meal, f.Mess, f.Diet, f.Kind, f.Price, f.Qty,
-				f.FirstSeen.Unix(), f.LastSeen.Unix(), f.End.Unix(), unixOrZero(f.SoldAt), f.Posts, f.Groups,
-				i, b2i(f.Closed), f.OtherTicks, b2i(f.Deleted),
-			})
+			st.Facts.add(f, i)
 		}
-		writeJSON(w, r, st)
+		writeJSONRevalidate(w, r, st)
 	}
 }
 
@@ -188,13 +235,6 @@ func phoneOf(jid string) string {
 		return "+" + u
 	}
 	return ""
-}
-
-func unixOrZero(t time.Time) int64 {
-	if t.IsZero() {
-		return 0
-	}
-	return t.Unix()
 }
 
 func b2i(b bool) int {
