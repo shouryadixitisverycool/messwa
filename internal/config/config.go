@@ -172,6 +172,7 @@ func Default() *Config {
 			// Someone who posted that they want this meal is the likeliest
 			// buyer there is.
 			MessageBuyPosts: true,
+			Nudge:           true,
 			Repost:          true,
 			RepostMessages:  10,
 			RepostListings:  3,

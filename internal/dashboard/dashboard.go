@@ -60,6 +60,9 @@ type state struct {
 	// NoGroups is true when your selling settings pick no group to post
 	// offers in, so the board can say so before a sale goes nowhere.
 	NoGroups bool `json:"no_groups,omitempty"`
+	// Nudge is true when the board should ask you to sell your next meal
+	// ([sell] nudge).
+	Nudge bool `json:"nudge,omitempty"`
 }
 
 type mine struct {
@@ -142,6 +145,7 @@ func Handler(cfg *config.Config, srv *mcpserver.Server, hub *Hub, acc *accounts.
 				return
 			}
 			st.NoGroups = !picksGroups(cfg.Live())
+			st.Nudge = cfg.Live().Sell.Nudge
 		}
 		sc := srv.Schedule()
 		for _, s := range sc.Today {
