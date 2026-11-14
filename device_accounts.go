@@ -12,6 +12,7 @@ import (
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
 	"messwa/internal/accounts"
 	"messwa/internal/config"
 	"messwa/internal/dashboard"
@@ -134,6 +135,13 @@ func (m *deviceAccounts) server(ctx context.Context, id int64) (*mcpserver.Serve
 	in.OnChange(m.hub.Notify)
 	client := wa.NewRuntime(accountCtx, c, in, st)
 	a.client = client
+	// The usage page's live view shows who is offline.
+	client.AddEventHandler(func(evt any) {
+		switch evt.(type) {
+		case *events.Connected, *events.Disconnected, *events.LoggedOut:
+			m.hub.Notify()
+		}
+	})
 	send := func(ctx context.Context, to types.JID, msg *waE2E.Message, extra ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error) {
 		if err := accountCtx.Err(); err != nil {
 			return whatsmeow.SendResponse{}, err

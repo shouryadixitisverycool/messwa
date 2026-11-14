@@ -642,3 +642,14 @@ func (s *Server) FirstFactDate(ctx context.Context) (string, error) {
 func (s *Server) SellTasksSince(ctx context.Context, since time.Time) ([]store.SellTask, error) {
 	return s.st.SellTasks(ctx, since)
 }
+
+// SellTaskOffers is a task's group posts, for the admin usage page.
+func (s *Server) SellTaskOffers(ctx context.Context, id int64) ([]store.SellOffer, error) {
+	return s.st.SellTaskOffers(ctx, id)
+}
+
+// SellTaskBuyers is a task's buyers, for the admin usage page, which only
+// counts them.
+func (s *Server) SellTaskBuyers(ctx context.Context, id int64) ([]store.SellBuyer, error) {
+	return s.st.SellTaskBuyers(ctx, id)
+}

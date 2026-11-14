@@ -14,6 +14,7 @@
 <link rel="stylesheet" href="usage.css">
 <script src="common.js" defer></script>
 <script src="usage.js" defer></script>
+<script src="usage-live.js" defer></script>
 </head>
 <body>
 <div class="app sales insights usage">
@@ -52,6 +53,19 @@
       <div class="saved-row" id="monthRow"></div>
     </div>
     <div class="kpis six" id="kpis"></div>
+  </section>
+
+  <section class="chest" aria-label="Live now">
+    <div class="chest-head">
+      <span class="head-icon" id="lvIcon"></span>
+      <span class="head-name">Live now</span>
+      <span class="lv-dot off" id="lvDot" title="Updates as they happen"></span>
+      <span class="head-meta" id="lvMeta"></span>
+      <div class="wins lv-wins" id="lvWins" aria-label="Meal"></div>
+    </div>
+    <div class="kpis lv-kpis" id="lvKpis"></div>
+    <div id="lvMeals"></div>
+    <p class="u-note">Only meals users are selling through messwa. Buyers stay hidden: you see how many, not who.</p>
   </section>
 
   <section class="chest" aria-label="Sales per day">
