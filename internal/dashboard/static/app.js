@@ -197,8 +197,12 @@ function layout() {
 
 // ---------- render ----------
 
+// boardMeals is the meals the server lists for you; settings can hide snacks.
+const boardMeals = () => (D && D.meals && D.meals.length ? D.meals : MEALS);
+
 function render() {
   if (!D) return;
+  if (S.meal !== 'all' && !boardMeals().includes(S.meal)) S.meal = 'all';
   const accent = messColor(S.tab);
   document.documentElement.style.setProperty('--accent', accent);
   renderDay();
@@ -599,13 +603,13 @@ function renderControls() {
     [{ t: 'Meal filter', c: 'nm ce' }],
     0,
     opt('All meals', S.meal === 'all'),
-    ...MEALS.map((m) => {
+    ...boardMeals().map((m) => {
       const w = window_(m);
       return opt(`${cap(m)}${w ? `  ${hm(w.start)}-${hm(w.end)}` : ''}`, S.meal === m);
     }),
     0,
     [{ t: 'Click to cycle! Right click goes back.', c: 'ce' }],
-  ], S.meal === 'all' ? mealsAllIcon() : icon(S.meal)));
+  ], S.meal === 'all' ? mealsAllIcon(boardMeals()) : icon(S.meal)));
 
   const done = modeDone();
   add(ctl('check', `${done.toUpperCase()}: ${S.sold ? 'ON' : 'OFF'}`, S.sold ? 'on' : '', toggleSold, () => [
@@ -924,7 +928,7 @@ const sortPrice = () => update(() => {
 const step = (list, cur, dir) => list[(list.indexOf(cur) + dir + list.length) % list.length];
 const cycleDiet = (dir = 1) => update(() => { S.diet = step(DIETS, S.diet, dir); S.page = 0; });
 const cycleMeal = (dir = 1) => update(() => {
-  S.meal = step(['all', ...MEALS], S.meal, dir); S.page = 0;
+  S.meal = step(['all', ...boardMeals()], S.meal, dir); S.page = 0;
 });
 const toggleSold = () => update(() => { S.sold = !S.sold; S.page = 0; });
 const toggleMode = () => update(() => { S.mode = S.mode === 'sell' ? 'buy' : 'sell'; S.page = 0; });

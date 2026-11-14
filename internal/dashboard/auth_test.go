@@ -180,7 +180,7 @@ func TestSignIn(t *testing.T) {
 
 	admin := d.as(t, accounts.Admin)
 	res = admin.get(t, "/", nil)
-	if res.StatusCode != 200 || res.Header.Get("Cache-Control") != "no-store" {
+	if res.StatusCode != 200 || res.Header.Get("Cache-Control") != "private, no-cache" {
 		t.Errorf("signed-in board: %d %q", res.StatusCode, res.Header.Get("Cache-Control"))
 	}
 

@@ -179,8 +179,10 @@ func pages(files http.Handler) http.Handler {
 				http.Error(w, "This page is for admins only.", http.StatusForbidden)
 				return
 			}
-			// Pages differ by who's signed in; never serve one from cache.
-			w.Header().Set("Cache-Control", "no-store")
+			// The page is the same for everyone, but who may see it isn't:
+			// keep it out of shared caches and check back each load, so a
+			// signed-out browser gets the redirect, not a cached copy.
+			w.Header().Set("Cache-Control", "private, no-cache")
 		}
 		files.ServeHTTP(w, r)
 	})

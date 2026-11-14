@@ -12,6 +12,9 @@
 
 state_dir = "state"
 timezone = "Asia/Kolkata"
+# Leave snacks out of the board, sales page, MCP tools and sell tasks, so
+# dinner is the meal after lunch. Each user can set it on the YOU tab.
+hide_snacks = false
 
 # The mess buy/sell groups to merge. Get JIDs from `messwa groups`.
 groups = [

@@ -114,7 +114,8 @@ function yAxis(s, x0, x1, y, max, fmt = (v) => String(v)) {
 async function load() {
   try {
     const q = new URLSearchParams({ weeks: F.weeks, season: F.season });
-    const r = await fetch(`api/insights?${q}`, { cache: 'no-store' });
+    // The answer only changes when the facts do, so a revisit is a 304.
+    const r = await fetch(`api/insights?${q}`, { cache: 'no-cache' });
     if (r.status === 401) return toLogin();
     if (!r.ok) throw new Error(await r.text());
     D = await r.json();
@@ -134,13 +135,21 @@ async function load() {
   render();
 }
 
+// parse turns the columns in D.facts back into one object per fact. The
+// server sends times as differences; see factCols in insights.go.
 function parse() {
-  const c = Object.fromEntries(D.cols.map((k, i) => [k, i]));
   const hourFmt = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', hourCycle: 'h23', timeZone: tz() });
   const dateFmt = new Intl.DateTimeFormat('en-CA', { timeZone: tz() });
-  R = D.rows.map((x) => {
-    const r = {};
-    for (const k of D.cols) r[k] = x[c[k]];
+  const C = D.facts;
+  let end = 0;
+  R = (C.date || []).map((date, i) => {
+    end += C.end[i];
+    const first = end + C.first[i];
+    const r = {
+      date, meal: C.meal[i], mess: C.mess[i], diet: C.diet[i], kind: C.kind[i], price: C.price[i], qty: C.qty[i],
+      first, last: first + C.last[i], end, sold: C.sold[i] == null ? 0 : first + C.sold[i],
+      posts: C.posts[i], groups: C.groups[i], seller: C.seller[i], closed: C.closed[i], others: C.others[i], deleted: C.deleted[i],
+    };
     r.wd = wdOf(r.date);
     r.hour = parseInt(hourFmt.format(r.first * 1000), 10);
     r.day = dateFmt.format(r.first * 1000);

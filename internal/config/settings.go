@@ -146,6 +146,7 @@ var settings = []setting{
 	listSetting("sold.words", 0, func(c *Config) *[]string { return &c.Sold.Words }),
 	secondsSetting("dedupe.window", time.Hour, false, func(c *Config) *duration { return &c.Dedupe.Window }),
 	secondsSetting("dms.retention", time.Hour, false, func(c *Config) *duration { return &c.DMs.Retention }),
+	boolSetting("hide_snacks", func(c *Config) *bool { return &c.HideSnacks }),
 	intSetting("sales.monthly_fee", 0, func(c *Config) *int { return &c.Sales.MonthlyFee }),
 	{key: "seasons",
 		get: func(c *Config) any { return nonNil(c.Seasons) },

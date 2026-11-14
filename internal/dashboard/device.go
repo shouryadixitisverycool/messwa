@@ -57,7 +57,7 @@ func AccountHandler(cfg *config.Config, root *mcpserver.Server, hub *Hub, acc *a
 // perUserSetting reports whether setting k belongs to one user's WhatsApp
 // rather than to everyone. Members may only save these.
 func perUserSetting(k string) bool {
-	return strings.HasPrefix(k, "sell.") || k == "mcp.sell_tasks" || k == "sales.monthly_fee" || k == "dms.retention"
+	return strings.HasPrefix(k, "sell.") || k == "mcp.sell_tasks" || k == "sales.monthly_fee" || k == "dms.retention" || k == "hide_snacks"
 }
 
 func deviceRoutes(mux *http.ServeMux, srv *mcpserver.Server) {
