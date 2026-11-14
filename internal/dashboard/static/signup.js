@@ -9,9 +9,9 @@ $('headIcon').append(svgEl(icon('paper')));
 // check returns what's wrong with the form, or ''. The server checks the
 // same things; this just answers before a round trip.
 function check() {
-  const name = $('name').value.trim();
+  const name = $('name').value.trim().split(/\s+/).join(' ');
   if (!name) return ['name', 'Pick a name.'];
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/.test(name)) return ['name', 'Names use letters, digits, dots, dashes or underscores, and start with a letter or digit.'];
+  if (!/^[A-Za-z0-9][A-Za-z0-9._ -]{0,31}$/.test(name)) return ['name', 'Names use letters, digits, spaces, dots, dashes or underscores, and start with a letter or digit.'];
   if (!$('password').value) return ['password', 'Pick a password.'];
   if ($('password').value !== $('again').value) return ['again', "The passwords don't match."];
   return ['', ''];

@@ -74,6 +74,32 @@ func TestBox(t *testing.T) {
 	}
 }
 
+func TestNamesWithSpaces(t *testing.T) {
+	ctx := context.Background()
+	a := open(t, secret)
+	u, err := a.Add(ctx, "  Asha   Rao ", "long enough pw", Member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Name != "Asha Rao" {
+		t.Errorf("name %q, want squeezed spaces", u.Name)
+	}
+	if _, err := a.Add(ctx, "asha rao", "long enough pw", Member); !errors.Is(err, store.ErrNameTaken) {
+		t.Errorf("same name with different spacing: %v", err)
+	}
+	if got, err := a.ByName(ctx, "asha  rao"); err != nil || got.ID != u.ID {
+		t.Errorf("ByName: %v %v", got, err)
+	}
+	if _, _, err := a.Login(ctx, " asha\trao", "long enough pw", "1.2.3.4"); err != nil {
+		t.Errorf("login with odd spacing: %v", err)
+	}
+	for _, bad := range []string{" ", " -asha", strings.Repeat("a ", 17)} {
+		if _, err := a.Add(ctx, bad, "long enough pw", Member); err == nil {
+			t.Errorf("name %q accepted", bad)
+		}
+	}
+}
+
 func TestLoginAndSessions(t *testing.T) {
 	ctx := context.Background()
 	a := open(t, secret)

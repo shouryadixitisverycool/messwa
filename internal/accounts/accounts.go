@@ -115,7 +115,7 @@ var (
 	ErrNoSecret    = errors.New("set " + SecretEnv + " (openssl rand -hex 32) to store mess API keys")
 	ErrBadPassword = fmt.Errorf("passwords can't be empty or longer than %d characters", maxPassword)
 	ErrSignUpLimit = errors.New("too many sign-ups from here; try again in an hour")
-	validName      = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,31}$`)
+	validName      = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._ -]{0,31}$`)
 )
 
 type Accounts struct {
@@ -256,9 +256,14 @@ func (a *Accounts) SignUp(ctx context.Context, name, password, from string) (*Us
 	return u, err
 }
 
+// cleanName trims a name and squeezes runs of whitespace to one space, so
+// "Asha  Rao" and "Asha Rao" are the same account.
+func cleanName(name string) string { return strings.Join(strings.Fields(name), " ") }
+
 func (a *Accounts) add(ctx context.Context, name, password string, role Role, status Status) (*User, error) {
+	name = cleanName(name)
 	if !validName.MatchString(name) {
-		return nil, errors.New("names are 1 to 32 letters, digits, dots, dashes or underscores")
+		return nil, errors.New("names are 1 to 32 letters, digits, spaces, dots, dashes or underscores")
 	}
 	if role != Admin && role != Member {
 		return nil, fmt.Errorf("unknown role %q", role)
@@ -284,6 +289,7 @@ func (a *Accounts) User(ctx context.Context, id int64) (*User, error) {
 
 // ByName finds a user by name, ignoring case. It errors when there's none.
 func (a *Accounts) ByName(ctx context.Context, name string) (*User, error) {
+	name = cleanName(name)
 	r, err := a.st.UserByName(ctx, name)
 	if err != nil {
 		return nil, err
@@ -418,6 +424,7 @@ func (a *Accounts) dummyHash() string {
 // Login checks a password and starts a session. from identifies the client
 // (its IP) for the failed-login lockout.
 func (a *Accounts) Login(ctx context.Context, name, password, from string) (string, *Session, error) {
+	name = cleanName(name)
 	key := strings.ToLower(name) + "|" + from
 	now := a.now()
 	a.mu.Lock()
