@@ -152,7 +152,7 @@ The MCP tools are `mark_sell_task_sold`, `add_sell_task_buyer`, `mute_sell_task_
 
 ### Settings page
 
-Everyone edits their own selling settings on the OFFER, REPOST and BUYERS tabs: the sell-task switch, offer groups, prices in posts, repost rules, buyer policy, handoff, image payments, unsaved chat retention and the monthly target. These settings are stored in that user's database and apply to their next actions and supported live task settings. New users start with conservative selling defaults, including image payments off. File values remain the fallback for the migrated admin. There is no configured phone number or UPI address to migrate: sender identity comes from the user's device and payment prompts use WhatsApp Pay.
+Everyone edits their own selling settings on the OFFER, REPOST and BUYERS tabs: the sell-task switch, offer groups, prices in posts, repost rules, buyer policy, handoff, image payments, unsaved chat retention and the monthly target. These settings are stored in that user's database and apply to their next actions and supported live task settings. New users start with conservative selling defaults, including image payments off. Their sell-task switch starts at `[mcp] new_user_sell_tasks`, off unless the operator sets it. File values remain the fallback for the migrated admin. There is no configured phone number or UPI address to migrate: sender identity comes from the user's device and payment prompts use WhatsApp Pay.
 
 `settings.html` has YOU, OFFER, REPOST and BUYERS tabs for everyone. The MARKET and CALENDAR tabs change messwa for everyone, so only admins get them:
 
