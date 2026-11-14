@@ -38,6 +38,9 @@ type intent struct {
 	offer int  // rupees, for intentOffer
 	firm  bool // "45 final", "max 45", "last 45"
 	done  bool // intentOK from "done" or "dn", which also means "paid" once agreed
+	// bought marks an intentPass from a buyer who got a meal elsewhere
+	// ("bought already", "got from other"): no lower price brings them back.
+	bought bool
 }
 
 // name is how the dashboard shows what the bot read: the meaning only,
@@ -51,19 +54,26 @@ func (in intent) name() string {
 	if in.kind == intentOffer && in.firm {
 		n = "offer_final"
 	}
+	if in.kind == intentPass && in.bought {
+		n = "pass_bought"
+	}
 	return n
 }
 
 // combineIntents reads a burst of messages as one: the highest-ranked
-// intent wins, and among equals the latest.
+// intent wins, and among equals the latest. A pass is bought if any
+// message in the burst says so: "sorry bought" then "nvm" is still bought.
 func combineIntents(texts []string) intent {
 	var out intent
+	bought := false
 	for _, t := range texts {
 		in := parseBuyer(t)
+		bought = bought || in.bought
 		if intentRank[in.kind] >= intentRank[out.kind] {
 			out = in
 		}
 	}
+	out.bought = out.kind == intentPass && bought
 	return out
 }
 
@@ -144,7 +154,12 @@ var (
 	passWords = newVocab("nvm", "nevermind", "never mind", "not needed", "not interested", "no thanks", "no thank you", "no thanx", "no thnx",
 		"no sorry", "leave it", "lite", "chodo", "chhodo", "rehne do", "rehne de", "rehnedo", "rehen do", "i'll pass", "ill pass", "pass",
 		"cancel", "bought", "purchased", "got from", "got another", "got one", "got other", "got elsewhere", "got it from", "already got",
-		"mil gaya", "mil gya", "milgaya", "mil gayi", "not required", "dont want", "don't want", "do not want", "no need", "skip")
+		"mil gaya", "mil gya", "milgaya", "mil gayi", "not required", "dont want", "don't want", "do not want", "no need", "skip",
+		"sorry got it", "sry got it", "sorry i got it", "sry i got it")
+	// Within a pass, these mean the buyer has a meal already. "got it"
+	// counts only here: on its own it is "understood".
+	boughtWords = newVocab("bought", "buyed", "purchased", "got from", "got another", "got one", "got other", "got elsewhere",
+		"got it", "already got", "mil gaya", "mil gya", "milgaya", "mil gayi")
 	refuseFirst   = newVocab("no", "nope", "nah", "na", "nahi", "nhi")
 	payOtherWords = newVocab("upi id", "upi qr", "qr code", "scanner", "scan", "send qr", "send your qr", "send the qr", "your qr", "payment qr",
 		"cant pay", "can't pay", "cannot pay", "not working", "cash", "pay later", "later", "tomorrow", "tmrw", "tmr", "account number",
@@ -255,9 +270,9 @@ func parseBuyer(text string) intent {
 	case paidMark || paidWords.in(m):
 		return intent{kind: intentPaid}
 	case passWords.in(m), notInterested(m.words):
-		return intent{kind: intentPass}
+		return intent{kind: intentPass, bought: boughtWords.in(m)}
 	case len(m.words) > 0 && refuseFirst.words[m.words[0]] && !lowerWords.in(m) && !openerWords.in(m):
-		return intent{kind: intentPass}
+		return intent{kind: intentPass, bought: boughtWords.in(m)}
 	case payOtherWords.in(m):
 		return intent{kind: intentPayOther}
 	case lowerWords.in(m), pleading.only(m) && !okWords.in(m):

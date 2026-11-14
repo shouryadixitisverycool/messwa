@@ -133,7 +133,7 @@ type step struct {
 }
 
 // passCounter is the one lower price a buyer who passes hears before the
-// bot lets them go. Above the target it is the target. At or below it, it
+// bot lets them go. One who bought elsewhere gets none (see decide). Above the target it is the target. At or below it, it
 // is halfway from the ask to the floor, rounded to the unit and at least
 // one unit under the ask, so ₹70 with a ₹60 floor becomes ₹65. It may go
 // under the walk-away price: a buyer who passed is lost anyway, and the
@@ -218,7 +218,7 @@ func (h haggle) decide(st haggleState, in intent, now time.Time, competing bool)
 	switch in.kind {
 	case intentPass:
 		k, ok := h.passCounter(st)
-		if !ok {
+		if !ok || in.bought {
 			return step{next: st, pass: true}
 		}
 		next.passCountered = true
