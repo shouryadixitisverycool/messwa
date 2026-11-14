@@ -242,6 +242,15 @@
 .sell-form input:not([type=range], [type=radio], [type=file]):focus-visible, .sell-form select:focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; }
 .sell-form .sell-note, .sell-form .sell-err, .sell-form .sell-acts { margin-top: 0; }
 @media (max-width: 420px) { .sell-tools { grid-template-columns: 1fr; } }
+/* A schedule's tools: START NOW beside AUTOPILOT, then prices and unschedule. */
+.sell-tools.pairs { grid-template-columns: 1fr 1fr; }
+.sell-tool.auto b { color: var(--dim); }
+.sell-tool.auto.on { border-color: color-mix(in srgb, var(--blue, #5aa9ff) 70%, transparent); background: color-mix(in srgb, #5aa9ff 10%, var(--slot)); }
+.sell-tool.auto.on b, .sell-tool.auto.on span { color: #5aa9ff; }
+.auto-note b { color: #5aa9ff; font-weight: 600; }
+.auto-note[hidden] { display: none; }
+/* Autopilot on a ledger cell. */
+.auto-tag { position: absolute; top: 3px; right: 4px; font-size: 9px; line-height: 1; color: #5aa9ff; }
 
 /* ---------- friends' meals ---------- */
 

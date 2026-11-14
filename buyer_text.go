@@ -110,6 +110,12 @@ func sayOutbid(handedOff bool) reply {
 	return msg("wait dont pay yet", "someone offered more, if they dont pay in 2 min ill msg u")
 }
 
+// sayDropped tells a buyer asked to pay that autopilot dropped them, so
+// they don't pay.
+func sayDropped() reply {
+	return msg("wait dont pay", "cant do this one sorry")
+}
+
 // sayQueuedHandoff tells a buyer who agreed that someone else is buying
 // from you by hand, with no deadline.
 func sayQueuedHandoff(price int) reply {

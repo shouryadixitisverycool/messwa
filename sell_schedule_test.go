@@ -46,14 +46,14 @@ func TestSellScheduleListsBeforeTheMeal(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		id, at, err := m.StartOrSchedule(ctx, 0, f.date, "lunch", 40, 60)
+		id, at, err := m.StartOrSchedule(ctx, 0, f.date, "lunch", 40, 60, false)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if want := slot.Start.Add(-15 * time.Minute); !at.Equal(want) {
 			t.Fatalf("scheduled for %s, want %s", at, want)
 		}
-		if _, _, err := m.StartOrSchedule(ctx, 0, f.date, "lunch", 40, 60); err == nil {
+		if _, _, err := m.StartOrSchedule(ctx, 0, f.date, "lunch", 40, 60, false); err == nil {
 			t.Fatal("scheduled the same meal twice")
 		}
 
@@ -92,7 +92,7 @@ func TestSellScheduleCancelAndStartEarly(t *testing.T) {
 		defer cancel()
 		m := f.manager(ctx)
 
-		id, at, err := m.StartOrSchedule(ctx, 0, f.date, "lunch", 40, 60)
+		id, at, err := m.StartOrSchedule(ctx, 0, f.date, "lunch", 40, 60, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -104,7 +104,7 @@ func TestSellScheduleCancelAndStartEarly(t *testing.T) {
 		}
 
 		// Starting by hand replaces a waiting schedule.
-		id, _, err = m.StartOrSchedule(ctx, 0, f.date, "lunch", 40, 60)
+		id, _, err = m.StartOrSchedule(ctx, 0, f.date, "lunch", 40, 60, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -131,7 +131,7 @@ func TestSellScheduleResumesAfterRestart(t *testing.T) {
 		f := newSellFixture(t, path)
 		f.cfg.MCP.SellTasks = true
 		ctx, stop := context.WithCancel(t.Context())
-		id, at, err := f.manager(ctx).StartOrSchedule(ctx, 0, f.date, "lunch", 40, 60)
+		id, at, err := f.manager(ctx).StartOrSchedule(ctx, 0, f.date, "lunch", 40, 60, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -168,7 +168,7 @@ func TestSellScheduleStartsNowOnceDue(t *testing.T) {
 		m := f.manager(ctx)
 		slot, _ := findSlot(f.cfg, f.date, "lunch")
 		time.Sleep(time.Until(slot.Start.Add(-10 * time.Minute)))
-		id, at, err := m.StartOrSchedule(ctx, 0, f.date, "lunch", 40, 60)
+		id, at, err := m.StartOrSchedule(ctx, 0, f.date, "lunch", 40, 60, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -187,7 +187,7 @@ func TestSellScheduleFailsWhenSellTasksTurnOff(t *testing.T) {
 		f.cfg.MCP.SellTasks = true
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		id, at, err := f.manager(ctx).StartOrSchedule(ctx, 0, f.date, "lunch", 40, 60)
+		id, at, err := f.manager(ctx).StartOrSchedule(ctx, 0, f.date, "lunch", 40, 60, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -219,4 +219,36 @@ func TestListTime(t *testing.T) {
 			t.Errorf("listTime(%s) = %s, want %s", c.offset, got, c.want)
 		}
 	}
+}
+
+func TestSellScheduleStartsOnAutopilot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		f.cfg.MCP.SellTasks = true
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m := f.manager(ctx)
+		id, at, err := m.StartOrSchedule(ctx, 0, f.date, "lunch", 40, 60, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.schedule(id).Autopilot {
+			t.Fatal("autopilot on by default")
+		}
+		if err := m.SetScheduleAutopilot(ctx, id, true); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Until(at) + time.Minute)
+		synctest.Wait()
+		task := f.activeTask("lunch")
+		if task == nil || !task.Autopilot {
+			t.Fatalf("task %+v, want it on autopilot", task)
+		}
+		if err := m.SetScheduleAutopilot(ctx, id, false); err == nil {
+			t.Fatal("changed autopilot on a schedule that already started")
+		}
+		cancel()
+		synctest.Wait()
+	})
 }

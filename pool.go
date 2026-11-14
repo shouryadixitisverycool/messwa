@@ -48,7 +48,7 @@ const postEditWindow = 15 * time.Minute
 
 // pooled reports whether t can share a pool with other tasks.
 func pooled(t store.SellTask) bool {
-	return negotiates(t) && (t.Handoff == "" || t.Handoff == string(config.HandoffNever)) && t.Mess != ""
+	return negotiates(t) && (t.Handoff == "" || t.Handoff == string(config.HandoffNever)) && t.Mess != "" && !t.Autopilot
 }
 
 // poolView is a task's pool on its date.

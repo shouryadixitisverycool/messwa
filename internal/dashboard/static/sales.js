@@ -299,6 +299,7 @@ function cellNode(date, c) {
     p.append(el('span', 'r', '₹'), t.min === t.max ? String(t.min) : `${t.min}-${t.max}`);
     if (c.diet) n.append(span('diet', dietMark(c.diet)));
     n.append(span('messg', messIcon(c.mess)), p, el('div', 'glint'), el('span', 'sell-tag', 'SELLING'));
+    if (t.autopilot) n.append(el('span', 'auto-tag', '✈'));
   } else if (c.state === 'scheduled') {
     const sc = c.schedule;
     const p = el('div', 'price range');
@@ -306,6 +307,7 @@ function cellNode(date, c) {
     if (c.diet) n.append(span('diet', dietMark(c.diet)));
     // No mess icon: the tag's time needs the room.
     n.append(p, el('span', 'sell-tag', hm(sc.at)));
+    if (sc.autopilot) n.append(el('span', 'auto-tag', '✈'));
   } else if (c.state === 'unknown') {
     n.append(el('div', 'ghost', '?'));
   } else {
@@ -386,7 +388,8 @@ function cellLines(date, c) {
     const a = askLine('Median ask ');
     if (a) lines.push(a);
     lines.push([{ t: 'Sells till ', c: 'c7' }, { t: hm(c.end), c: 'cf' }]);
-    lines.push(null, [{ t: 'Click to start it now, edit the prices or unschedule it.', c: 'lore' }]);
+    if (sc.autopilot) lines.push([{ t: 'Autopilot ', c: 'c7' }, { t: 'on, never waits on you', c: 'cb' }]);
+    lines.push(null, [{ t: 'Click to start it now, turn autopilot on or off, edit the prices or unschedule it.', c: 'lore' }]);
     lines.push({ rar: 'SCHEDULED', c: 'ce' });
   } else if (c.state === 'open') {
     lines.push([{ t: now() >= c.start ? 'Being served now. Still yours to sell.' : 'Registered. Not sold yet.', c: 'c7' }]);
@@ -439,7 +442,7 @@ function renderAhead() {
   const nm = el('b', '', `${messName(c.mess)}${c.diet ? ` ${DIET_LABEL[c.diet].toLowerCase()}` : ''} ${c.meal}`);
   what.append(el('span', 'ah-k', 'UP NEXT'), nm, el('span', 'ah-when', `${dayWord(date)}, ${hm(c.start)}-${hm(c.end)}`));
   const act = el('span', 'ah-act');
-  if (c.schedule) act.append(el('b', 'gold', `GOES UP ${hm(c.schedule.at)}`), el('small', '', priceText(c.schedule)));
+  if (c.schedule) act.append(el('b', 'gold', `GOES UP ${hm(c.schedule.at)}`), el('small', '', `${priceText(c.schedule)}${c.schedule.autopilot ? ' · ✈ autopilot' : ''}`));
   else if (c.task) act.append(el('b', 'gold', 'SELLING'), el('small', '', priceText(c.task)));
   else if (c.state === 'open') act.append(el('b', 'gold', 'SELL ›'), listAt(c) ? el('small', '', `goes up ${hm(listAt(c))}`) : '');
   else act.append(el('b', '', c.state.toUpperCase()));
@@ -600,7 +603,10 @@ function menuView(date, c) {
   if (D.sell_off) for (const x of tools.children) x.disabled = true;
 
   acts.append(btn('CLOSE', '', closeModal));
-  sheet.append(sum, list, tools, error, acts);
+  const auto = el('p', 'sell-note auto-note');
+  auto.hidden = !t.autopilot;
+  auto.append(el('b', '', 'On autopilot. '), "Buyers who'd need you are skipped, and only WhatsApp Pay counts.");
+  sheet.append(sum, list, tools, auto, error, acts);
 }
 
 // scheduleView is a sale waiting for its meal: when it goes up, at what
@@ -619,20 +625,40 @@ function scheduleView(date, c) {
     x.append(el('b', '', glyph), el('span', '', label), el('small', '', hint));
     return x;
   };
-  const go = tool('▶', 'START NOW', 'Post the offer now', 'grn', () =>
-    run({ action: 'start', date, meal: c.meal, min: sc.min, max: sc.max, now: true }, `Selling your ${c.meal}`));
+  const go = tool('▶', 'START NOW', sc.autopilot ? 'On autopilot' : 'Post the offer now', 'grn', () =>
+    run({ action: 'start', date, meal: c.meal, min: sc.min, max: sc.max, now: true, autopilot: !!sc.autopilot }, `Selling your ${c.meal}${sc.autopilot ? ' on autopilot' : ''}`));
   go.dataset.focus = '1';
+  // Autopilot is a switch: it saves at once and keeps the sheet open.
+  const auto = tool('✈', 'AUTOPILOT', sc.autopilot ? 'On · never waits on you' : 'Off', 'auto' + (sc.autopilot ? ' on' : ''), async () => {
+    auto.disabled = true;
+    error.textContent = '';
+    try {
+      await send('POST', 'api/sell-action', { action: 'autopilot', id: sc.id, autopilot: !sc.autopilot });
+      sc.autopilot = !sc.autopilot;
+      openSell(date, c);
+      load();
+    } catch (err) {
+      error.textContent = err.message;
+      auto.disabled = false;
+    }
+  });
+  auto.setAttribute('role', 'switch');
+  auto.setAttribute('aria-checked', String(!!sc.autopilot));
   const drop = tool('✕', 'UNSCHEDULE', 'Keep the meal', 'red', () => {
     if (drop.dataset.sure) return run({ action: 'unschedule', id: sc.id }, `Unscheduled. Your ${c.meal} won't go up.`);
     drop.dataset.sure = '1';
     drop.querySelector('span').textContent = 'SURE?';
     drop.querySelector('small').textContent = 'Click again to drop it';
   });
-  tools.append(go, tool('₹', 'EDIT PRICES', priceText(sc), 'gold-o', () => openSell(date, c, 'prices')), drop);
+  tools.classList.add('pairs');
+  tools.append(go, auto, tool('₹', 'EDIT PRICES', priceText(sc), 'gold-o', () => openSell(date, c, 'prices')), drop);
   if (D.sell_off) for (const x of tools.children) x.disabled = true;
 
+  const autoNote = el('p', 'sell-note auto-note');
+  autoNote.hidden = !sc.autopilot;
+  autoNote.append(el('b', '', 'Autopilot. '), "Sells without waiting on you. Anyone who'd need you is skipped, even at a higher price: paying some other way, going below your lowest, replies the bot can't read, saying they paid when no payment came. Only WhatsApp Pay counts, never a screenshot.");
   acts.append(btn('CLOSE', '', closeModal));
-  sheet.append(sum, note, tools, error, acts);
+  sheet.append(sum, note, tools, autoNote, error, acts);
 }
 
 // priceSlider is the two-handle price range for a cell-like c (ask,
@@ -720,7 +746,9 @@ function priceView(date, c) {
     acts.append(btn('BACK', '', () => openSell(date, c)),
       btn('SAVE', 'gold', () => {
         const [min, max] = slider.get();
-        run([{ action: 'unschedule', id: c.schedule.id }, { action: 'start', date, meal: c.meal, min, max }], (res) => startedToast(c.meal, res));
+        // The new schedule keeps autopilot.
+        run([{ action: 'unschedule', id: c.schedule.id }, { action: 'start', date, meal: c.meal, min, max, autopilot: !!c.schedule.autopilot }],
+          (res) => startedToast(c.meal, res));
       }));
   } else if (listAt(c)) {
     const at = listAt(c);

@@ -162,7 +162,7 @@ func (s *Server) StartFriendSale(ctx context.Context, userID int64, m store.Frie
 	if err != nil {
 		return 0, "", time.Time{}, err
 	}
-	id, at, err := sell.StartOrSchedule(ctx, userID, m.Date, slot, minRupees, maxRupees)
+	id, at, err := sell.StartOrSchedule(ctx, userID, m.Date, slot, minRupees, maxRupees, false)
 	if err != nil {
 		if derr := s.st.DeleteFriendMeal(context.WithoutCancel(ctx), m.Date, slot); derr != nil {
 			err = errors.Join(err, derr)

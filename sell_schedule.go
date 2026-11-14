@@ -22,7 +22,7 @@ import (
 // StartOrSchedule starts a sell task for the meal now when it is being
 // served or its list_at time has passed. Otherwise it schedules one and
 // returns the schedule's id and when the task will start.
-func (m *sellManager) StartOrSchedule(ctx context.Context, userID int64, date, meal string, minRupees, maxRupees int) (int64, time.Time, error) {
+func (m *sellManager) StartOrSchedule(ctx context.Context, userID int64, date, meal string, minRupees, maxRupees int, autopilot bool) (int64, time.Time, error) {
 	if minRupees <= 0 || maxRupees < minRupees || maxRupees > 10000 {
 		return 0, time.Time{}, errors.New("min_price must be at least 1 and max_price between min_price and 10000")
 	}
@@ -33,7 +33,7 @@ func (m *sellManager) StartOrSchedule(ctx context.Context, userID int64, date, m
 	now := time.Now()
 	at := listTime(slot.Start, slot.End, m.cfg.Live().Sell.ListAt.Duration)
 	if !now.Before(slot.Start) || !now.Before(at) {
-		id, err := m.Start(ctx, userID, date, meal, minRupees, maxRupees, "")
+		id, err := m.start(ctx, userID, date, meal, minRupees, maxRupees, "", autopilot)
 		return id, time.Time{}, err
 	}
 	if settings, err := taskSellSettings(m.cfg); err != nil {
@@ -51,7 +51,7 @@ func (m *sellManager) StartOrSchedule(ctx context.Context, userID int64, date, m
 		return 0, time.Time{}, err
 	}
 	sc := store.SellSchedule{Date: date, Meal: meal, MinPaise: int64(minRupees) * 100, MaxPaise: int64(maxRupees) * 100,
-		UserID: userID, StartsAt: at, EndsAt: slot.End, CreatedAt: now}
+		UserID: userID, StartsAt: at, EndsAt: slot.End, CreatedAt: now, Autopilot: autopilot}
 	if sc.ID, err = m.st.CreateSellSchedule(ctx, sc); err != nil {
 		return 0, time.Time{}, err
 	}
@@ -84,6 +84,27 @@ func (m *sellManager) CancelSchedule(ctx context.Context, id int64) error {
 	}
 	m.disarm(id)
 	m.log.Info("sell schedule cancelled", "schedule", id)
+	m.changed()
+	return nil
+}
+
+// StartNow starts a sell task straight away, even for a meal that hasn't
+// begun, on autopilot or not.
+func (m *sellManager) StartNow(ctx context.Context, userID int64, date, meal string, minRupees, maxRupees int, autopilot bool) (int64, error) {
+	return m.start(ctx, userID, date, meal, minRupees, maxRupees, "", autopilot)
+}
+
+// SetScheduleAutopilot turns autopilot on or off for a schedule that
+// hasn't started its task.
+func (m *sellManager) SetScheduleAutopilot(ctx context.Context, id int64, on bool) error {
+	ok, err := m.st.SetSellScheduleAutopilot(ctx, id, on)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("sell schedule %d is not waiting; it may have started already", id)
+	}
+	m.log.Info("sell schedule autopilot", "schedule", id, "on", on)
 	m.changed()
 	return nil
 }
@@ -170,7 +191,7 @@ func (m *sellManager) fire(id int64) {
 		fail("the meal ended before the offer went up")
 		return
 	}
-	task, err := m.Start(m.base, sc.UserID, sc.Date, sc.Meal, int(sc.MinPaise/100), int(sc.MaxPaise/100), sc.Handoff)
+	task, err := m.start(m.base, sc.UserID, sc.Date, sc.Meal, int(sc.MinPaise/100), int(sc.MaxPaise/100), sc.Handoff, sc.Autopilot)
 	if err != nil {
 		fail(err.Error())
 		return

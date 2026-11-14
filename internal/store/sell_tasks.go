@@ -105,6 +105,10 @@ type SellTask struct {
 	// TargetPaise is the price a negotiation aims for, from the market's
 	// median ask; 0 until the task first negotiates.
 	TargetPaise int64
+	// Autopilot sells without ever waiting on you: buyers who would need
+	// you are skipped, screenshots never count as payment, nothing is
+	// handed off and the task never pools.
+	Autopilot bool
 }
 
 // SellOffer is one copy of a task's offer in a group. Seq 0 is the first
@@ -172,8 +176,8 @@ func (s *Store) CreateSellTask(ctx context.Context, t SellTask) (int64, error) {
 	if t.Handoff == "" {
 		t.Handoff = "never"
 	}
-	r, err := tx.ExecContext(ctx, `INSERT INTO sell_tasks(date,meal,min_paise,max_paise,user_id,account_hash,mess,diet,handoff,created_at,ends_at)
- VALUES(?,?,?,?,?,?,?,?,?,?,?)`, t.Date, t.Meal, t.MinPaise, t.MaxPaise, t.UserID, t.AccountHash, t.Mess, t.Diet, t.Handoff, t.CreatedAt.Unix(), t.EndsAt.Unix())
+	r, err := tx.ExecContext(ctx, `INSERT INTO sell_tasks(date,meal,min_paise,max_paise,user_id,account_hash,mess,diet,handoff,created_at,ends_at,autopilot)
+ VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, t.Date, t.Meal, t.MinPaise, t.MaxPaise, t.UserID, t.AccountHash, t.Mess, t.Diet, t.Handoff, t.CreatedAt.Unix(), t.EndsAt.Unix(), t.Autopilot)
 	if err != nil {
 		return 0, err
 	}
@@ -184,12 +188,12 @@ func (s *Store) CreateSellTask(ctx context.Context, t SellTask) (int64, error) {
 	return id, tx.Commit()
 }
 
-const sellTaskCols = `id,date,meal,min_paise,max_paise,user_id,account_hash,mess,diet,handoff,state,detail,created_at,ends_at,coalesce(ended_at,0),target_paise`
+const sellTaskCols = `id,date,meal,min_paise,max_paise,user_id,account_hash,mess,diet,handoff,state,detail,created_at,ends_at,coalesce(ended_at,0),target_paise,autopilot`
 
 func scanSellTask(row interface{ Scan(...any) error }) (SellTask, error) {
 	var t SellTask
 	var created, ends, ended int64
-	err := row.Scan(&t.ID, &t.Date, &t.Meal, &t.MinPaise, &t.MaxPaise, &t.UserID, &t.AccountHash, &t.Mess, &t.Diet, &t.Handoff, &t.State, &t.Detail, &created, &ends, &ended, &t.TargetPaise)
+	err := row.Scan(&t.ID, &t.Date, &t.Meal, &t.MinPaise, &t.MaxPaise, &t.UserID, &t.AccountHash, &t.Mess, &t.Diet, &t.Handoff, &t.State, &t.Detail, &created, &ends, &ended, &t.TargetPaise, &t.Autopilot)
 	t.CreatedAt, t.EndsAt = time.Unix(created, 0), time.Unix(ends, 0)
 	if ended != 0 {
 		t.EndedAt = time.Unix(ended, 0)

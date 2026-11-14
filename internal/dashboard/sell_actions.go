@@ -66,8 +66,11 @@ func sellActionRoutes(mux *http.ServeMux, cfg *config.Config, srv *mcpserver.Ser
 			Min  int    `json:"min"`
 			Max  int    `json:"max"`
 			// start: Now starts the task straight away even when the
-			// meal hasn't begun, instead of scheduling it.
-			Now bool `json:"now"`
+			// meal hasn't begun, instead of scheduling it. Autopilot
+			// starts it on autopilot; autopilot: turns it on or off for
+			// schedule ID.
+			Now       bool `json:"now"`
+			Autopilot bool `json:"autopilot"`
 		}
 		if !readJSON(w, r, &in) {
 			return
@@ -87,14 +90,14 @@ func sellActionRoutes(mux *http.ServeMux, cfg *config.Config, srv *mcpserver.Ser
 			var err error
 			userID := accounts.UserFrom(r.Context()).ID
 			if in.Now {
-				var sell mcpserver.SellTasks
-				if sell, err = srv.SellControl(); err == nil {
-					id, err = sell.Start(r.Context(), userID, in.Date, in.Meal, in.Min, in.Max, "")
+				var sc mcpserver.SellScheduler
+				if sc, err = srv.SellScheduler(); err == nil {
+					id, err = sc.StartNow(r.Context(), userID, in.Date, in.Meal, in.Min, in.Max, in.Autopilot)
 				}
 			} else {
 				var sc mcpserver.SellScheduler
 				if sc, err = srv.SellScheduler(); err == nil {
-					id, at, err = sc.StartOrSchedule(r.Context(), userID, in.Date, in.Meal, in.Min, in.Max)
+					id, at, err = sc.StartOrSchedule(r.Context(), userID, in.Date, in.Meal, in.Min, in.Max, in.Autopilot)
 				}
 			}
 			if err != nil {
@@ -102,6 +105,17 @@ func sellActionRoutes(mux *http.ServeMux, cfg *config.Config, srv *mcpserver.Ser
 				return
 			}
 			writeJSON(w, r, startedResp{ID: id, At: unix(at)})
+			return
+		case "autopilot":
+			sc, err := srv.SellScheduler()
+			if err == nil {
+				err = sc.SetScheduleAutopilot(r.Context(), in.ID, in.Autopilot)
+			}
+			if err != nil {
+				jsonError(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, r, struct{}{})
 			return
 		case "unschedule":
 			sc, err := srv.SellScheduler()

@@ -30,6 +30,8 @@ type SaleView struct {
 	Mess      string `json:"mess,omitempty"`
 	Diet      string `json:"diet,omitempty"`
 	State     string `json:"state"`
+	// Autopilot skips buyers who would need you; see store.SellTask.
+	Autopilot bool   `json:"autopilot,omitempty"`
 	Detail    string `json:"detail,omitempty"`
 	Handoff   string `json:"handoff"`
 	// Min is the floor and Max the opening price. Target is what the
@@ -162,7 +164,7 @@ func (s *Server) SaleViews(ctx context.Context) ([]SaleView, error) {
 }
 
 func (s *Server) saleView(ctx context.Context, t store.SellTask, now time.Time) (SaleView, error) {
-	v := SaleView{ID: t.ID, Date: t.Date, Meal: t.Meal, Mess: t.Mess, Diet: t.Diet, State: t.State, Detail: t.Detail, Handoff: t.Handoff,
+	v := SaleView{ID: t.ID, Date: t.Date, Meal: t.Meal, Mess: t.Mess, Diet: t.Diet, State: t.State, Autopilot: t.Autopilot, Detail: t.Detail, Handoff: t.Handoff,
 		Min: rupeesOf(t.MinPaise), Max: rupeesOf(t.MaxPaise), Started: unix(t.CreatedAt), Ends: unix(t.EndsAt), Ended: unix(t.EndedAt),
 		Posts: []SalePost{}, Buyers: []SaleBuyer{}, History: []SaleTry{}, Listings: []int64{}}
 	v.BaseMeal, _, _ = strings.Cut(t.Meal, "#")
