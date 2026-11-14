@@ -25,6 +25,17 @@ type SellTasks interface {
 	SetPrices(ctx context.Context, id int64, minRupees, maxRupees int) error
 }
 
+// SellScheduler starts a sell task now, or schedules it for [sell]
+// list_at around a meal that hasn't started. The dashboard's sell buttons
+// use it.
+type SellScheduler interface {
+	// StartOrSchedule returns a task id and a zero time when the task
+	// started now, or a schedule id and when its task will start.
+	StartOrSchedule(ctx context.Context, userID int64, date, meal string, minRupees, maxRupees int) (int64, time.Time, error)
+	// CancelSchedule drops a schedule that hasn't started its task.
+	CancelSchedule(ctx context.Context, id int64) error
+}
+
 // SetSellTasks adds the sell task tools while the sell_tasks setting is on.
 func (s *Server) SetSellTasks(t SellTasks) { s.sell = t }
 

@@ -157,6 +157,11 @@
 .cell.is-selling { border-color: color-mix(in srgb, var(--gold) 55%, transparent); animation: ring 2.4s ease-out infinite; }
 .cell.is-selling .price.range { font-size: 8px; padding-bottom: 6px; }
 .cell.is-selling .price.range .r { font-size: 9px; }
+/* A sale waiting for its meal: gold but dashed and still, since nothing is up yet. */
+.cell.is-scheduled { border: 1px dashed color-mix(in srgb, var(--gold) 70%, transparent); background: color-mix(in srgb, var(--gold) 5%, var(--slot)); }
+.cell.is-scheduled .price.range { font-size: 8px; padding-bottom: 6px; opacity: .8; }
+.cell.is-scheduled .price.range .r { font-size: 9px; }
+.sw.q { border: 1px dashed color-mix(in srgb, var(--gold) 70%, transparent); }
 
 .sell-sheet { width: min(460px, 100%); }
 .sell-head h2 { margin: 0; font: 700 15px Pixel, var(--sans); letter-spacing: .3px; }
@@ -170,6 +175,11 @@
 .sell-axis { display: flex; justify-content: space-between; margin: 4px 2px 0; font-size: 11px; color: var(--dim); }
 .sell-axis .med-l { color: var(--muted); }
 .sell-note { margin: 16px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.sell-when {
+  margin: 12px 0 0; padding: 9px 12px; border-radius: 10px; font-size: 12.5px; line-height: 1.5; color: var(--muted);
+  border: 1px dashed color-mix(in srgb, var(--gold) 55%, transparent); background: color-mix(in srgb, var(--gold) 6%, transparent);
+}
+.sell-when b { color: var(--gold); }
 .sell-err { margin: 8px 0 0; color: #ff6b5b; font-size: 12.5px; min-height: 1em; }
 .sell-err:empty { display: none; }
 .sell-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; flex-wrap: wrap; }

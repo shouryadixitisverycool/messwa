@@ -47,13 +47,16 @@ type salesState struct {
 	// Friends are meals you sold, or are selling, for someone else. They
 	// stay out of Sales, the ledger and every total.
 	Friends []friendMeal `json:"friends"`
+	// ListAt is [sell] list_at in seconds: when a sale started before its
+	// meal goes up, from the meal's start.
+	ListAt int64 `json:"list_at"`
 	// FriendSlots are the meals a friend's meal can be sold for: today's
 	// that haven't ended, and the next one.
 	FriendSlots []slot `json:"friend_slots"`
 }
 
 // friendMeal is one friend's meal and what became of it. State is
-// selling, armed, sending, sold, handoff, or ended (stopped, expired or
+// scheduled, selling, armed, sending, sold, handoff, or ended (stopped, expired or
 // failed unsold).
 type friendMeal struct {
 	Date   string    `json:"date"`
@@ -71,6 +74,8 @@ type friendMeal struct {
 	Buyer  string    `json:"buyer,omitempty"` // untrusted push name, else phone
 	Task   *cellTask `json:"task,omitempty"`
 	Ask    *float64  `json:"ask,omitempty"`
+	// Schedule is set while the sale waits to start; State is scheduled.
+	Schedule *cellSchedule `json:"schedule,omitempty"`
 }
 
 type salesDay struct {
@@ -88,6 +93,7 @@ type salesDay struct {
 //	wasted   the meal ended unsold and unused
 //	open     registered, not sold yet, and the meal hasn't ended
 //	selling  open, with a sell task running for it
+//	scheduled open, with a sale waiting to start before or during the meal
 //	none     not registered
 //	unknown  the portal couldn't be read, so eaten, wasted or unregistered is unknown
 type cell struct {
@@ -101,6 +107,9 @@ type cell struct {
 	Ask   *float64 `json:"ask,omitempty"`  // median asking price, what it could have fetched
 	// Task is the running sell task for this meal, if any.
 	Task *cellTask `json:"task,omitempty"`
+	// Schedule is the sale waiting to start for this meal, if any; the
+	// state is then scheduled.
+	Schedule *cellSchedule `json:"schedule,omitempty"`
 	// Sellable is set on the open meal being served now and the next one,
 	// the meals the ledger offers to sell.
 	Sellable bool `json:"sellable,omitempty"`
@@ -113,6 +122,15 @@ type cellTask struct {
 	Min    float64     `json:"min"`
 	Max    float64     `json:"max"`
 	Buyers []taskBuyer `json:"buyers"`
+}
+
+// cellSchedule is a sale waiting for its meal: it starts a sell task at
+// At (unix seconds) with this price range in rupees.
+type cellSchedule struct {
+	ID  int64   `json:"id"`
+	At  int64   `json:"at"`
+	Min float64 `json:"min"`
+	Max float64 `json:"max"`
 }
 
 // taskBuyer is one of a running task's buyers. Key is what the sell
@@ -297,7 +315,8 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 	}
 	ymd := func(t time.Time) string { return t.Format("2006-01-02") }
 	out := salesState{Now: now.Unix(), TZ: cfg.Timezone, Today: ymd(today), From: ymd(from), Recent: ymd(recent),
-		Days: []salesDay{}, Sales: []sale{}, Friends: []friendMeal{}, FriendSlots: []slot{}, Market: []mealMarket{}, Month: month{Start: ymd(monthStart), Fee: float64(cfg.Live().Sales.MonthlyFee)}, Owner: srv.Scoped() || u.IsAdmin()}
+		Days: []salesDay{}, Sales: []sale{}, Friends: []friendMeal{}, FriendSlots: []slot{}, Market: []mealMarket{}, Month: month{Start: ymd(monthStart), Fee: float64(cfg.Live().Sales.MonthlyFee)}, Owner: srv.Scoped() || u.IsAdmin(),
+		ListAt: int64(cfg.Live().Sell.ListAt.Seconds())}
 	for _, m := range cfg.Messes {
 		out.Messes = append(out.Messes, mess{m.Name, m.VegOnly})
 	}
@@ -321,6 +340,7 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 
 	var ds []store.DeliveryRecord
 	running := map[string]*cellTask{}
+	waiting := map[string]*cellSchedule{}
 	sellable := map[string]bool{}
 	if out.Owner {
 		if ds, err = srv.Deliveries(ctx); err != nil {
@@ -346,6 +366,15 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 				t.Buyers = append(t.Buyers, taskBuyer{Key: b.Key, Name: b.Name, Phone: b.Phone, State: b.State, Price: price, Muted: b.Muted})
 			}
 			running[v.Date+"|"+v.Meal] = t
+		}
+		scs, err := srv.SellSchedules(ctx)
+		if err != nil {
+			return out, err
+		}
+		for _, sc := range scs {
+			if sc.State == store.ScheduleWaiting {
+				waiting[sc.Date+"|"+sc.Meal] = &cellSchedule{ID: sc.ID, At: sc.StartsAt.Unix(), Min: float64(sc.MinPaise) / 100, Max: float64(sc.MaxPaise) / 100}
+			}
 		}
 		if _, err := srv.SellControl(); err != nil {
 			out.SellOff = err.Error()
@@ -423,52 +452,60 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 		}
 	}
 
+	// cellFor is what became of the meal in window w on date.
+	cellFor := func(date string, w meals.Slot) cell {
+		key := date + "|" + w.Meal
+		c := cell{Meal: w.Meal, Start: w.Start.Unix(), End: w.End.Unix(), State: "none"}
+		rs := regs[key]
+		if len(rs) > 0 {
+			c.Mess, c.Diet = rs[0].MessDiet()
+			if c.Diet == "" && cfg.VegOnly(c.Mess) {
+				c.Diet = "veg"
+			}
+		}
+		i, sold := byMeal[key]
+		if sold {
+			s := &out.Sales[i]
+			if s.Mess == "" {
+				s.Mess, s.Diet = c.Mess, c.Diet
+			}
+			c.Mess, c.Diet, c.Sale = s.Mess, s.Diet, &i
+		}
+		switch {
+		case sold && out.Sales[i].State == "handoff" && availed(rs):
+			// You kept the meal after taking the chat over.
+			c.State = "ate"
+		case sold && out.Sales[i].State != "lapsed":
+			c.State = out.Sales[i].State
+		case out.Portal != "":
+			c.State = "unknown"
+		case len(rs) == 0:
+			c.State = "none"
+		case availed(rs):
+			c.State = "ate"
+		case !now.Before(w.End):
+			c.State = "wasted"
+		default:
+			c.State = "open"
+			c.Sellable = sellable[key]
+		}
+		// A task stays active while a buyer is asked to pay, so an
+		// armed meal can still have one.
+		if c.Task = running[key]; c.Task != nil && c.State == "open" {
+			c.State = "selling"
+		}
+		if c.Schedule = waiting[key]; c.Schedule != nil && c.State == "open" {
+			c.State = "scheduled"
+		}
+		if c.State != "none" && c.State != "ate" {
+			c.Ask = asks.estimate(date, w.Meal, c.Mess, c.Diet)
+		}
+		return c
+	}
 	for day := from; !day.After(today); day = day.AddDate(0, 0, 1) {
 		sd := salesDay{Date: ymd(day)}
 		for _, w := range sched.Windows(day) {
-			key := sd.Date + "|" + w.Meal
-			c := cell{Meal: w.Meal, Start: w.Start.Unix(), End: w.End.Unix(), State: "none"}
-			rs := regs[key]
-			if len(rs) > 0 {
-				c.Mess, c.Diet = rs[0].MessDiet()
-				if c.Diet == "" && cfg.VegOnly(c.Mess) {
-					c.Diet = "veg"
-				}
-			}
-			i, sold := byMeal[key]
-			if sold {
-				s := &out.Sales[i]
-				if s.Mess == "" {
-					s.Mess, s.Diet = c.Mess, c.Diet
-				}
-				c.Mess, c.Diet, c.Sale = s.Mess, s.Diet, &i
-			}
-			switch {
-			case sold && out.Sales[i].State == "handoff" && availed(rs):
-				// You kept the meal after taking the chat over.
-				c.State = "ate"
-			case sold && out.Sales[i].State != "lapsed":
-				c.State = out.Sales[i].State
-			case out.Portal != "":
-				c.State = "unknown"
-			case len(rs) == 0:
-				c.State = "none"
-			case availed(rs):
-				c.State = "ate"
-			case !now.Before(w.End):
-				c.State = "wasted"
-			default:
-				c.State = "open"
-				c.Sellable = sellable[key]
-			}
-			// A task stays active while a buyer is asked to pay, so an
-			// armed meal can still have one.
-			if c.Task = running[key]; c.Task != nil && c.State == "open" {
-				c.State = "selling"
-			}
-			if c.State != "none" && c.State != "ate" {
-				c.Ask = asks.estimate(sd.Date, w.Meal, c.Mess, c.Diet)
-			}
+			c := cellFor(sd.Date, w)
 			if c.State == "wasted" && !day.Before(monthStart) {
 				out.Month.Wasted++
 				if c.Ask != nil {
@@ -483,7 +520,7 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 	}
 
 	if out.Owner {
-		if err := friendMeals(ctx, srv, sched, asks, &out, ymd(recent), now, loc, running, slotSales); err != nil {
+		if err := friendMeals(ctx, srv, sched, asks, &out, ymd(recent), now, loc, running, waiting, slotSales); err != nil {
 			return out, err
 		}
 	}
@@ -502,7 +539,7 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 // friendMeals fills out.Friends from the friends' meals saved since from,
 // and out.FriendSlots from the schedule.
 func friendMeals(ctx context.Context, srv *mcpserver.Server, sched *meals.Schedule, asks *asks, out *salesState, from string, now time.Time, loc *time.Location,
-	running map[string]*cellTask, sales map[string]store.DeliveryRecord) error {
+	running map[string]*cellTask, waiting map[string]*cellSchedule, sales map[string]store.DeliveryRecord) error {
 	for _, w := range sched.Windows(now) {
 		if now.Before(w.End) {
 			out.FriendSlots = append(out.FriendSlots, toSlot(&w))
@@ -544,6 +581,9 @@ func friendMeals(ctx context.Context, srv *mcpserver.Server, sched *meals.Schedu
 			if t.State == store.TaskActive {
 				f.State = "selling"
 			}
+		}
+		if f.Schedule = waiting[k]; f.Schedule != nil && f.State == "ended" {
+			f.State = "scheduled"
 		}
 		if d, ok := sales[k]; ok {
 			f.State = map[string]string{"sent": "sold", "sending": "sending", "armed": "armed", "handed_off": "handoff"}[d.State]

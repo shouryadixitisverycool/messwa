@@ -245,6 +245,20 @@ paint(() => {
   $('postGapV').textContent = `${v}s`;
 });
 
+// list_at is seconds from the meal's start; the slider moves in 5 minutes.
+const listWord = (s) => {
+  if (s === 0) return 'At the start';
+  const m = Math.abs(s) / 60, t = m >= 60 ? `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ''}` : `${m}m`;
+  return `${t} ${s < 0 ? 'before' : 'after'} start`;
+};
+$('listAt').addEventListener('input', (e) => set('sell.list_at', Number(e.target.value) * 60));
+paint(() => {
+  const v = draft['sell.list_at'];
+  $('listAt').value = String(Math.round(v / 60));
+  $('listAt').setAttribute('aria-valuetext', listWord(v));
+  $('listAtV').textContent = listWord(v);
+});
+
 // ---------- repost ----------
 
 paint(() => $('repostBody').classList.toggle('dimmed', !draft['sell.repost']));

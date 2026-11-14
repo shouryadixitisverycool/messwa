@@ -107,6 +107,8 @@ type sellManager struct {
 	dead map[string]deadPost
 	// pricesMu serializes SetPrices.
 	pricesMu sync.Mutex
+	// timers start waiting sell schedules, by schedule id. Guarded by mu.
+	timers map[int64]*time.Timer
 }
 
 type runningTask struct {
@@ -139,8 +141,17 @@ func newSellManager(ctx context.Context, cfg *config.Config, log *slog.Logger, s
 	m := &sellManager{
 		cfg: cfg, log: log.With("component", "sell"), st: st, conn: conn, send: send, connected: connected,
 		portalFor: portalFor, prices: st.Prices, limits: newSendLimits(), own: own, base: ctx, running: map[int64]*runningTask{},
-		dead: map[string]deadPost{},
+		dead: map[string]deadPost{}, timers: map[int64]*time.Timer{},
 	}
+	// Schedules resume from the store on the next start.
+	context.AfterFunc(ctx, func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		for id, t := range m.timers {
+			t.Stop()
+			delete(m.timers, id)
+		}
+	})
 	if conn != nil {
 		id := conn.AddEventHandler(m.lateReply)
 		context.AfterFunc(ctx, func() { conn.RemoveEventHandler(id) })
@@ -255,6 +266,12 @@ func (m *sellManager) Start(ctx context.Context, userID int64, date, meal string
 		return 0, err
 	}
 	t.State = store.TaskActive
+	// Selling it now replaces a schedule still waiting for this meal.
+	if sid, err := m.st.EndWaitingSellSchedule(ctx, date, meal, store.ScheduleStarted, t.ID, "started early", time.Now()); err != nil {
+		m.log.Warn("could not end the meal's sell schedule", "task", t.ID, "err", err)
+	} else if sid != 0 {
+		m.disarm(sid)
+	}
 	m.launch(t, s, nil)
 	m.log.Info("sell task started", "task", t.ID, "date", date, "meal", meal, "min", minRupees, "max", maxRupees, "handoff", h)
 	m.poolChanged(t)
@@ -434,6 +451,9 @@ func (m *sellManager) Resume(ctx context.Context, enabled bool) error {
 			m.log.Info("resuming sell task", "task", t.ID, "date", t.Date, "meal", t.Meal)
 			m.launch(t, nil, ready)
 		}
+	}
+	if err := m.resumeSchedules(ctx, enabled); err != nil {
+		m.log.Error("resume sell schedules", "err", err)
 	}
 	timeout := time.After(10 * time.Second)
 	for _, ready := range listening {

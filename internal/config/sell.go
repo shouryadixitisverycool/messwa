@@ -36,6 +36,10 @@ type Sell struct {
 	// Nudge shows a card on the board asking you to sell your next
 	// registered meal that nobody is selling yet.
 	Nudge bool `toml:"nudge"`
+	// ListAt is when a sale started before its meal begins goes up,
+	// counted from the meal's start: -15m posts 15 minutes before it,
+	// 30m half an hour in. It runs till the meal ends either way.
+	ListAt duration `toml:"list_at"`
 	// Buyers is who may buy from an offer. Empty means BuyersAnyone.
 	Buyers Buyers `toml:"buyers"`
 	// Repost puts a fresh copy of the offer in a group once the last one
@@ -90,6 +94,12 @@ const NegotiationLimit = 6 * time.Minute
 
 // MinPostGap is the shortest pause allowed between copies of one offer.
 const MinPostGap = 3 * time.Second
+
+// MinListAt and MaxListAt bound list_at.
+const (
+	MinListAt = -30 * time.Minute
+	MaxListAt = 90 * time.Minute
+)
 
 // Handoff says when a group sale stops being automatic.
 type Handoff string
