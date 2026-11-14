@@ -83,3 +83,41 @@ code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--t
 
 /* style.css's .empty is the board's overlay; a table cell stays in the flow. */
 td.empty { position: static; display: table-cell; text-align: left; }
+
+/* The welcome page's selling steps. */
+.h-lbl { font: 700 9px Pixel; letter-spacing: .5px; color: var(--muted); text-transform: uppercase; }
+.group-list { display: flex; flex-direction: column; gap: 6px; }
+.group-list:empty { display: none; }
+.g-row {
+  display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 12px; border-radius: 10px;
+  background: #10141c; border: 1px solid var(--line); color: var(--text); font: 14px var(--sans); text-align: left; cursor: pointer;
+}
+.g-row .g-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.g-row .g-box {
+  flex: none; width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center;
+  border: 1px solid var(--line); background: var(--slot); color: #0b0d12; font: 700 13px var(--sans);
+}
+.g-row[aria-checked="true"] { border-color: color-mix(in srgb, var(--veg) 55%, transparent); }
+.g-row[aria-checked="true"] .g-box { background: var(--veg); border-color: var(--veg); }
+.g-row:disabled { cursor: default; opacity: .55; }
+.g-tag { flex: none; font: 700 9px Pixel; letter-spacing: .5px; text-transform: uppercase; color: var(--dim); }
+.g-row[aria-checked="true"] .g-tag { color: var(--veg); }
+
+.choices { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.choice {
+  display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border-radius: 10px; text-align: left; cursor: pointer;
+  background: #10141c; border: 1px solid var(--line); color: var(--text); font: 14px var(--sans);
+}
+.choice b { font-weight: 600; }
+.choice small { color: var(--muted); font-size: 12px; line-height: 1.35; }
+.choice[aria-checked="true"] { border-color: color-mix(in srgb, var(--gold) 70%, transparent); background: color-mix(in srgb, var(--gold) 8%, #10141c); }
+@media (max-width: 420px) { .choices { grid-template-columns: 1fr; } }
+
+.steps-list { margin: 0; padding-left: 20px; color: var(--text); font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
+.form label.check {
+  flex-direction: row; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; cursor: pointer;
+  background: #10141c; border: 1px solid var(--line);
+  font: 14px var(--sans); letter-spacing: 0; text-transform: none; color: var(--text);
+}
+.form label.check input { width: 18px; height: 18px; padding: 0; margin: 0; accent-color: var(--veg); flex: none; }
+.choice:disabled { cursor: default; opacity: .55; }

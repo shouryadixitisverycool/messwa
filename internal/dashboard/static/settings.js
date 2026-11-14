@@ -580,6 +580,7 @@ paint(() => { if (document.activeElement !== fee) fee.value = String(draft['sale
   if (admin) for (const t of document.querySelectorAll('[data-admin]')) t.hidden = false;
   $('save').hidden = false;
   repaint();
-  const last = store.get('mah-settings-tab');
+  // A link like settings.html#offer opens that tab.
+  const last = location.hash.slice(1) || store.get('mah-settings-tab');
   if (last && document.getElementById(last)) showPane(last);
 })();

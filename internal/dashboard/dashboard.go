@@ -57,6 +57,9 @@ type state struct {
 	// Sales are your running sell tasks, and ones that just ended, for the
 	// "my sale" chest. Admins only, like the rest of the linked account.
 	Sales []mcpserver.SaleView `json:"sales,omitempty"`
+	// NoGroups is true when your selling settings pick no group to post
+	// offers in, so the board can say so before a sale goes nowhere.
+	NoGroups bool `json:"no_groups,omitempty"`
 }
 
 type mine struct {
@@ -106,6 +109,7 @@ func Handler(cfg *config.Config, srv *mcpserver.Server, hub *Hub, acc *accounts.
 	regs := newRegCache(acc)
 	authRoutes(mux, acc, srv, regs, "http://"+cfg.MCP.Listen+"/mcp")
 	settingsRoutes(mux, cfg, srv)
+	onboardingRoutes(mux, cfg, srv)
 	deviceRoutes(mux, srv)
 	sellActionRoutes(mux, cfg, srv)
 
@@ -137,6 +141,7 @@ func Handler(cfg *config.Config, srv *mcpserver.Server, hub *Hub, acc *accounts.
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+			st.NoGroups = !picksGroups(cfg.Live())
 		}
 		sc := srv.Schedule()
 		for _, s := range sc.Today {

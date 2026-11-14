@@ -198,6 +198,7 @@ function render() {
   const accent = messColor(S.tab);
   document.documentElement.style.setProperty('--accent', accent);
   renderDay();
+  $('noGroups').hidden = !D.no_groups;
   renderSales();
   renderTabs();
   renderGrid();
