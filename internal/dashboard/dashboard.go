@@ -11,15 +11,21 @@
 package dashboard
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"io/fs"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/andybalholm/brotli"
 
 	"messwa/internal/accounts"
 	"messwa/internal/config"
@@ -107,7 +113,7 @@ type marketSale struct {
 func Handler(cfg *config.Config, srv *mcpserver.Server, hub *Hub, acc *accounts.Accounts) http.Handler {
 	mux := http.NewServeMux()
 	files, _ := fs.Sub(static, "static")
-	mux.Handle("GET /", pages(revalidate(files, http.FileServerFS(files))))
+	mux.Handle("GET /", pages(assets(files)))
 	member := func(h http.HandlerFunc) http.Handler { return requireRole(accounts.Member, h) }
 	regs := newRegCache(acc)
 	authRoutes(mux, acc, srv, regs, "http://"+cfg.MCP.Listen+"/mcp")
@@ -267,18 +273,68 @@ func toSlot(s *meals.Slot) slot {
 	return slot{Meal: s.Meal, Date: s.Date, Start: s.Start.Unix(), End: s.End.Unix()}
 }
 
+// writeJSON sends v uncached, since most answers change by the second and
+// differ by user.
 func writeJSON(w http.ResponseWriter, r *http.Request, v any) {
-	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Vary", "Accept-Encoding")
-	if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
-		json.NewEncoder(w).Encode(v)
+	sendJSON(w, r, encodeJSON(v))
+}
+
+// writeJSONRevalidate sends v with a tag the browser can send back, and
+// answers a matching tag with an empty 304. For answers that stay the same
+// across visits, like the insights facts between snapshots.
+func writeJSONRevalidate(w http.ResponseWriter, r *http.Request, v any) {
+	b := encodeJSON(v)
+	sum := sha256.Sum256(b)
+	tag := `"` + hex.EncodeToString(sum[:8]) + `"`
+	w.Header().Set("Cache-Control", "private, no-cache")
+	w.Header().Set("ETag", tag)
+	w.Header().Set("Vary", "Cookie")
+	if match(r.Header.Get("If-None-Match"), tag) {
+		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	w.Header().Set("Content-Encoding", "gzip")
-	gz := gzip.NewWriter(w)
-	json.NewEncoder(gz).Encode(v)
-	gz.Close()
+	sendJSON(w, r, b)
+}
+
+func encodeJSON(v any) []byte {
+	var buf bytes.Buffer
+	json.NewEncoder(&buf).Encode(v)
+	return buf.Bytes()
+}
+
+var (
+	gzipPool   = sync.Pool{New: func() any { w, _ := gzip.NewWriterLevel(nil, gzip.DefaultCompression); return w }}
+	brotliPool = sync.Pool{New: func() any { return brotli.NewWriterLevel(nil, 5) }}
+)
+
+// sendJSON writes b, compressed with brotli or gzip when the browser takes
+// it and it's big enough to be worth it.
+func sendJSON(w http.ResponseWriter, r *http.Request, b []byte) {
+	h := w.Header()
+	h.Set("Content-Type", "application/json")
+	h.Add("Vary", "Accept-Encoding")
+	enc := r.Header.Get("Accept-Encoding")
+	switch {
+	case len(b) < 1024:
+		w.Write(b)
+	case accepts(enc, "br"):
+		h.Set("Content-Encoding", "br")
+		bw := brotliPool.Get().(*brotli.Writer)
+		bw.Reset(w)
+		bw.Write(b)
+		bw.Close()
+		brotliPool.Put(bw)
+	case accepts(enc, "gzip"):
+		h.Set("Content-Encoding", "gzip")
+		gw := gzipPool.Get().(*gzip.Writer)
+		gw.Reset(w)
+		gw.Write(b)
+		gw.Close()
+		gzipPool.Put(gw)
+	default:
+		w.Write(b)
+	}
 }
 
 // headers locks the page down: no framing, no third-party scripts, and
@@ -289,6 +345,9 @@ func headers(next http.Handler) http.Handler {
 		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
+		if !strings.HasPrefix(r.URL.Path, "/api/") {
+			h.Set("Speculation-Rules", `"/`+speculationRules+`"`)
+		}
 		next.ServeHTTP(w, r)
 	})
 }

@@ -4,6 +4,7 @@ go 1.27.4
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/andybalholm/brotli v1.2.0
 	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	go.mau.fi/whatsmeow v0.0.0-20261031222104-5d4657a5c29e
