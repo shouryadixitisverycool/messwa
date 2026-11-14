@@ -55,9 +55,10 @@ kbd {
 }
 svg { display: block; }
 
+/* A set width, not fit-content: the board fills it and app.js picks the
+   column count to match, so the header can't leave the grid short. */
 .app {
-  width: fit-content;
-  max-width: 100%;
+  width: min(100%, 1640px);
   margin: 0 auto;
   padding: 28px 20px 36px;
   display: flex;
@@ -167,7 +168,7 @@ button.nav-link { cursor: pointer; }
 .live.off i { background: var(--nonveg); animation: none; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(52, 196, 99, .55); } 70% { box-shadow: 0 0 0 7px rgba(52, 196, 99, 0); } 100% { box-shadow: 0 0 0 0 rgba(52, 196, 99, 0); } }
 
-.body { display: flex; gap: calc(var(--gap) * 2); }
+.body { display: flex; justify-content: center; gap: calc(var(--gap) * 2); }
 .tabs { display: grid; grid-template-rows: repeat(var(--rows), var(--s)); gap: var(--gap); }
 .grid {
   position: relative;
@@ -178,6 +179,7 @@ button.nav-link { cursor: pointer; }
 }
 
 .controls {
+  justify-content: center;
   display: flex;
   gap: calc(var(--gap) * 2);
   margin-top: calc(var(--gap) * 2);
@@ -560,12 +562,23 @@ a.copy.linked:hover .copy-go { color: var(--gold); }
   .cards { grid-template-columns: minmax(0, 1fr); }
   .legend { display: none; }
   .pulse .head-name { flex: 1; white-space: nowrap; }
+  /* The window buttons wrap under the title on the narrowest phones. */
+  .pulse .chest-head { flex-wrap: wrap; row-gap: 8px; }
+  .wins { margin-left: auto; }
+  .win { padding: 0 6px 1px; }
 }
 
 /* ---------- small screens ---------- */
 
-@media (max-width: 900px) {
-  .top { grid-template-columns: 1fr auto; gap: 14px 20px; }
+/* Title, links, day bar and search need ~1360px in one row. Below that the
+   links drop under the title, and below 1100px the day bar gets its own row. */
+@media (max-width: 1380px) {
+  .brand { flex-wrap: wrap; row-gap: 10px; min-width: 0; }
+  .navs { display: flex; flex: 1 1 100%; flex-wrap: wrap; gap: 6px; }
+  .nav-link { margin-left: 0; }
+}
+@media (max-width: 1100px) {
+  .top { grid-template-columns: minmax(0, 1fr) auto; gap: 14px 20px; }
   .day { grid-column: 1 / -1; grid-row: 2; }
   .search { width: 200px; }
 }
@@ -580,7 +593,7 @@ a.copy.linked:hover .copy-go { color: var(--gold); }
   .logo { width: 32px; height: 32px; }
   /* One swipeable row of links, edge to edge, under the title. */
   .navs {
-    display: flex; flex: 0 0 calc(100% + 20px); gap: 6px; margin: 0 -10px; padding: 0 10px 2px;
+    display: flex; flex: 0 0 calc(100% + 20px); flex-wrap: nowrap; gap: 6px; margin: 0 -10px; padding: 0 10px 2px;
     overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain;
   }
   .navs::-webkit-scrollbar { display: none; }
