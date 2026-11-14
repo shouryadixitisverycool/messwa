@@ -22,10 +22,12 @@
         <h1 id="title">My sales</h1>
         <p class="sub" id="sub">Who bought your meals, and for how much</p>
       </div>
-      <a class="nav-link" href="./" title="Back to the listings"><span id="navIcon"></span>Auction house</a>
-      <a class="nav-link" href="insights.html" id="insLink" title="What sells, when, and who's selling" hidden><span id="insIcon"></span>Insights</a>
-      <a class="nav-link" href="usage.html" id="useLink" title="How everyone is using messwa" hidden><span id="useIcon"></span>Usage</a>
-      <a class="nav-link" href="account.html" id="accountLink" title="Your account">Account</a>
+      <nav class="navs" aria-label="Pages">
+        <a class="nav-link" href="./" title="Back to the listings"><span id="navIcon"></span>Auction house</a>
+        <a class="nav-link" href="insights.html" id="insLink" title="What sells, when, and who's selling" hidden><span id="insIcon"></span>Insights</a>
+        <a class="nav-link" href="usage.html" id="useLink" title="How everyone is using messwa" hidden><span id="useIcon"></span>Usage</a>
+        <a class="nav-link" href="account.html" id="accountLink" title="Your account">Account</a>
+      </nav>
     </div>
     <span class="live" id="live"><i></i><span id="liveText">connecting</span></span>
   </header>
@@ -49,7 +51,7 @@
     </div>
     <div class="ledger">
       <div class="lgrid" id="lgrid" aria-label="Meals by day"></div>
-      <div class="lside"><div class="side-k">Hover a slot</div><div class="panel" id="insp"></div></div>
+      <div class="lside"><div class="side-k"><span class="on-hover">Hover</span><span class="on-touch">Tap</span> a slot</div><div class="panel" id="insp"></div></div>
     </div>
     <div class="slegend">
       <span class="own"><i class="sw s"></i>Sold</span>

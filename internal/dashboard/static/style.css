@@ -74,6 +74,8 @@ svg { display: block; }
   align-items: center;
 }
 .brand { display: flex; gap: 12px; align-items: center; }
+/* On wide screens the links sit in the brand row; phones get their own strip. */
+.navs { display: contents; }
 .logo { width: 38px; height: 38px; filter: drop-shadow(0 4px 10px rgba(255, 197, 61, .3)); }
 .brand h1 { margin: 0; font: 700 17px Pixel, var(--sans); letter-spacing: .4px; }
 .brand .sub { margin: 1px 0 0; color: var(--muted); font-size: 12px; }
@@ -573,6 +575,16 @@ a.copy.linked:hover .copy-go { color: var(--gold); }
   .top { grid-template-columns: 1fr; }
   .search { width: 100%; grid-row: 3; }
   .brand .sub { display: none; }
+  .brand { flex: 1 1 100%; min-width: 0; flex-wrap: wrap; row-gap: 12px; }
+  .brand h1 { font-size: 15px; }
+  .logo { width: 32px; height: 32px; }
+  /* One swipeable row of links, edge to edge, under the title. */
+  .navs {
+    display: flex; flex: 0 0 calc(100% + 20px); gap: 6px; margin: 0 -10px; padding: 0 10px 2px;
+    overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain;
+  }
+  .navs::-webkit-scrollbar { display: none; }
+  .navs .nav-link { flex: none; margin-left: 0; height: 34px; padding: 0 12px 1px; font-size: 9px; }
   .chest { padding: 10px 10px 12px; border-radius: 16px; }
   .live { display: none; }
   .head-meta { display: none; }
@@ -584,8 +596,17 @@ a.copy.linked:hover .copy-go { color: var(--gold); }
   .ctl-row { width: auto; flex: 1; justify-content: space-between; }
   .hint { display: none; }
   .modal { place-items: end center; padding: 0; }
-  .sheet { border-radius: 20px 20px 0 0; max-height: 92vh; }
+  .sheet { border-radius: 20px 20px 0 0; max-height: 92vh; max-height: 92dvh; padding-bottom: calc(18px + env(safe-area-inset-bottom)); }
+  .toast { bottom: calc(16px + env(safe-area-inset-bottom)); max-width: calc(100% - 32px); }
+  /* 16px stops phones zooming in on a focused field. */
+  input:not([type=range]):not([type=checkbox]):not([type=radio]), select, textarea { font-size: 16px; }
 }
+/* Touch: a tapped slot shouldn't stay lifted as if hovered. */
+@media (hover: none) {
+  .item:hover:not(.active):not(:focus-visible) { transform: none; }
+  .on-hover { display: none; }
+}
+@media (hover: hover) { .on-touch { display: none; } }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
