@@ -7,6 +7,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"messwa/internal/config"
 	"messwa/internal/store"
 )
 
@@ -191,7 +192,11 @@ func TestSellScheduleFailsWhenSellTasksTurnOff(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		f.cfg.MCP.SellTasks = false
+		// Turned off the way the settings page does it: an atomic swap of
+		// the live config, which the schedule's timer reads.
+		if _, err := f.cfg.Update(config.Settings{"mcp.sell_tasks": []byte("false")}); err != nil {
+			t.Fatal(err)
+		}
 		time.Sleep(time.Until(at) + time.Minute)
 		synctest.Wait()
 		if sc := f.schedule(id); sc.State != store.ScheduleFailed || f.activeTask("lunch") != nil {
