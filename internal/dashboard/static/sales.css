@@ -133,8 +133,6 @@
   .app.sales { --s: min(52px, calc((100vw - 96px) / 7)); }
   .lgrid { grid-template-columns: 20px repeat(7, var(--s)); }
   .dh { font-size: 7px; letter-spacing: 0; }
-  #pplot { overflow-x: auto; }
-  #pplot svg { min-width: 620px; }
   .cell .stamp { font-size: 6px; letter-spacing: 0; padding: 1px 3px 2px; }
   .ledger, .rbody { flex-direction: column; }
   .lside, .tiers { width: 100%; }
