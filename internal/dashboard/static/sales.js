@@ -943,23 +943,25 @@ function renderPrices() {
   const box = $('pplot');
   box.replaceChildren();
   const mine = recentSales();
-  // A row per meal and diet: the market's asks in that diet against your
-  // sales in it.
+  // A row per meal and diet you sold in: the market's asks in that diet
+  // against your sales in it.
   const rows = [];
   for (const meal of meals()) {
     for (const diet of ['veg', 'egg', 'nonveg']) {
       const m = D.market.find((x) => x.meal === meal && x.diet === diet);
       const ms = mine.filter((s) => s.meal === meal && priceDiet(s.diet) === diet);
-      if (m || ms.length) rows.push({ meal, diet, m, ms });
+      if (ms.length) rows.push({ meal, diet, m, ms });
     }
   }
   if (!rows.length) {
-    box.append(el('div', 'empty-note', 'No priced listings or sales in the last 4 weeks.'));
+    box.append(el('div', 'empty-note', 'No sales in the last 4 weeks.'));
     return;
   }
   const vals = [];
-  for (const r of rows) if (r.m) vals.push(r.m.q1, r.m.q3);
-  for (const s of mine) vals.push(s.amount);
+  for (const r of rows) {
+    if (r.m) vals.push(r.m.q1, r.m.q3);
+    for (const s of r.ms) vals.push(s.amount);
+  }
   let lo = Math.floor(Math.min(...vals) / 10) * 10, hi = Math.ceil(Math.max(...vals) / 10) * 10;
   if (hi - lo < 20) { lo = Math.max(0, lo - 10); hi = lo + 30; }
   const W = 860, x0 = 136, x1 = W - 168, top = 22, rowH = 40, H = top + rows.length * rowH + 16;
@@ -986,7 +988,7 @@ function renderPrices() {
     });
     const diffs = ms.filter((s) => s.ask != null).map((s) => s.amount - s.ask);
     const d = diffs.length ? sum(diffs) / diffs.length : null;
-    const word = d == null ? 'NO SALES' : d <= -3 ? 'UNDERCUT' : d >= 3 ? 'PREMIUM' : 'AT MARKET';
+    const word = d == null ? 'NO ASKS' : d <= -3 ? 'UNDERCUT' : d >= 3 ? 'PREMIUM' : 'AT MARKET';
     const hot = word === 'UNDERCUT';
     const pw = word.length * 7 + 14;
     svg += `<g transform="translate(${W - 150} ${y - 9})"><rect width="${pw}" height="18" rx="9" fill="none" stroke="${hot ? 'rgba(255,197,61,.55)' : '#252c3a'}"/>`
@@ -1018,8 +1020,7 @@ function renderEarnings() {
   const mine = recentSales();
   const days = [];
   for (let d = D.recent; d <= D.today; d = addDays(d, 1)) days.push(d);
-  // A card per mess and diet. Messes that serve non-veg always get both
-  // cards; egg only shows up once something sold as egg.
+  // A card per mess and diet you sold something in.
   const names = D.messes.map((m) => m.name);
   const messOf = (s) => (names.includes(s.mess) ? s.mess : '');
   const keyOf = (mess, diet) => `${mess}|${diet}`;
@@ -1027,9 +1028,12 @@ function renderEarnings() {
   for (const m of [...D.messes, { name: '' }]) {
     const sold = mine.filter((s) => messOf(s) === m.name);
     for (const diet of ['veg', 'nonveg', 'egg']) {
-      const any = sold.some((s) => priceDiet(s.diet) === diet);
-      if (any || (m.name && diet === 'veg') || (m.name && diet === 'nonveg' && !m.veg_only)) cards.push({ mess: m.name, diet });
+      if (sold.some((s) => priceDiet(s.diet) === diet)) cards.push({ mess: m.name, diet });
     }
+  }
+  if (!cards.length) {
+    box.append(el('div', 'empty-note', 'No sales in the last 4 weeks.'));
+    return;
   }
   const per = new Map(cards.map((k) => [keyOf(k.mess, k.diet), days.map(() => 0)]));
   for (const s of mine) per.get(keyOf(messOf(s), priceDiet(s.diet)))[days.indexOf(s.date)] += s.amount;
