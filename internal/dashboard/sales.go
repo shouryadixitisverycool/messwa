@@ -47,6 +47,10 @@ type salesState struct {
 	// Friends are meals you sold, or are selling, for someone else. They
 	// stay out of Sales, the ledger and every total.
 	Friends []friendMeal `json:"friends"`
+	// Ahead is tomorrow's first meal once today's last one has ended, so
+	// it can be sold the night before. Days stop at today; Ahead is
+	// outside them and every total. Owners only.
+	Ahead *aheadCell `json:"ahead,omitempty"`
 	// ListAt is [sell] list_at in seconds: when a sale started before its
 	// meal goes up, from the meal's start.
 	ListAt int64 `json:"list_at"`
@@ -122,6 +126,12 @@ type cellTask struct {
 	Min    float64     `json:"min"`
 	Max    float64     `json:"max"`
 	Buyers []taskBuyer `json:"buyers"`
+}
+
+// aheadCell is a meal on a day after Days.
+type aheadCell struct {
+	Date string `json:"date"`
+	Cell cell   `json:"cell"`
 }
 
 // cellSchedule is a sale waiting for its meal: it starts a sell task at
@@ -341,6 +351,8 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 	var ds []store.DeliveryRecord
 	running := map[string]*cellTask{}
 	waiting := map[string]*cellSchedule{}
+	// ahead is the next meal when it is tomorrow's, after today's last one.
+	var ahead *meals.Slot
 	sellable := map[string]bool{}
 	if out.Owner {
 		if ds, err = srv.Deliveries(ctx); err != nil {
@@ -384,6 +396,9 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 			if w != nil {
 				sellable[w.Date+"|"+w.Meal] = true
 			}
+		}
+		if sc.Next != nil && sc.Next.Date > ymd(today) {
+			ahead = sc.Next
 		}
 	}
 	byMeal := map[string]int{}
@@ -442,7 +457,12 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 	}
 
 	regs := map[string][]portal.Registration{}
-	rows, err := cache.get(ctx, u.ID, ymd(from), ymd(today))
+	// After today's last meal the read runs into tomorrow, for ahead.
+	to := ymd(today)
+	if ahead != nil {
+		to = ahead.Date
+	}
+	rows, err := cache.get(ctx, u.ID, ymd(from), to)
 	if err != nil {
 		out.Portal = err.Error()
 	}
@@ -517,6 +537,11 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 			sd.Cells = append(sd.Cells, c)
 		}
 		out.Days = append(out.Days, sd)
+	}
+	if ahead != nil {
+		if c := cellFor(ahead.Date, *ahead); c.State != "none" {
+			out.Ahead = &aheadCell{Date: ahead.Date, Cell: c}
+		}
 	}
 
 	if out.Owner {

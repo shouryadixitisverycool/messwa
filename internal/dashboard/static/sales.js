@@ -24,7 +24,7 @@ const fmt = (date, o) => new Intl.DateTimeFormat('en-GB', { ...o, timeZone: 'UTC
 const fmtDay = (date) => fmt(date, { weekday: 'short', day: 'numeric', month: 'short' });
 const fmtShort = (date) => fmt(date, { day: 'numeric', month: 'short' });
 const addDays = (date, n) => { const d = dayOf(date); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
-const dayWord = (date) => (date === D.today ? 'today' : date === addDays(D.today, -1) ? 'yesterday' : fmtDay(date));
+const dayWord = (date) => (date === D.today ? 'today' : date === addDays(D.today, -1) ? 'yesterday' : date === addDays(D.today, 1) ? 'tomorrow' : fmtDay(date));
 
 function dur(sec) {
   sec = Math.max(0, Math.round(sec));
@@ -86,7 +86,8 @@ function openFromHash() {
   history.replaceState(null, '', location.pathname + location.search);
   const [date, meal] = decodeURIComponent(m[1]).split('|');
   const day = D.days.find((d) => d.date === date);
-  const c = day && day.cells.find((x) => x.meal === meal);
+  let c = day && day.cells.find((x) => x.meal === meal);
+  if (!c && D.ahead && D.ahead.date === date && D.ahead.cell.meal === meal) c = D.ahead.cell;
   if (c && canSell(c)) openSell(date, c);
 }
 
@@ -123,6 +124,7 @@ function render() {
   for (const id of ['regSec', 'pcSec', 'earnSec']) $(id).hidden = !D.owner;
   for (const e of document.querySelectorAll('.own')) e.hidden = !D.owner;
   renderSaved();
+  renderAhead();
   renderLedger();
   if (D.owner) {
     renderFriends();
@@ -418,6 +420,36 @@ $('lgrid').addEventListener('keydown', (e) => {
   const hit = (e.key === 'Enter' || e.key === ' ') && sellTarget(e);
   if (hit) { e.preventDefault(); openSell(...hit); }
 });
+
+// ---------- up next ----------
+
+// After today's last meal the ledger has nothing left to sell, so
+// tomorrow's first meal shows above it, to sell or schedule the night
+// before. It stays out of the grid and every total.
+function renderAhead() {
+  const b = $('ahead');
+  const a = D.owner && D.ahead;
+  b.hidden = !a;
+  if (!a) { b.replaceChildren(); return; }
+  const { date, cell: c } = a;
+  b.style.setProperty('--m', messColor(c.mess));
+  const ic = el('span', 'ah-ic');
+  ic.append(svgEl(icon(c.meal)));
+  const what = el('span', 'ah-what');
+  const nm = el('b', '', `${messName(c.mess)}${c.diet ? ` ${DIET_LABEL[c.diet].toLowerCase()}` : ''} ${c.meal}`);
+  what.append(el('span', 'ah-k', 'UP NEXT'), nm, el('span', 'ah-when', `${dayWord(date)}, ${hm(c.start)}-${hm(c.end)}`));
+  const act = el('span', 'ah-act');
+  if (c.schedule) act.append(el('b', 'gold', `GOES UP ${hm(c.schedule.at)}`), el('small', '', priceText(c.schedule)));
+  else if (c.task) act.append(el('b', 'gold', 'SELLING'), el('small', '', priceText(c.task)));
+  else if (c.state === 'open') act.append(el('b', 'gold', 'SELL ›'), listAt(c) ? el('small', '', `goes up ${hm(listAt(c))}`) : '');
+  else act.append(el('b', '', c.state.toUpperCase()));
+  b.replaceChildren(ic, what, act);
+  b.disabled = !canSell(c);
+  b.onclick = () => openSell(date, c);
+  b.setAttribute('aria-label', c.schedule ? `Tomorrow's ${c.meal} goes up at ${hm(c.schedule.at)}. Manage it`
+    : c.task ? `Manage the sale of tomorrow's ${c.meal}` : `Sell tomorrow's ${c.meal}`);
+  tip(b, () => cellLines(date, c));
+}
 
 // ---------- selling from the ledger ----------
 

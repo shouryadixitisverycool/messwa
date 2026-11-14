@@ -312,3 +312,80 @@ func TestPhone(t *testing.T) {
 		}
 	}
 }
+
+// After today's last meal, tomorrow's breakfast comes back as Ahead, so it
+// can be sold the night before.
+func TestSalesAhead(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Default()
+	cfg.Groups = []string{"g1@g.us"}
+	loc := cfg.Location()
+	st, err := store.Open(filepath.Join(t.TempDir(), "d.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	orig := readRegistrations
+	defer func() { readRegistrations = orig }()
+	var to string
+	readRegistrations = func(_ context.Context, _ *accounts.Accounts, _ int64, _, t string) ([]portal.Registration, error) {
+		to = t
+		return []portal.Registration{
+			{Date: "2026-11-03", Meal: "dinner", Mess: "palash", Category: "registered"},
+			{Date: "2026-11-04", Meal: "breakfast", Mess: "kadamba-nonveg", Category: "registered"},
+		}, nil
+	}
+	origBill := readBill
+	defer func() { readBill = origBill }()
+	readBill = func(context.Context, *accounts.Accounts, int64, int, int) (portal.Bill, error) { return portal.Bill{}, nil }
+
+	clock := time.Date(2026, 11, 3, 23, 0, 0, 0, loc)
+	ms := mcpserver.New(cfg, st, nil)
+	ms.SetClock(func() time.Time { return clock })
+	srv := startDashboard(t, cfg, st, ms, NewHub())
+	admin := srv.as(t, accounts.Admin)
+	get := func() salesState {
+		res, err := admin.Get(srv.URL + "/api/sales")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var out salesState
+		if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	out := get()
+	if to != "2026-11-04" {
+		t.Errorf("read registrations to %s, want tomorrow", to)
+	}
+	if out.Ahead == nil || out.Ahead.Date != "2026-11-04" {
+		t.Fatalf("ahead %+v, want tomorrow's breakfast", out.Ahead)
+	}
+	c := out.Ahead.Cell
+	if c.Meal != "breakfast" || c.State != "open" || !c.Sellable || c.Mess != "kadamba" || c.Diet != "nonveg" {
+		t.Fatalf("ahead cell %+v", c)
+	}
+	if last := out.Days[len(out.Days)-1]; last.Date != "2026-11-03" {
+		t.Errorf("days end %s, want today", last.Date)
+	}
+
+	// Scheduled, it says when it goes up.
+	at := time.Unix(c.Start, 0).Add(-15 * time.Minute)
+	if _, err := st.CreateSellSchedule(ctx, store.SellSchedule{Date: "2026-11-04", Meal: "breakfast", MinPaise: 4000, MaxPaise: 6000,
+		StartsAt: at, EndsAt: time.Unix(c.End, 0), CreatedAt: clock}); err != nil {
+		t.Fatal(err)
+	}
+	if c := get().Ahead.Cell; c.State != "scheduled" || c.Schedule == nil || c.Schedule.At != at.Unix() || c.Schedule.Min != 40 {
+		t.Fatalf("scheduled ahead cell %+v", c)
+	}
+
+	// During the day there's nothing ahead.
+	clock = time.Date(2026, 11, 3, 13, 0, 0, 0, loc)
+	if out := get(); out.Ahead != nil || to != "2026-11-03" {
+		t.Fatalf("ahead %+v and read to %s at lunchtime", out.Ahead, to)
+	}
+}

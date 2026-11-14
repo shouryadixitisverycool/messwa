@@ -141,6 +141,28 @@
   .price { font-size: 16px; }
 }
 
+/* ---------- up next: tomorrow's first meal, after today's last ---------- */
+
+.ahead {
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; width: 100%;
+  margin: 0 0 14px; padding: 10px 14px; border-radius: 12px; text-align: left; font: inherit; color: var(--text); cursor: pointer;
+  background: color-mix(in srgb, var(--gold) 6%, var(--slot)); border: 1px dashed color-mix(in srgb, var(--gold) 55%, transparent);
+}
+.ahead[hidden] { display: none; }
+.ahead:hover:not(:disabled), .ahead:focus-visible { border-style: solid; }
+.ahead:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.ahead:disabled { cursor: default; }
+.ah-ic { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; background: var(--slot); border: 1px solid #2a3140; }
+.ah-ic svg { width: 18px; height: 18px; }
+.ah-what { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; row-gap: 2px; min-width: 0; }
+.ah-k { width: 100%; font: 700 8px Pixel; letter-spacing: .5px; color: var(--muted); }
+.ah-what b { color: var(--m); font-weight: 600; font-size: 14px; }
+.ah-when { color: var(--muted); font-size: 13px; }
+.ah-act { display: grid; justify-items: end; gap: 2px; white-space: nowrap; }
+.ah-act b { font: 700 11px Pixel; letter-spacing: .4px; color: var(--muted); }
+.ah-act b.gold { color: var(--gold); }
+.ah-act small { color: var(--muted); font-size: 12px; }
+
 /* ---------- selling from the ledger ---------- */
 
 .sw.l { border-color: color-mix(in srgb, var(--gold) 70%, transparent); box-shadow: 0 0 6px rgba(255, 197, 61, .35); }
