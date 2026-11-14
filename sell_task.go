@@ -229,6 +229,9 @@ func (m *sellManager) Start(ctx context.Context, userID int64, date, meal string
 	if err != nil {
 		return 0, err
 	}
+	if m.cfg.Live().HiddenMeal(meal) {
+		return 0, errors.New("snacks are turned off in your settings")
+	}
 	slot, err := findSlot(m.cfg, date, meal)
 	if err != nil {
 		return 0, err

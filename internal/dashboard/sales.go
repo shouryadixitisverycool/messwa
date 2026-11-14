@@ -301,7 +301,7 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 	for _, m := range cfg.Messes {
 		out.Messes = append(out.Messes, mess{m.Name, m.VegOnly})
 	}
-	sched := meals.New(cfg)
+	sched := srv.MealSchedule()
 	for _, s := range sched.Windows(now) {
 		out.Windows = append(out.Windows, toSlot(&s))
 	}
@@ -312,6 +312,9 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 	}
 	asks := newAsks(ps, ymd(recent))
 	for _, m := range cfg.Meals {
+		if cfg.Live().HiddenMeal(m.Name) {
+			continue
+		}
 		for _, d := range []string{"", "veg", "egg", "nonveg"} {
 			if mm, ok := asks.market(m.Name, d); ok {
 				out.Market = append(out.Market, mm)
@@ -527,6 +530,9 @@ func friendMeals(ctx context.Context, srv *mcpserver.Server, sched *meals.Schedu
 		}
 	}
 	for _, m := range fms {
+		if srv.Config().Live().HiddenMeal(m.Slot) {
+			continue
+		}
 		k := m.Date + "|" + m.Slot
 		base, _, _ := strings.Cut(m.Slot, "#")
 		f := friendMeal{Date: m.Date, Meal: base, Slot: m.Slot, Friend: m.Friend, Extras: m.Extras, State: "ended", Task: running[k]}

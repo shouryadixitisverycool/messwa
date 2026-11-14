@@ -213,7 +213,17 @@ func (s *Server) myRegistrations(ctx context.Context, req *mcp.CallToolRequest, 
 		return nil, RegistrationsOut{}, err
 	}
 	rows, err := c.Registrations(ctx, in.From, in.To)
-	return nil, RegistrationsOut{Registrations: rows}, err
+	if err != nil {
+		return nil, RegistrationsOut{}, err
+	}
+	live := s.cfg.Live()
+	out := []portal.Registration{}
+	for _, r := range rows {
+		if !live.HiddenMeal(r.Meal) {
+			out = append(out, r)
+		}
+	}
+	return nil, RegistrationsOut{Registrations: out}, nil
 }
 
 // ---- output types ----
@@ -259,13 +269,14 @@ type ScheduleOut struct {
 
 func (s *Server) mealSchedule(ctx context.Context, _ *mcp.CallToolRequest, _ ScheduleIn) (*mcp.CallToolResult, ScheduleOut, error) {
 	now := s.now()
-	out := ScheduleOut{Now: s.fmt(now), Today: s.sched.Windows(now)}
-	if cur, ok := s.sched.Current(now); ok {
+	sched := s.MealSchedule()
+	out := ScheduleOut{Now: s.fmt(now), Today: sched.Windows(now)}
+	if cur, ok := sched.Current(now); ok {
 		out.Current = &cur
-		if nx, ok := s.sched.Next(cur.End, ""); ok {
+		if nx, ok := sched.Next(cur.End, ""); ok {
 			out.Next = &nx
 		}
-	} else if nx, ok := s.sched.Next(now, ""); ok {
+	} else if nx, ok := sched.Next(now, ""); ok {
 		out.Next = &nx
 	}
 	return nil, out, nil
@@ -301,6 +312,10 @@ func (s *Server) listListings(ctx context.Context, _ *mcp.CallToolRequest, in Li
 	if status == "" {
 		status = "available"
 	}
+	live := s.cfg.Live()
+	if live.HiddenMeal(strings.ToLower(in.Meal)) {
+		return nil, ListOut{}, fmt.Errorf("%s is turned off in your settings (hide_snacks)", strings.ToLower(in.Meal))
+	}
 	now := s.now()
 	ls, err := s.st.Listings(ctx, s.rule(), store.ListingFilter{
 		Since: now.Add(-time.Duration(hours) * time.Hour), Kind: kind, Meal: strings.ToLower(in.Meal), Mess: strings.ToLower(in.Mess),
@@ -311,6 +326,9 @@ func (s *Server) listListings(ctx context.Context, _ *mcp.CallToolRequest, in Li
 	names, _ := s.st.GroupNames(ctx)
 	out := ListOut{Now: s.fmt(now), Listings: []ListingOut{}}
 	for i := range ls {
+		if live.HiddenMeal(ls[i].Meal) {
+			continue
+		}
 		lo := s.listing(ctx, &ls[i], names, now)
 		if lo.Status == "deleted" && status != "all" {
 			continue
@@ -572,9 +590,10 @@ func (s *Server) Feed(ctx context.Context, since time.Time) ([]FeedItem, error) 
 	}
 	names, _ := s.st.GroupNames(ctx)
 	out := []FeedItem{}
+	live := s.cfg.Live()
 	for i := range ls {
 		l := &ls[i]
-		if l.Deleted || l.Mess == "" || l.MealEnd.IsZero() || now.After(l.MealEnd) || l.FirstSeen.After(now) {
+		if live.HiddenMeal(l.Meal) || l.Deleted || l.Mess == "" || l.MealEnd.IsZero() || now.After(l.MealEnd) || l.FirstSeen.After(now) {
 			continue
 		}
 		out = append(out, FeedItem{
@@ -599,15 +618,31 @@ func (s *Server) Get(ctx context.Context, id int64) (GetOut, error) {
 	return out, err
 }
 
+// MealSchedule is the meal schedule this user sees: every configured meal
+// except the ones their settings hide.
+func (s *Server) MealSchedule() *meals.Schedule { return s.sched.Without(s.cfg.Live().HiddenMeal) }
+
 // Schedule is meal_schedule for local callers.
 func (s *Server) Schedule() ScheduleOut {
 	_, out, _ := s.mealSchedule(context.Background(), nil, ScheduleIn{})
 	return out
 }
 
-// Deliveries is every meal armed with deliver-qr, for the sales page.
+// Deliveries is every meal armed with deliver-qr, for the sales page,
+// minus meals the user's settings hide.
 func (s *Server) Deliveries(ctx context.Context) ([]store.DeliveryRecord, error) {
-	return s.st.Deliveries(ctx)
+	ds, err := s.st.Deliveries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	live := s.cfg.Live()
+	out := ds[:0]
+	for _, d := range ds {
+		if !live.HiddenMeal(d.Meal) {
+			out = append(out, d)
+		}
+	}
+	return out, nil
 }
 
 // Prices is the asking prices per serving dated from..to, for the sales page.
@@ -616,8 +651,29 @@ func (s *Server) Prices(ctx context.Context, from, to string) ([]store.ServingPr
 }
 
 // Market is market activity from since until now, for the dashboard's stats.
+// Meals the user's settings hide are left out.
 func (s *Server) Market(ctx context.Context, since time.Time) ([]store.MarketPost, []store.MarketSale, error) {
-	return s.st.Market(ctx, s.rule(), since, s.now())
+	posts, sales, err := s.st.Market(ctx, s.rule(), since, s.now())
+	if err != nil {
+		return nil, nil, err
+	}
+	live := s.cfg.Live()
+	if !live.HideSnacks {
+		return posts, sales, nil
+	}
+	ps := posts[:0]
+	for _, p := range posts {
+		if !live.HiddenMeal(p.Meal) {
+			ps = append(ps, p)
+		}
+	}
+	ss := sales[:0]
+	for _, x := range sales {
+		if !live.HiddenMeal(x.Meal) {
+			ss = append(ss, x)
+		}
+	}
+	return ps, ss, nil
 }
 
 // Facts is the permanent row per ended listing for meals dated from..to,

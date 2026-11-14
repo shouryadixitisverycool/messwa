@@ -11,6 +11,7 @@ import (
 type MarketPost struct {
 	TS        time.Time
 	ListingID int64
+	Meal      string
 	Mess      string
 	Diet      string // veg, nonveg, egg, or empty when the post doesn't say
 	Kind      string
@@ -22,6 +23,7 @@ type MarketSale struct {
 	TS        time.Time // when the seller marked it sold
 	FirstSeen time.Time
 	ListingID int64
+	Meal      string
 	Mess      string
 	Diet      string
 	Price     int
@@ -33,7 +35,7 @@ type MarketSale struct {
 // allows it) and their "sold" reply or edit. Buy orders that went through
 // aren't sales.
 func (s *Store) Market(ctx context.Context, rule SoldRule, since, until time.Time) ([]MarketPost, []MarketSale, error) {
-	rows, err := s.boardDB().QueryContext(ctx, `SELECT p.ts, l.id, l.mess, l.diet, l.kind, l.price FROM posts p JOIN listings l ON l.id=p.listing_id
+	rows, err := s.boardDB().QueryContext(ctx, `SELECT p.ts, l.id, l.meal, l.mess, l.diet, l.kind, l.price FROM posts p JOIN listings l ON l.id=p.listing_id
 		WHERE p.ts >= ? AND p.ts <= ? AND l.mess != ''
 		AND NOT EXISTS (SELECT 1 FROM group_log g WHERE g.chat=p.chat AND g.id=p.id AND g.type='post' AND g.reply_to != '')
 		ORDER BY p.ts`, since.Unix(), until.Unix())
@@ -44,7 +46,7 @@ func (s *Store) Market(ctx context.Context, rule SoldRule, since, until time.Tim
 	for rows.Next() {
 		var p MarketPost
 		var ts int64
-		if err := rows.Scan(&ts, &p.ListingID, &p.Mess, &p.Diet, &p.Kind, &p.Price); err != nil {
+		if err := rows.Scan(&ts, &p.ListingID, &p.Meal, &p.Mess, &p.Diet, &p.Kind, &p.Price); err != nil {
 			rows.Close()
 			return nil, nil, err
 		}
@@ -66,8 +68,8 @@ func (s *Store) Market(ctx context.Context, rule SoldRule, since, until time.Tim
 	}
 	// A listing sold in range was posted at most a day before, since the
 	// dedupe window and meal windows keep listings shorter-lived than that.
-	q := `SELECT id, mess, diet, price, first_seen, at FROM (
-		SELECT l.id, l.mess, l.diet, l.price, l.first_seen, min(
+	q := `SELECT id, meal, mess, diet, price, first_seen, at FROM (
+		SELECT l.id, l.meal, l.mess, l.diet, l.price, l.first_seen, min(
 			coalesce(l.sold_text_at, 9e18),
 			coalesce((SELECT min(r.ts) FROM posts p JOIN reactions r ON r.chat=p.chat AND r.target_id=p.id
 				WHERE p.listing_id=l.id AND r.emoji IN (` + placeholders(len(sold)) + `) AND (
@@ -87,7 +89,7 @@ func (s *Store) Market(ctx context.Context, rule SoldRule, since, until time.Tim
 	for rows.Next() {
 		var m MarketSale
 		var first, at int64
-		if err := rows.Scan(&m.ListingID, &m.Mess, &m.Diet, &m.Price, &first, &at); err != nil {
+		if err := rows.Scan(&m.ListingID, &m.Meal, &m.Mess, &m.Diet, &m.Price, &first, &at); err != nil {
 			return nil, nil, err
 		}
 		m.FirstSeen, m.TS = time.Unix(first, 0), time.Unix(at, 0)

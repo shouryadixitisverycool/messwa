@@ -89,3 +89,18 @@ func (s *Schedule) Windows(t time.Time) []Slot {
 	}
 	return out
 }
+
+// Without returns the schedule minus the meals hide reports true for. It
+// returns s itself when nothing is hidden.
+func (s *Schedule) Without(hide func(string) bool) *Schedule {
+	out := &Schedule{loc: s.loc}
+	for _, m := range s.meals {
+		if !hide(m.name) {
+			out.meals = append(out.meals, m)
+		}
+	}
+	if len(out.meals) == len(s.meals) {
+		return s
+	}
+	return out
+}

@@ -152,6 +152,9 @@ func insightsHandler(cfg *config.Config, srv *mcpserver.Server) http.HandlerFunc
 			st.Messes = append(st.Messes, mess{m.Name, m.VegOnly})
 		}
 		for _, m := range cfg.Meals {
+			if seasons.HiddenMeal(m.Name) {
+				continue
+			}
 			st.Windows = append(st.Windows, window{m.Name, m.Starts, m.Ends})
 		}
 		for _, sp := range spans {
@@ -205,6 +208,9 @@ func insightsHandler(cfg *config.Config, srv *mcpserver.Server) http.HandlerFunc
 		idx := map[string]int{}
 		for k := range facts {
 			f := &facts[k]
+			if seasons.HiddenMeal(f.Meal) {
+				continue
+			}
 			i, ok := idx[f.Seller]
 			if !ok {
 				i = len(st.Sellers)
