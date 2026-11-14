@@ -523,11 +523,15 @@ function priceSlider(c) {
   const t = c.task;
   const b = sellBounds(c);
   let [lo, hi] = sellDefaults(c, b);
-  // A running task can't switch between haggling and a fixed price, so a
-  // fixed one moves both handles together and a haggling one keeps them
-  // at least a rupee apart.
+  // Both handles move in ₹5 steps. A running task can't switch between
+  // haggling and a fixed price, so a fixed one moves both handles together
+  // and a haggling one keeps them a step apart.
+  const STEP = 5;
+  const snap = (v) => Math.max(b.lo, Math.min(b.hi, Math.round(v / STEP) * STEP));
   const fixed = t && t.min === t.max;
-  const gap = t && !fixed ? 1 : 0;
+  const gap = t && !fixed ? STEP : 0;
+  lo = snap(lo);
+  hi = Math.max(snap(hi), Math.min(b.hi, lo + gap));
 
   const vals = el('div', 'sell-vals');
   const vMin = el('b'), vMax = el('b');
@@ -548,7 +552,7 @@ function priceSlider(c) {
   }
   const range = (v, label) => {
     const r = el('input');
-    Object.assign(r, { type: 'range', min: b.lo, max: b.hi, step: 1, value: v });
+    Object.assign(r, { type: 'range', min: b.lo, max: b.hi, step: STEP, value: v });
     r.setAttribute('aria-label', label);
     return r;
   };

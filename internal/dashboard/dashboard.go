@@ -101,7 +101,7 @@ type marketSale struct {
 func Handler(cfg *config.Config, srv *mcpserver.Server, hub *Hub, acc *accounts.Accounts) http.Handler {
 	mux := http.NewServeMux()
 	files, _ := fs.Sub(static, "static")
-	mux.Handle("GET /", pages(http.FileServerFS(files)))
+	mux.Handle("GET /", pages(revalidate(files, http.FileServerFS(files))))
 	member := func(h http.HandlerFunc) http.Handler { return requireRole(accounts.Member, h) }
 	regs := newRegCache(acc)
 	authRoutes(mux, acc, srv, regs, "http://"+cfg.MCP.Listen+"/mcp")
