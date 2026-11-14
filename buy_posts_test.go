@@ -45,7 +45,7 @@ func TestSellTaskMessagesBuyPosts(t *testing.T) {
 		dinner := types.NewJID("915555555555", types.DefaultUserServer)
 		veg := types.NewJID("916666666666", types.DefaultUserServer)
 		postID := f.buyPost(buyerA, "lunch", "bakul", "", "need bakul lunch")
-		f.buyPost(buyerB, "lunch", "", "", "anyone selling lunch")
+		f.buyPost(buyerB, "lunch", "", "", "need dl lunch")
 		f.buyPost(other, "lunch", "kadamba", "", "need kadamba lunch")
 		f.buyPost(dinner, "dinner", "bakul", "", "need bakul dinner")
 		f.buyPost(veg, "lunch", "bakul", "veg", "need bakul veg lunch")
@@ -61,10 +61,7 @@ func TestSellTaskMessagesBuyPosts(t *testing.T) {
 		if len(got) != 2 || got[0].text != "have bakul non-veg lunch" || got[0].quoted != postID || got[1].text != "60" {
 			t.Fatalf("buy poster got %+v", got)
 		}
-		if got := texts(sentTo(f.conn.messages(), buyerB)); len(got) != 2 {
-			t.Fatalf("poster who named no mess got %q", got)
-		}
-		for _, p := range []types.JID{other, dinner, veg} {
+		for _, p := range []types.JID{buyerB, other, dinner, veg} {
 			if got := sentTo(f.conn.messages(), p); len(got) != 0 {
 				t.Fatalf("%s got %+v", p, got)
 			}

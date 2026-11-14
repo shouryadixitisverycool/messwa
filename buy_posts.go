@@ -17,7 +17,9 @@ import (
 // waiting for them to spot the offer. A buy post counts when:
 //
 //   - it is a buy listing (not an exchange) for the task's meal and date;
-//   - it names the task's mess or no mess, and its diet or no diet;
+//   - it names the task's mess (a post naming no mess may want a special
+//     meal, such as a "DL dinner", so it doesn't count), and the task's
+//     diet or no diet;
 //   - it is still open: not sold, withdrawn or deleted, and the meal hasn't
 //     ended;
 //   - its poster isn't already one of the task's buyers, and passes the
@@ -102,12 +104,13 @@ func (m *sellManager) sweepBuyPosts(ctx context.Context, t store.SellTask, s *sa
 }
 
 // buyPostMatches reports whether buy listing l asks for the meal on date
-// at mess with diet. A post that names no mess or no diet takes any.
+// at mess with diet. The post must name mess; one that names no diet takes
+// any.
 func buyPostMatches(l store.Listing, date, mess, diet string) bool {
 	switch {
 	case l.MealDate != date, l.Deleted, l.SoldText, l.SoldReact, l.Closed:
 		return false
-	case l.Mess != "" && mess != "" && l.Mess != mess:
+	case mess == "" || l.Mess != mess:
 		return false
 	case l.Diet != "" && diet != "" && l.Diet != diet:
 		return false
