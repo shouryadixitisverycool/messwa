@@ -158,7 +158,7 @@ Everyone edits their own selling settings on the OFFER, REPOST and BUYERS tabs: 
 
 | Tab | Settings |
 | --- | --- |
-| OFFER | `[mcp] sell_tasks`, `[sell] groups` or `group_count`, `post_gap`, `show_price`, `mention_extras`, `[sales] monthly_fee`, with a preview of the group post |
+| OFFER | `[mcp] sell_tasks`, `[sell] groups` or `group_count`, `post_gap`, `show_price`, `mention_extras`, `[sales] monthly_fee`, `[sell] nudge`, with a preview of the group post |
 | REPOST | `[sell] repost`, `repost_messages`, `repost_listings`, `max_reposts` |
 | BUYERS | `[sell] buyers`, `handoff`, `accept_plain_dms`, `message_buy_posts`, `accept_payment_images`, `[dms] retention` |
 | MARKET | `[sold]` emojis, closed emojis, words and `admins_count`, `[dedupe] window` |
@@ -430,6 +430,7 @@ isn't today's.
 | `handoff` | `-handoff` | `never` | When to hand the buyer's chat to you, see below |
 | `accept_plain_dms` | `-accept-plain-dms` | `false` | Let DMs that ask about the offer without quoting it join the queue, see below |
 | `message_buy_posts` | none | `true` | Sell tasks only: message open buy posts for the meal and queue the posters, see [Sell tasks](#sell-tasks) |
+| `nudge` | none | `true` | Show a card on the board asking you to sell your next registered meal that nobody is selling yet |
 | `buyers` | `-buyers` | `anyone` | Who may buy. `unsaved_only` skips saved contacts, see below |
 | `repost` | `-repost` | `true` | Post a fresh copy in a group once the last one has dropped out of view, see below |
 | `repost_messages` | `-repost-messages` | `10` | Repost once this many messages came in after a copy. 0 turns it off |

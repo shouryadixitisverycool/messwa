@@ -120,6 +120,7 @@ var settings = []setting{
 		}},
 	boolSetting("sell.accept_plain_dms", func(c *Config) *bool { return &c.Sell.AcceptPlainDMs }),
 	boolSetting("sell.message_buy_posts", func(c *Config) *bool { return &c.Sell.MessageBuyPosts }),
+	boolSetting("sell.nudge", func(c *Config) *bool { return &c.Sell.Nudge }),
 	{key: "sell.buyers",
 		get: func(c *Config) any { b, _ := ParseBuyers(string(c.Sell.Buyers)); return b },
 		set: func(c *Config, v json.RawMessage) error {

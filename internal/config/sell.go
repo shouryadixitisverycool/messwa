@@ -33,6 +33,9 @@ type Sell struct {
 	// MessageBuyPosts has a sell task message everyone whose open buy post
 	// in the groups asks for the task's meal, and queue them as buyers.
 	MessageBuyPosts bool `toml:"message_buy_posts"`
+	// Nudge shows a card on the board asking you to sell your next
+	// registered meal that nobody is selling yet.
+	Nudge bool `toml:"nudge"`
 	// Buyers is who may buy from an offer. Empty means BuyersAnyone.
 	Buyers Buyers `toml:"buyers"`
 	// Repost puts a fresh copy of the offer in a group once the last one

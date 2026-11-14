@@ -200,8 +200,9 @@ function render() {
   renderDay();
   $('noGroups').hidden = !D.no_groups;
   renderSales();
-  if (N) renderNudge();
-  loadNudge();
+  if (!D.nudge) { N = null; nudgeAt = 0; }
+  if (N || !D.nudge) renderNudge();
+  if (D.nudge) loadNudge();
   renderTabs();
   renderGrid();
   renderControls();
@@ -1128,7 +1129,7 @@ async function loadNudge(force) {
 }
 
 function nextSellable() {
-  if (!N || !N.owner || N.sell_off) return null;
+  if (!D.nudge || !N || !N.owner || N.sell_off) return null;
   const n = now();
   const out = [];
   for (const d of N.days) for (const c of d.cells) {

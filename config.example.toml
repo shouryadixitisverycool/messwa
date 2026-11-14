@@ -110,6 +110,9 @@ accept_plain_dms = false
 # the buyer queue as if they had replied to the offer. Nobody is messaged
 # twice for a task, and a task with handoff "on_reply" skips this.
 message_buy_posts = true
+# Show a card on the dashboard board asking you to sell your next
+# registered meal that nobody is selling yet.
+nudge = true
 # Who may buy. "anyone" sells to whoever replies privately to the offer.
 # "unsaved_only" skips anyone in your address book, matched by number or
 # LID: the bot logs that they replied and sends them nothing. It applies to
