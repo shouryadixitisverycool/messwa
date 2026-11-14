@@ -48,7 +48,14 @@ var osInfoOnce sync.Once
 
 func Open(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Client, error) {
 	osInfoOnce.Do(func() { store.SetOSInfo("messwa", [3]uint32{0, 1, 0}) })
-	container, err := sqlstore.New(ctx, "sqlite", "file:"+cfg.SessionDB()+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)", newWALogger(log, "Database"))
+	// A fresh account's first group post saves an identity key for every
+	// member device, one commit each: thousands of them in a big group. With
+	// synchronous=FULL each commit waits for an fsync (about 33ms on the
+	// server's disk), so the post outlived its timeout and never got sent.
+	// NORMAL under WAL skips that fsync. Immediate transactions take the
+	// write lock up front, so a writer waits out busy_timeout instead of
+	// failing with SQLITE_BUSY while the first history sync is writing.
+	container, err := sqlstore.New(ctx, "sqlite", "file:"+cfg.SessionDB()+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_txlock=immediate", newWALogger(log, "Database"))
 	if err != nil {
 		return nil, fmt.Errorf("session store: %w", err)
 	}
