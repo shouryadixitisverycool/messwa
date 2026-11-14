@@ -41,7 +41,7 @@ const (
 	replyDebounce  = 2 * time.Second // a burst of messages gets one reply
 	sessionLimit   = config.NegotiationLimit
 	paidGrace      = 60 * time.Second // "paid" with no WhatsApp Pay payment yet
-	maxOfferFactor = 3                // an "offer" above 3x max_price is not a price
+	maxOfferFactor = 3                // an offer above 3x max_price goes to you instead of being agreed
 )
 
 // nudgeAfter is how long a buyer may stay quiet after the bot's first
@@ -212,9 +212,6 @@ func (h haggle) decide(st haggleState, in intent, now time.Time, competing bool)
 		return step{next: next, agree: price}
 	}
 
-	if in.kind == intentOffer && in.offer > maxOfferFactor*h.max {
-		in = intent{kind: intentUnknown}
-	}
 	switch in.kind {
 	case intentPass:
 		k, ok := h.passCounter(st)
@@ -241,9 +238,10 @@ func (h haggle) decide(st haggleState, in intent, now time.Time, competing bool)
 		c := in.offer
 		next.lastOffer = c
 		switch {
-		case c >= a:
-			return agree(a)
+		case c > maxOfferFactor*h.max:
+			return step{next: next, park: fmt.Sprintf("offered ₹%d, more than %dx the ₹%d max price", c, maxOfferFactor, h.max)}
 		case c >= w:
+			// Take the offer as made, including one above the ask.
 			return agree(c)
 		case st.saidLowest:
 			return step{next: next, park: fmt.Sprintf("offered ₹%d after the bot's lowest of ₹%d", c, a)}

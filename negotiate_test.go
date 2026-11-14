@@ -86,8 +86,12 @@ func TestHaggleDecide(t *testing.T) {
 			[]string{"AGREE 60"}},
 		{"a fair first offer is taken", 30, 60, 50, []string{"Buy @55"},
 			[]string{"AGREE 55"}},
-		{"offer at or above the ask takes the ask", 30, 60, 50, []string{"price?", "70"},
-			[]string{"60", "AGREE 60"}},
+		{"offer above the ask is taken", 30, 60, 50, []string{"price?", "70"},
+			[]string{"60", "AGREE 70"}},
+		{"highball before any price is taken", 50, 70, 60, []string{"buy 200"},
+			[]string{"AGREE 200"}},
+		{"a first offer over 3x the max goes to you", 50, 70, 60, []string{"buy 300"},
+			[]string{"PARK"}},
 		// Your 2 Apr sale: 55 -> B50? -> 50. Here the bot opens at 60.
 		{"counter then meet", 30, 60, 45, []string{"price?", "40?", "45"},
 			[]string{"60", "how about 50", "AGREE 45"}},
@@ -123,8 +127,10 @@ func TestHaggleDecide(t *testing.T) {
 			[]string{"60", "how about 50", "40?", "PASS"}},
 		{"pay another way parks", 30, 60, 50, []string{"price?", "upi id?"},
 			[]string{"60", "PARK"}},
-		{"absurd number is unreadable", 30, 60, 50, []string{"price?", "500", "999"},
-			[]string{"60", "60, want it?", "PARK"}},
+		{"an offer up to 3x the max is a highball", 30, 60, 50, []string{"price?", "180"},
+			[]string{"60", "AGREE 180"}},
+		{"an offer over 3x the max goes to you", 30, 60, 50, []string{"price?", "181"},
+			[]string{"60", "PARK"}},
 	}
 	for _, c := range cases {
 		h := newHaggle(c.min, c.max, c.median, true, end, "kadamba veg", "")
