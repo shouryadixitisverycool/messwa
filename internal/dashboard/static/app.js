@@ -200,6 +200,8 @@ function render() {
   renderDay();
   $('noGroups').hidden = !D.no_groups;
   renderSales();
+  if (N) renderNudge();
+  loadNudge();
   renderTabs();
   renderGrid();
   renderControls();
@@ -1102,6 +1104,91 @@ function toast(msg) {
   t.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { t.hidden = true; }, 2200);
+}
+
+// ---------- sell your next meal ----------
+
+// The nudge above the board points at your next registered meal nobody is
+// selling yet: the one being served now or the next one, the same meals
+// the sales ledger offers to sell. It reads api/sales, which asks the
+// portal, so it refreshes every few minutes rather than with the board.
+let N = null;            // last /api/sales, or null
+let nudgeAt = 0;
+const NUDGE_EVERY = 3 * 60 * 1000;
+const skipped = (() => { try { return new Set(JSON.parse(sessionStorage.getItem('nudge-skip') || '[]')); } catch { return new Set(); } })();
+
+async function loadNudge(force) {
+  if (!force && Date.now() - nudgeAt < NUDGE_EVERY) return;
+  nudgeAt = Date.now();
+  try {
+    const r = await fetch('api/sales', { cache: 'no-store' });
+    N = r.ok ? await r.json() : null;
+  } catch { N = null; }
+  renderNudge();
+}
+
+function nextSellable() {
+  if (!N || !N.owner || N.sell_off) return null;
+  const n = now();
+  const out = [];
+  for (const d of N.days) for (const c of d.cells) {
+    if (c.state === 'open' && c.sellable && c.end > n && !skipped.has(`${d.date}|${c.meal}`)) out.push({ date: d.date, c });
+  }
+  out.sort((a, b) => a.c.start - b.c.start);
+  return out[0] || null;
+}
+
+// Lines for the nudge. The same meal keeps the same line across refreshes.
+function nudgeLine(c, key) {
+  const ask = c.ask ? rupees(Math.round(c.ask / 5) * 5) : '';
+  const lines = [
+    ask ? `You don't wanna waste ${ask}.` : `You don't wanna waste the money.`,
+    `Not hungry? Someone else is.`,
+    ask ? `Someone out there would pay about ${ask} for it.` : `Someone out there would pay for it.`,
+    `An uneaten ${c.meal} is money in the bin.`,
+    `The mess already has your money. Get some of it back.`,
+    `Skipping it? Get paid instead.`,
+    `Your ${c.meal} won't sell itself. Fine, we'll do it.`,
+  ];
+  let h = 0;
+  for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return lines[h % lines.length];
+}
+
+function renderNudge() {
+  const box = $('nudge');
+  const hit = nextSellable();
+  box.hidden = !hit;
+  if (!hit) { box.replaceChildren(); return; }
+  const { date, c } = hit;
+  const key = `${date}|${c.meal}`;
+  const n = now();
+  box.style.setProperty('--mess', messColor(c.mess));
+
+  const ic = el('span', 'nudge-icon');
+  ic.append(svgEl(messIcon(c.mess)));
+
+  const text = el('div', 'nudge-text');
+  text.append(el('b', 'nudge-line', nudgeLine(c, key)));
+  const what = el('span', 'nudge-what');
+  const name = el('span', 'nudge-meal', `${c.mess ? cap(c.mess) : 'Your'} ${c.meal}`);
+  what.append(name, ` ${dayWord(date)} ${hm(c.start)}-${hm(c.end)} · ${n >= c.start ? `serving now, ${dur(c.end - n)} left` : `starts in ${dur(c.start - n)}`}`);
+  text.append(what);
+
+  const go = el('a', 'nudge-go', 'SELL IT');
+  go.href = `sales.html#sell=${encodeURIComponent(key)}`;
+
+  const x = el('button', 'nudge-x', '×');
+  x.type = 'button';
+  x.setAttribute('aria-label', `Not this ${c.meal}`);
+  x.title = `Not this ${c.meal}`;
+  x.addEventListener('click', () => {
+    skipped.add(key);
+    try { sessionStorage.setItem('nudge-skip', JSON.stringify([...skipped])); } catch {}
+    renderNudge();
+  });
+
+  box.replaceChildren(ic, text, go, x);
 }
 
 // ---------- live status ----------
