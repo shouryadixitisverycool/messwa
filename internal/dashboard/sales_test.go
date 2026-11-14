@@ -338,7 +338,9 @@ func TestSalesAhead(t *testing.T) {
 	}
 	origBill := readBill
 	defer func() { readBill = origBill }()
-	readBill = func(context.Context, *accounts.Accounts, int64, int, int) (portal.Bill, error) { return portal.Bill{}, nil }
+	readBill = func(context.Context, *accounts.Accounts, int64, int, int) (portal.Bill, error) {
+		return portal.Bill{}, nil
+	}
 
 	clock := time.Date(2026, 11, 3, 23, 0, 0, 0, loc)
 	ms := mcpserver.New(cfg, st, nil)

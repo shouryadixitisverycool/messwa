@@ -430,7 +430,7 @@ function renderAhead() {
   const b = $('ahead');
   const a = D.owner && D.ahead;
   b.hidden = !a;
-  if (!a) { b.replaceChildren(); return; }
+  if (!a) { b.replaceChildren(); aheadLines = null; return; }
   const { date, cell: c } = a;
   b.style.setProperty('--m', messColor(c.mess));
   const ic = el('span', 'ah-ic');
@@ -448,8 +448,9 @@ function renderAhead() {
   b.onclick = () => openSell(date, c);
   b.setAttribute('aria-label', c.schedule ? `Tomorrow's ${c.meal} goes up at ${hm(c.schedule.at)}. Manage it`
     : c.task ? `Manage the sale of tomorrow's ${c.meal}` : `Sell tomorrow's ${c.meal}`);
-  tip(b, () => cellLines(date, c));
+  aheadLines = () => cellLines(date, c);
 }
+let aheadLines = null;
 
 // ---------- selling from the ledger ----------
 
@@ -1267,6 +1268,7 @@ $('regIcon').append(svgEl(icon('paper')));
 $('pcIcon').append(svgEl(icon('chart')));
 $('cardIcon').append(svgEl(icon('chart')));
 tip($('xpBar'), () => (D ? savedTip() : []));
+tip($('ahead'), () => (aheadLines ? aheadLines() : []));
 // The phone layout draws at the box's pixel width, so redraw when the box
 // resizes, not only when it crosses into or out of the narrow layout.
 new ResizeObserver(() => {

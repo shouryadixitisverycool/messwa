@@ -157,7 +157,7 @@
 .ah-what { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; row-gap: 2px; min-width: 0; }
 .ah-k { width: 100%; font: 700 8px Pixel; letter-spacing: .5px; color: var(--muted); }
 .ah-what b { color: var(--m); font-weight: 600; font-size: 14px; }
-.ah-when { color: var(--muted); font-size: 13px; }
+.ah-when { color: var(--muted); font-size: 13px; white-space: nowrap; }
 .ah-act { display: grid; justify-items: end; gap: 2px; white-space: nowrap; }
 .ah-act b { font: 700 11px Pixel; letter-spacing: .4px; color: var(--muted); }
 .ah-act b.gold { color: var(--gold); }
