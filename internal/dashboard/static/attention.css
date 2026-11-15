@@ -1,8 +1,74 @@
-.attention {margin: 14px 0; width:100%;box-sizing:border-box}
-.attention .attention-body {padding:12px; background:var(--panel)}
-.attention-row {padding:12px 0;border-bottom:1px solid var(--line,#262d3b);display:flex;gap:12px;align-items:center}
-.attention-copy {flex:1;min-width:0}.attention-copy strong {color:var(--gold);font-size:13px}.attention-copy p,.attention-note {font-size:12px;color:var(--muted);margin:5px 0;overflow-wrap:anywhere}
-.attention-actions {display:flex;gap:8px;flex-wrap:wrap}.attention button,.attention a {font:inherit;color:var(--gold);background:var(--panel);border:1px solid #4a405e;border-radius:5px;padding:7px 10px;text-decoration:none;cursor:pointer}
-.attention summary {cursor:pointer;list-style:none}.attention .head-meta {margin-left:auto}
-.attention button:focus-visible,.attention a:focus-visible,.attention summary:focus-visible {outline:2px solid var(--gold);outline-offset:3px}
-@media(max-width:560px){.attention-row{align-items:stretch;flex-direction:column}.attention-actions button,.attention-actions a{flex:1;text-align:center}}
+/* The "needs you" banner. See attention.js. Built like the sell nudge
+   above the board, with rows like the sale card's buyer list. */
+
+.attn {
+  --tone: var(--egg);
+  --red: #ff6b5b;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 10px 10px 14px; border-radius: 12px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--tone) 12%, var(--panel)), var(--panel) 70%);
+  border: 1px solid color-mix(in srgb, var(--tone) 45%, transparent);
+}
+.attn.red { --tone: var(--red); }
+.attn[hidden] { display: none; }
+
+.attn-head { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; }
+.attn-mark {
+  display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px;
+  background: var(--slot); border: 1px solid color-mix(in srgb, var(--tone) 55%, var(--line));
+  font: 700 16px Pixel, var(--sans); color: var(--tone);
+}
+.attn-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.attn-line { font: 700 13px Pixel, var(--sans); color: var(--tone); letter-spacing: .3px; }
+.attn-sub { color: var(--muted); font-size: 12.5px; }
+
+.attn-bell {
+  padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--slot);
+  color: var(--muted); font: 700 9px Pixel; letter-spacing: .3px; cursor: pointer; white-space: nowrap;
+}
+.attn-bell:hover:not(:disabled) { background: var(--slot-hi); color: var(--text); }
+.attn-bell.on { cursor: default; color: var(--veg); background: none; border-color: color-mix(in srgb, var(--veg) 45%, transparent); }
+
+.attn-list { display: flex; flex-direction: column; gap: 4px; }
+.attn-row {
+  --c: var(--egg);
+  display: grid; grid-template-columns: 74px 1fr auto; align-items: center; gap: 10px;
+  padding: 8px 8px 8px 12px; border-radius: 8px; background: var(--slot);
+  box-shadow: inset 3px 0 0 var(--c);
+}
+.attn-row.red { --c: var(--red); }
+.attn-tag {
+  justify-self: start; font: 700 8px Pixel; letter-spacing: .4px; padding: 3px 6px; border-radius: 5px;
+  color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); white-space: nowrap;
+}
+.attn-copy { min-width: 0; }
+.attn-copy b { display: block; font-size: 13px; font-weight: 600; color: var(--text); }
+.attn-copy b small { font-size: 12px; font-weight: 400; color: var(--muted); }
+.attn-copy p { margin: 2px 0 0; font-size: 12px; line-height: 1.4; color: var(--muted); overflow-wrap: anywhere; }
+
+.attn-acts { display: flex; gap: 6px; }
+.attn-btn {
+  display: inline-flex; align-items: center; padding: 7px 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: none; color: var(--muted);
+  font: 700 9px Pixel; letter-spacing: .3px; text-decoration: none; white-space: nowrap; cursor: pointer;
+}
+.attn-btn:hover { background: var(--slot-hi); color: var(--text); }
+.attn-btn.go { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 55%, transparent); }
+.attn-btn.go::after { content: "\203A"; margin-left: 5px; }
+.attn-btn.go:hover { color: var(--gold); }
+.attn-btn:disabled { opacity: .45; cursor: wait; }
+
+.attn-more { align-self: flex-start; padding: 2px 0; border: none; background: none; color: var(--dim); font: inherit; font-size: 11.5px; cursor: pointer; }
+.attn-more:hover { color: var(--muted); }
+.attn-more[hidden] { display: none; }
+.attn-note { margin: 0; font-size: 12px; color: var(--red); }
+.attn-note:empty { display: none; }
+
+.attn button:focus-visible, .attn a:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+
+@media (max-width: 640px) {
+  .attn { padding: 10px 8px 10px 12px; }
+  .attn-sub { display: none; }
+  .attn-row { grid-template-columns: 1fr; gap: 6px; padding: 9px 9px 9px 12px; }
+  .attn-acts .attn-btn { flex: 1; justify-content: center; padding: 9px 10px; }
+}

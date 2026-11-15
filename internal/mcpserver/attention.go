@@ -8,8 +8,12 @@ import (
 	"time"
 )
 
+// AttentionItem is one problem the seller has to act on. Kind is one of
+// delivery, refund, blocked, schedule, post or whatsapp, so the dashboard
+// can tag and colour it without matching on Title.
 type AttentionItem struct {
 	ID         string `json:"id"`
+	Kind       string `json:"kind"`
 	Title      string `json:"title"`
 	Detail     string `json:"detail"`
 	Date       string `json:"date,omitempty"`
@@ -25,10 +29,10 @@ func (s *Server) Attention(ctx context.Context, user int64) ([]AttentionItem, er
 		return nil, err
 	}
 	out := []AttentionItem{}
-	add := func(key, title, detail, date, meal string, task int64, account, resolvable bool) {
+	add := func(kind, key, title, detail, date, meal string, task int64, account, resolvable bool) {
 		id := fmt.Sprintf("%x", sha256.Sum256([]byte(key+"|"+detail)))
 		if !resolved[id] {
-			out = append(out, AttentionItem{id, title, detail, date, meal, task, account, resolvable})
+			out = append(out, AttentionItem{id, kind, title, detail, date, meal, task, account, resolvable})
 		}
 	}
 	ds, err := s.Deliveries(ctx)
@@ -37,7 +41,7 @@ func (s *Server) Attention(ctx context.Context, user int64) ([]AttentionItem, er
 	}
 	for _, d := range ds {
 		if d.State == "sending" {
-			add("delivery:"+d.Date+d.Meal, "Check QR delivery", "Payment was received, but QR delivery may not have arrived. Check before resending.", d.Date, d.Meal, d.TaskID, false, true)
+			add("delivery", "delivery:"+d.Date+d.Meal, "Check QR delivery", "They paid, but the QR may not have reached them. Ask before you resend it.", d.Date, d.Meal, d.TaskID, false, true)
 		}
 	}
 	tasks, err := s.st.SellTasks(ctx, time.Time{})
@@ -55,11 +59,11 @@ func (s *Server) Attention(ctx context.Context, user int64) ([]AttentionItem, er
 		}
 		for _, b := range bs {
 			if rupeesStr(b.Refund) > 0 {
-				add(fmt.Sprintf("refund:%d:%s", t.ID, b.Peer), "Refund due", fmt.Sprintf("Return INR %s to %s, unless they received the meal.", b.Refund, b.Peer), t.Date, t.Meal, t.ID, false, true)
+				add("refund", fmt.Sprintf("refund:%d:%s", t.ID, b.Peer), "Refund due", fmt.Sprintf("Send ₹%s back to %s, unless they got the meal.", b.Refund, s.attentionWho(ctx, b)), t.Date, t.Meal, t.ID, false, true)
 			}
 		}
 		if t.State == store.TaskFailed {
-			add(fmt.Sprintf("task:%d", t.ID), "Sale blocked", t.Detail, t.Date, t.Meal, t.ID, false, true)
+			add("blocked", fmt.Sprintf("task:%d", t.ID), "Sale blocked", t.Detail, t.Date, t.Meal, t.ID, false, true)
 		}
 		if t.State == store.TaskActive {
 			posts, err := s.st.SellTaskOffers(ctx, t.ID)
@@ -74,7 +78,7 @@ func (s *Server) Attention(ctx context.Context, user int64) ([]AttentionItem, er
 			}
 			for group, p := range latest {
 				if p.State == store.OfferFailed {
-					add(fmt.Sprintf("post:%d:%s:%d", t.ID, group, p.Seq), "Offer failed to post", p.Error, t.Date, t.Meal, t.ID, false, false)
+					add("post", fmt.Sprintf("post:%d:%s:%d", t.ID, group, p.Seq), "Offer didn't post", p.Error, t.Date, t.Meal, t.ID, false, false)
 				}
 			}
 		}
@@ -88,16 +92,33 @@ func (s *Server) Attention(ctx context.Context, user int64) ([]AttentionItem, er
 			active = true
 		}
 		if sc.State == store.ScheduleFailed {
-			add(fmt.Sprintf("schedule:%d", sc.ID), "Schedule failed", sc.Detail, sc.Date, sc.Meal, 0, false, true)
+			add("schedule", fmt.Sprintf("schedule:%d", sc.ID), "Schedule failed", sc.Detail, sc.Date, sc.Meal, 0, false, true)
 		}
 	}
 	if active && s.Device != nil {
 		if status, ok := s.Device.Status().(map[string]any); ok && status["connected"] == false {
-			add("whatsapp", "WhatsApp disconnected", "Reconnect WhatsApp so your sales can continue.", "", "", 0, true, false)
+			add("whatsapp", "whatsapp", "WhatsApp disconnected", "Your sales can't post or reply until you reconnect.", "", "", 0, true, false)
 		}
 	}
 	return out, nil
 }
+
+// attentionWho names a buyer the way the sale sheet does: the name you gave
+// them, then their contact or push name, then their number.
+func (s *Server) attentionWho(ctx context.Context, b store.SellBuyer) string {
+	if b.Name != "" {
+		return b.Name
+	}
+	p := s.person(ctx, b.Peer, b.Alt, "")
+	if p.Name != "" {
+		return p.Name
+	}
+	if p.Phone != "" {
+		return p.Phone
+	}
+	return b.Peer
+}
+
 func (s *Server) ResolveAttention(ctx context.Context, user int64, id string) error {
 	return s.st.ResolveAttention(ctx, user, id)
 }
