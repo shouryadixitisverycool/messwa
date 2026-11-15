@@ -97,6 +97,11 @@ func TestParseBuyer(t *testing.T) {
 		{"80 is the norm, many are selling", intentLower, 0, false},
 		{"Aray bhai 50 main tho milra", intentLower, 0, false},
 		{"im getting 70 from someone", intentLower, 0, false},
+		{"Getting it for 95 thnx", intentPass, 0, false},
+		{"getting from someone else, thanks", intentPass, 0, false},
+		{"Got it for 85", intentPass, 0, false},
+		{"got one at rs 90 bro", intentPass, 0, false},
+		{"ok got it, for 85?", intentOffer, 85, false},
 		{"37.21", intentUnknown, 0, false},
 		{"my number is 9876543210", intentUnknown, 0, false},
 		{"30 40 50", intentUnknown, 0, false},
@@ -217,7 +222,7 @@ func TestParseBuyerBoughtElsewhere(t *testing.T) {
 		"Bought from elsewhere", "Bought elsewhere tho", "Got elsewhere bro, thanks", "Got one lol", "I got from someone else",
 		"I have bought", "I have purchased from someone else thanks", "Thanks, already bought", "Thank you already got",
 		"Already purchased", "Nah I got it nvm", "Mujhe mil gaya bhai kisi aur se", "I got other", "Nope, got it",
-		"No just bought", "I bought for 20 from someone else", "sorry got it now"}
+		"No just bought", "I bought for 20 from someone else", "sorry got it now", "Getting it for 95 thnx", "Got it for 85", "already got for ₹80"}
 	for _, text := range bought {
 		if in := parseBuyer(text); in.kind != intentPass || !in.bought {
 			t.Errorf("parseBuyer(%q) = %+v, want a bought pass", text, in)

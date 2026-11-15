@@ -662,6 +662,13 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, rt
 	if err != nil {
 		return err
 	}
+	if n != nil {
+		// Before listening() below: a reply sent while run was down
+		// arrives as soon as it connects, and a handler added later
+		// misses it.
+		n.listen()
+		defer n.remove()
+	}
 	offers, err := m.st.SellTaskOffers(ctx, t.ID)
 	if err != nil {
 		return err
