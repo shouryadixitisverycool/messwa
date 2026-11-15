@@ -995,3 +995,10 @@ Square brackets mark an optional bit, dropped when a variable inside it is empty
 The server checks every save and refuses a message that leaves out a variable the bot relies on (a price message without `{price}`), uses a variable that message doesn't have, has unbalanced `[ ]` or `{ }`, or could come out empty. "Sold" stays one message, because an ended task may send only a sold line: the bot checks the text against your sold variants and the built-in ones before sending. Saved wording applies to running tasks from their next message.
 
 In `config.toml` the same thing is `[sell] messages`, a table of message IDs to lists of variants, e.g. `messages = { counter = [["how about {price}"], ["{price}", "last one going"]] }`. The IDs are in `internal/wording/wording.go`.
+### Attention inbox and alerts
+
+Auction House and My Sales include an Attention needed box for uncertain QR deliveries, refunds due, failed sales or schedules, failed offer posts, and WhatsApp disconnections while sales are active or scheduled. Items link to sale details, the meal ledger, or account connection controls. Older affected sale details remain accessible after their board cards disappear.
+
+Mark resolved records that you handled an issue. It does not send a refund or retry delivery. Resolutions are saved per user in the account database. A changed issue appears again. Connection and posting issues clear when their underlying state recovers.
+
+Browser alerts are optional and require permission. They run while a dashboard tab is open, refresh every 15 seconds, and suppress unchanged issues in that browser. They are not push notifications while the app is closed. The inbox remains available when browser permission is denied.

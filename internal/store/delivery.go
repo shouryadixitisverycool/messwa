@@ -264,6 +264,7 @@ type DeliveryRecord struct {
 	ArmedAt, OfferAt, PaidAt, SentAt time.Time // zero when unknown
 	// PaymentKind is empty for WhatsApp Pay, or PaidByImage.
 	PaymentKind string
+	TaskID      int64
 }
 
 // Deliveries returns every recorded meal, oldest first: armed, handed_off,
@@ -272,7 +273,7 @@ func (s *Store) Deliveries(ctx context.Context) ([]DeliveryRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT d.date,d.meal,d.peer,d.amount,d.state,d.mess,d.diet,
  CASE WHEN d.buyer_name != '' THEN d.buyer_name ELSE coalesce((SELECT p.push_name FROM dm_peers p WHERE d.peer IN (p.jid, p.alt) AND p.push_name != '' LIMIT 1), '') END,
  coalesce((SELECT CASE WHEN p.jid = d.peer THEN p.alt ELSE p.jid END FROM dm_peers p WHERE d.peer IN (p.jid, p.alt) LIMIT 1), ''),
- d.armed_at, coalesce(d.offer_at,0), coalesce(d.paid_at,0), coalesce(d.sent_at,0), d.payment_kind
+ d.armed_at, coalesce(d.offer_at,0), coalesce(d.paid_at,0), coalesce(d.sent_at,0), d.payment_kind, coalesce(d.task_id,0)
  FROM qr_deliveries d ORDER BY d.date, d.meal`)
 	if err != nil {
 		return nil, err
@@ -288,7 +289,7 @@ func (s *Store) Deliveries(ctx context.Context) ([]DeliveryRecord, error) {
 	for rows.Next() {
 		var r DeliveryRecord
 		var armed, offer, paid, sent int64
-		if err := rows.Scan(&r.Date, &r.Meal, &r.Peer, &r.Amount, &r.State, &r.Mess, &r.Diet, &r.BuyerName, &r.PeerAlt, &armed, &offer, &paid, &sent, &r.PaymentKind); err != nil {
+		if err := rows.Scan(&r.Date, &r.Meal, &r.Peer, &r.Amount, &r.State, &r.Mess, &r.Diet, &r.BuyerName, &r.PeerAlt, &armed, &offer, &paid, &sent, &r.PaymentKind, &r.TaskID); err != nil {
 			return nil, err
 		}
 		r.ArmedAt, r.OfferAt, r.PaidAt, r.SentAt = unix(armed), unix(offer), unix(paid), unix(sent)

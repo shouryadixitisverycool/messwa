@@ -1,0 +1,8 @@
+.attention {margin: 14px 0; width:100%;box-sizing:border-box}
+.attention .attention-body {padding:12px; background:var(--panel)}
+.attention-row {padding:12px 0;border-bottom:1px solid var(--line,#262d3b);display:flex;gap:12px;align-items:center}
+.attention-copy {flex:1;min-width:0}.attention-copy strong {color:var(--gold);font-size:13px}.attention-copy p,.attention-note {font-size:12px;color:var(--muted);margin:5px 0;overflow-wrap:anywhere}
+.attention-actions {display:flex;gap:8px;flex-wrap:wrap}.attention button,.attention a {font:inherit;color:var(--gold);background:var(--panel);border:1px solid #4a405e;border-radius:5px;padding:7px 10px;text-decoration:none;cursor:pointer}
+.attention summary {cursor:pointer;list-style:none}.attention .head-meta {margin-left:auto}
+.attention button:focus-visible,.attention a:focus-visible,.attention summary:focus-visible {outline:2px solid var(--gold);outline-offset:3px}
+@media(max-width:560px){.attention-row{align-items:stretch;flex-direction:column}.attention-actions button,.attention-actions a{flex:1;text-align:center}}

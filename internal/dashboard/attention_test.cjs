@@ -1,0 +1,2 @@
+const {test}=require('node:test');const assert=require('node:assert/strict');const {attentionUnseen}=require('./static/attention.js');
+test('unchanged issues do not alert again, changed issues do',()=>{const items=[{id:'refund-1'},{id:'disconnect-1'}];const seen=new Set(['refund-1']);assert.deepEqual(attentionUnseen(items,seen),[{id:'disconnect-1'}]);seen.add('disconnect-1');assert.deepEqual(attentionUnseen(items,seen),[]);assert.deepEqual(attentionUnseen([{id:'refund-2'}],seen),[{id:'refund-2'}]);});

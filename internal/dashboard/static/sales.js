@@ -81,6 +81,21 @@ async function load() {
 // The board's "sell it" link lands here as #sell=date|meal and opens that
 // meal's sell menu once.
 function openFromHash() {
+  const attention = /^#attention-meal=(.+)$/.exec(location.hash);
+  if (attention) {
+    history.replaceState(null, '', location.pathname + location.search);
+    const [date, meal] = decodeURIComponent(attention[1]).split('|');
+    const age = Math.round((dayOf(D.today) - dayOf(date)) / 86400000);
+    if (age >= 0 && age < D.days.length) {
+      page = Math.floor(age / 7); renderLedger(); pickCell(date + '|' + meal);
+      $('insp').scrollIntoView({ block: 'center' });
+    } else {
+      // A meal still to come: the tomorrow box, when it's that meal.
+      const a = $('ahead');
+      (!a.hidden && D.ahead && D.ahead.date === date ? a : $('insp')).scrollIntoView({ block: 'center' });
+    }
+    return;
+  }
   const m = /^#sell=(.+)$/.exec(location.hash);
   if (!m) return;
   history.replaceState(null, '', location.pathname + location.search);
@@ -976,3 +991,5 @@ setInterval(tickLive, 1000);
 // Armed bars drain and meals end on their own, so refetch now and then.
 setInterval(() => { if (document.visibilityState === 'visible') load(); }, 60000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') load(); });
+
+addEventListener('hashchange', () => { if (D) openFromHash(); });

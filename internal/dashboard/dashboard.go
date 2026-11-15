@@ -242,6 +242,7 @@ func Handler(cfg *config.Config, srv *mcpserver.Server, hub *Hub, acc *accounts.
 		writeJSON(w, r, st)
 	}))
 
+	attentionRoutes(mux, srv)
 	mux.Handle("GET /api/sales", member(salesHandler(cfg, srv, regs)))
 	mux.Handle("GET /api/insights", requireRole(accounts.Admin, insightsHandler(cfg, srv)))
 
