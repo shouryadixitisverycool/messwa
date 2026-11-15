@@ -753,6 +753,7 @@ a.copy.linked:hover .copy-go { color: var(--gold); }
 @media (max-width: 420px) { .sell-tools { grid-template-columns: 1fr; } }
 /* A schedule's tools: START NOW beside AUTOPILOT, then prices and unschedule. */
 .sell-tools.pairs { grid-template-columns: 1fr 1fr; }
+.sell-tools.one { grid-template-columns: 1fr; }
 .sell-tool.auto b { color: var(--dim); }
 .sell-tool.auto.on { border-color: color-mix(in srgb, var(--blue, #5aa9ff) 70%, transparent); background: color-mix(in srgb, #5aa9ff 10%, var(--slot)); }
 .sell-tool.auto.on b, .sell-tool.auto.on span { color: #5aa9ff; }

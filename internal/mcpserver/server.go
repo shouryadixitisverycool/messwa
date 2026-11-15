@@ -645,6 +645,12 @@ func (s *Server) Deliveries(ctx context.Context) ([]store.DeliveryRecord, error)
 	return out, nil
 }
 
+// DeleteSale removes the meal's recorded sale so it can be sold again. It
+// sends nothing: the old buyer still holds the QR they were sent.
+func (s *Server) DeleteSale(ctx context.Context, date, meal string) (string, error) {
+	return s.st.DeleteSale(ctx, date, meal, s.now().In(s.sched.Location()))
+}
+
 // Prices is the asking prices per serving dated from..to, for the sales page.
 func (s *Server) Prices(ctx context.Context, from, to string) ([]store.ServingPrices, error) {
 	return s.st.Prices(ctx, from, to)

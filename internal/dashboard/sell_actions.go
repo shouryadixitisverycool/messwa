@@ -128,6 +128,14 @@ func sellActionRoutes(mux *http.ServeMux, cfg *config.Config, srv *mcpserver.Ser
 			}
 			writeJSON(w, r, struct{}{})
 			return
+		case "delete-sale":
+			// Only the database changes, so it works with sell tasks off.
+			if _, err := srv.DeleteSale(r.Context(), in.Date, in.Meal); err != nil {
+				jsonError(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, r, struct{}{})
+			return
 		case "prices", "cancel":
 			sell, err := srv.SellControl()
 			if err == nil {

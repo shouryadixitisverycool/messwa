@@ -369,3 +369,50 @@ func TestRecordManualSale(t *testing.T) {
 		t.Fatal("accepted an unknown payment kind")
 	}
 }
+
+func TestDeleteSaleFreesMealForNewTask(t *testing.T) {
+	ctx := t.Context()
+	s, err := Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Unix(1794000000, 0)
+	if _, err := s.DeleteSale(ctx, "2026-11-15", "dinner", now); err == nil {
+		t.Fatal("deleted a sale that doesn't exist")
+	}
+	task := SellTask{Date: "2026-11-15", Meal: "dinner", MinPaise: 2000, MaxPaise: 4000, UserID: 1, CreatedAt: now, EndsAt: now.Add(time.Hour)}
+	id, err := s.CreateSellTask(ctx, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := Delivery{Date: task.Date, Meal: task.Meal, Peer: "1@s.whatsapp.net", Amount: "30.00", ImageHash: "h", ArmedAt: now}
+	if _, err := s.ArmTaskDelivery(ctx, id, d); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeleteSale(ctx, d.Date, d.Meal, now); err == nil {
+		t.Fatal("deleted a sale an active task holds")
+	}
+	if ok, err := s.ClaimDelivery(ctx, d, Payment{ID: "pay", At: now}, "msg"); err != nil || !ok {
+		t.Fatalf("claim: %t, %v", ok, err)
+	}
+	if err := s.FinishDelivery(ctx, d, "msg"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.EndSellTask(ctx, id, TaskSold, "QR delivered", now); err != nil || !ok {
+		t.Fatalf("end: %t, %v", ok, err)
+	}
+	if _, err := s.CreateSellTask(ctx, task); err == nil {
+		t.Fatal("started a task on a sold meal")
+	}
+
+	if state, err := s.DeleteSale(ctx, d.Date, d.Meal, now); err != nil || state != "sent" {
+		t.Fatalf("delete: %q, %v", state, err)
+	}
+	if got, err := s.GetSellTask(ctx, id); err != nil || got.State != TaskCancelled {
+		t.Fatalf("old task after delete = %+v, %v", got, err)
+	}
+	if _, err := s.CreateSellTask(ctx, task); err != nil {
+		t.Fatalf("meal not sellable after delete: %v", err)
+	}
+}

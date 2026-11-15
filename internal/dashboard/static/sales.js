@@ -323,6 +323,7 @@ function cellNode(date, c) {
     n.tabIndex = 0;
     n.setAttribute('role', 'button');
     n.setAttribute('aria-label', c.task ? `Manage the sale of ${c.meal}: mark sold, edit prices or stop`
+      : SELL.isSold(c) ? `Sold ${c.meal}. Open to delete the sale`
       : c.schedule ? `Manage the scheduled sale of ${c.meal}, going up at ${hm(c.schedule.at)}` : `Sell ${c.meal}`);
   }
   return n;
@@ -351,6 +352,7 @@ function cellLines(date, c) {
       lines.push(null, [{ t: 'Paid, but the QR send was interrupted. Check the chat before doing anything else.', c: 'c6' }]);
       lines.push({ rar: 'PAID · SEND UNCERTAIN', c: 'c6' });
     } else {
+      if (canSell(c)) lines.push(null, [{ t: 'Click to delete the sale if it fell through.', c: 'lore' }]);
       lines.push({ rar: 'SOLD' + (s.paid_by === 'image' ? ' · UNVERIFIED' : ''), c: 'ca' });
     }
   } else if (c.state === 'armed') {
@@ -459,7 +461,8 @@ let aheadLines = null;
 
 // canSell: the meal being served now or the next one, while it's still
 // open, or any meal with a task running (to mark sold, reprice or stop it).
-const canSell = (c) => D.owner && (c.task != null || c.schedule != null || (c.state === 'open' && c.sellable));
+// A sold meal opens too, to delete the sale.
+const canSell = (c) => D.owner && (c.task != null || c.schedule != null || (c.state === 'open' && c.sellable) || SELL.isSold(c));
 
 const modal = $('modal');
 const sheet = $('sheet');

@@ -71,6 +71,8 @@ function sellSheet(ctx) {
     queued: 'waiting', negotiating: 'haggling', agreed: 'agreed, waiting to pay', offered: 'asked to pay', passed: 'passed',
     timed_out: 'timed out', bought: 'bought it', skipped: 'skipped', told_sold: 'told sold', parked: 'needs you', handed_off: 'handed to you',
   };
+  // isSold: c is one of your meals with a sale recorded and no task on it.
+  const isSold = (c) => c.friend == null && c.sale != null && (c.state === 'sold' || c.state === 'sending');
   const priceText = (t) => (t.min === t.max ? rupees(t.min) : `${rupees(t.min)}-${rupees(t.max)}`);
   const buyerName = (b) => b.name || fmtPhone(b.phone) || b.key;
 
@@ -81,14 +83,16 @@ function sellSheet(ctx) {
     hideTip();
     const t = c.task;
     const head = el('div', 'sell-head');
-    const h = el('h2', '', `${t ? 'Selling' : c.schedule ? 'Scheduled' : 'Sell'} ${messName(c.mess)} ${c.meal}${c.friend != null ? ` for ${c.friend || 'a friend'}` : ''}`);
+    const sold = !t && isSold(c);
+    const h = el('h2', '', `${t ? 'Selling' : c.schedule ? 'Scheduled' : sold ? 'Sold' : 'Sell'} ${messName(c.mess)} ${c.meal}${c.friend != null ? ` for ${c.friend || 'a friend'}` : ''}`);
     h.id = 'sellTitle';
     h.style.setProperty('color', messColor(c.mess));
     const live = now() >= c.start;
     head.append(h, el('div', 'sub', `${fmtDay(date)}, ${hm(c.start)}-${hm(c.end)} · ${live ? `ends in ${dur(c.end - now())}` : `starts in ${dur(c.start - now())}`}`));
     sheet.setAttribute('aria-labelledby', 'sellTitle');
     sheet.replaceChildren(head);
-    if (!t && c.schedule && view !== 'prices') scheduleView(date, c);
+    if (sold) saleView(date, c);
+    else if (!t && c.schedule && view !== 'prices') scheduleView(date, c);
     else if (!t) priceView(date, c);
     else if (view === 'prices') priceView(date, c);
     else if (view === 'sold') soldView(date, c);
@@ -173,6 +177,36 @@ function sellSheet(ctx) {
     auto.hidden = !t.autopilot;
     auto.append(el('b', '', 'On autopilot. '), "Buyers who'd need you are skipped, and only WhatsApp Pay counts.");
     sheet.append(sum, list, tools, auto, error, acts);
+  }
+
+  // saleView is a meal the bot (or you) already sold. Its one action
+  // deletes the sale, for when it fell through: the meal goes back to
+  // unsold and can be put up again.
+  function saleView(date, c) {
+    const s = D().sales[c.sale];
+    const { error, acts, btn, run } = sellParts();
+    const sum = el('div', 'sell-sum');
+    const stat = (k, v, cls) => { const d = el('div', 'st'); d.append(el('span', '', k), el('b', cls || '', v)); return d; };
+    sum.append(stat('PAID', rupees(s.amount), 'gold'), stat('BUYER', s.name || fmtPhone(s.phone) || 'Unknown'), stat('AT', s.paid_at ? hm(s.paid_at) : '-'));
+    const note = el('p', 'sell-note', `Deleting the sale takes it out of your ledger and totals, and you can sell the ${c.meal} again. `
+      + 'The bot sends nothing, and the buyer still has the QR it sent them. Reset your QR token on the mess portal if they shouldn\'t be able to use it.');
+    const tools = el('div', 'sell-tools one');
+    const del = btn('', 'sell-tool red', () => {
+      if (del.dataset.sure) return run({ action: 'delete-sale', date, meal: c.meal }, `Sale deleted. Your ${c.meal} is unsold again.`);
+      del.dataset.sure = '1';
+      del.querySelector('span').textContent = 'SURE? DELETE';
+      del.querySelector('small').textContent = 'Click again to delete';
+    });
+    del.append(el('b', '', '✕'), el('span', '', 'DELETE SALE'), el('small', '', 'Undo it and sell again'));
+    // Deleting only touches the ledger, so it works with sell tasks off.
+    del.disabled = false;
+    tools.append(del);
+    if (D().sell_off) error.textContent = '';
+    // Focus starts on CLOSE, not on the destructive button.
+    const close = btn('CLOSE', '', closeModal);
+    close.dataset.focus = '1';
+    acts.append(close);
+    sheet.append(sum, note, tools, error, acts);
   }
 
   // scheduleView is a sale waiting for its meal: when it goes up, at what
@@ -382,5 +416,5 @@ function sellSheet(ctx) {
   }
 
 
-  return { open: openSell, priceSlider, priceText, listAt, listWord };
+  return { open: openSell, isSold, priceSlider, priceText, listAt, listWord };
 }

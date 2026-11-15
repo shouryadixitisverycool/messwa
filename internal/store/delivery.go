@@ -367,6 +367,42 @@ func (s *Store) RecordManualSale(ctx context.Context, m ManualSale, force bool) 
 	return state, tx.Commit()
 }
 
+// DeleteSale removes the meal's delivery record, whatever its state, so
+// the meal counts as unsold and a new sell task can offer it. A sell task
+// that ended sold on it becomes cancelled, so it stops telling late buyers
+// the meal sold. A record an active sell task holds is left alone: stop
+// the task first. It returns the deleted record's state.
+func (s *Store) DeleteSale(ctx context.Context, date, meal string, at time.Time) (string, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	var state string
+	var task sql.NullInt64
+	var taskActive bool
+	err = tx.QueryRowContext(ctx, `SELECT d.state, d.task_id, coalesce((SELECT t.state='active' FROM sell_tasks t WHERE t.id=d.task_id), 0)
+ FROM qr_deliveries d WHERE d.date=? AND d.meal=?`, date, meal).Scan(&state, &task, &taskActive)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", errors.New("that meal has no sale recorded")
+	case err != nil:
+		return "", err
+	case taskActive:
+		return state, fmt.Errorf("sell task %d is still selling this meal; stop it first", task.Int64)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM qr_deliveries WHERE date=? AND meal=?`, date, meal); err != nil {
+		return state, err
+	}
+	if task.Valid {
+		if _, err := tx.ExecContext(ctx, `UPDATE sell_tasks SET state='cancelled',detail=? WHERE id=? AND state='sold'`,
+			"sale deleted by you on "+at.Format("2 Jan 15:04"), task.Int64); err != nil {
+			return state, err
+		}
+	}
+	return state, tx.Commit()
+}
+
 // PaymentKind is what counted as the payment for the meal's delivery:
 // empty for WhatsApp Pay, or PaidByImage.
 func (s *Store) PaymentKind(ctx context.Context, date, meal string) (string, error) {
