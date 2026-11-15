@@ -160,6 +160,10 @@ var (
 	// counts only here: on its own it is "understood".
 	boughtWords = newVocab("bought", "buyed", "purchased", "got from", "got another", "got one", "got other", "got elsewhere",
 		"got it", "already got", "mil gaya", "mil gya", "milgaya", "mil gayi")
+	// thanksWords sign off a message. "getting it for 95 thnx" closes the
+	// chat; "im getting 70 from someone" without them asks for less.
+	thanksWords   = newVocab("thanks", "thank you", "thanku", "thnx", "thanx", "thx", "tnx", "ty", "tq")
+	gettingWords  = newVocab("getting")
 	refuseFirst   = newVocab("no", "nope", "nah", "na", "nahi", "nhi")
 	payOtherWords = newVocab("upi id", "upi qr", "qr code", "scanner", "scan", "send qr", "send your qr", "send the qr", "your qr", "payment qr",
 		"cant pay", "can't pay", "cannot pay", "not working", "cash", "pay later", "later", "tomorrow", "tmrw", "tmr", "account number",
@@ -194,6 +198,10 @@ type msgWords struct {
 var (
 	wordRe  = regexp.MustCompile(`[a-z']+`)
 	rangeRe = regexp.MustCompile(`\d\s*-\s*\d`)
+	// gotForRe is a buyer who got a meal elsewhere at a price: "got it for
+	// 85", "got one at rs 90", "got for 80". The price must follow right
+	// away, so "ok got it, for 85?" stays an offer.
+	gotForRe = regexp.MustCompile(`\bgot(\s+(it|one))?\s+(for|at)\s+(rs\.?\s*)?\d`)
 	// Currency marks glued to a number: "80rs", "rs80", "₹40", "50/-".
 	currencyAfter  = regexp.MustCompile(`(\d)\s*(rs|inr|rupees|rupee|bucks|/-)`)
 	currencyBefore = regexp.MustCompile(`(rs\.?|inr)\s*(\d)`)
@@ -249,6 +257,10 @@ func parseBuyer(text string) intent {
 		m.joined += squeeze(w) + " "
 	}
 
+	if gotForRe.MatchString(raw) {
+		return intent{kind: intentPass, bought: true}
+	}
+
 	numbers := digitNumbers(raw)
 	numbers = append(numbers, wordNumbers(rawWords)...)
 
@@ -269,6 +281,8 @@ func parseBuyer(text string) intent {
 	switch {
 	case paidMark || paidWords.in(m):
 		return intent{kind: intentPaid}
+	case gettingWords.in(m) && thanksWords.in(m):
+		return intent{kind: intentPass, bought: true}
 	case passWords.in(m), notInterested(m.words):
 		return intent{kind: intentPass, bought: boughtWords.in(m)}
 	case len(m.words) > 0 && refuseFirst.words[m.words[0]] && !lowerWords.in(m) && !openerWords.in(m):

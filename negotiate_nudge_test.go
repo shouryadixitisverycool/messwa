@@ -152,6 +152,36 @@ func TestNoNudgeOnceBuyerWrites(t *testing.T) {
 	})
 }
 
+// A reply sent while run was down arrives as soon as WhatsApp connects,
+// which is after Resume returns and before the resumed task finishes
+// starting. It must still reach the buyer's session.
+func TestResumedHaggleReadsReplySentWhileDown(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		ctx, stop := context.WithCancel(t.Context())
+		_, id := quietA(t, f, ctx)
+		stop()
+		synctest.Wait()
+
+		ctx2, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m2 := f.negotiatingManager(ctx2, 40)
+		up := make(chan struct{})
+		m2.connected = func(time.Duration) bool { <-up; return true }
+		if err := m2.Resume(ctx2, true); err != nil {
+			t.Fatal(err)
+		}
+		// Connecting delivers the reply the buyer sent while run was down.
+		f.conn.emit(dm(buyerA, "already bought"))
+		close(up)
+		settle()
+		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerPassed {
+			t.Fatalf("A = %+v", b)
+		}
+	})
+}
+
 func TestNudgeResumesAfterRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data.db")
 	synctest.Test(t, func(t *testing.T) {

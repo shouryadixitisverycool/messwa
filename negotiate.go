@@ -352,6 +352,7 @@ type negotiation struct {
 	direct      chan error
 	directBuyer types.JID
 	remove      func()
+	unlisten    sync.Once
 	// ownMin is the task's own floor in rupees. In a pool h.min is the
 	// pool's lowest floor, which the bot may quote but this task never
 	// charges below.
@@ -490,10 +491,22 @@ func (n *negotiation) restoreBuyer(b store.SellBuyer, holder bool) {
 	n.resumed = append(n.resumed, ss)
 }
 
-// start listens to buyers and opens a session for each one who replies.
-func (n *negotiation) start() {
+// listen routes buyers' DMs to their sessions. Call it before the task
+// reports it is listening: a resumed task does that before run connects,
+// and replies sent while run was down arrive right after. Until start runs,
+// messages wait in the session inboxes.
+func (n *negotiation) listen() {
+	if n.remove != nil {
+		return
+	}
 	id := n.m.conn.AddEventHandler(n.handle)
-	n.remove = func() { n.m.conn.RemoveEventHandler(id) }
+	n.remove = func() { n.unlisten.Do(func() { n.m.conn.RemoveEventHandler(id) }) }
+}
+
+// start opens a session for each buyer who replies, and runs the restored
+// ones.
+func (n *negotiation) start() {
+	n.listen()
 	n.mu.Lock()
 	resumed := n.resumed
 	n.resumed = nil
