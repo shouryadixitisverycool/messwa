@@ -172,7 +172,8 @@ var (
 		"no sorry", "leave it", "lite", "chodo", "chhodo", "rehne do", "rehne de", "rehnedo", "rehen do", "i'll pass", "ill pass", "pass",
 		"cancel", "bought", "purchased", "got from", "got another", "got one", "got other", "got elsewhere", "got it from", "already got",
 		"mil gaya", "mil gya", "milgaya", "mil gayi", "not required", "dont want", "don't want", "do not want", "no need", "skip",
-		"sorry got it", "sry got it", "sorry i got it", "sry i got it", "not req", "not reqd", "no req", "nt req", "not reqired")
+		"sorry got it", "sry got it", "sorry i got it", "sry i got it", "not req", "not reqd", "no req", "nt req", "not reqired",
+		"dont need", "don't need", "do not need", "dnt need", "nahi chahiye", "nhi chahiye")
 	// Within a pass, these mean the buyer has a meal already. "got it"
 	// counts only here: on its own it is "understood".
 	boughtWords = newVocab("bought", "buyed", "purchased", "got from", "got another", "got one", "got other", "got elsewhere",

@@ -63,7 +63,7 @@ type haggle struct {
 	haveMedian bool
 	unit       int // concessions round to this: ₹5, or ₹1 for tiny prices
 	end        time.Time
-	what       string // the mess and diet, "kadamba non-veg"
+	what       string // the mess, diet and meal, "kadamba non-veg lunch"
 	day        string // "" for today's meal, else "tmrw" or "13 nov"
 	meal       string // "lunch"; a buyer who names only other meals is out
 }
@@ -104,12 +104,13 @@ type haggleState struct {
 	quoted                                    []int
 	saidLowest                                bool
 	passCountered                             bool // see passCounter
+	toldMeal                                  bool // the buyer named another meal and heard which one this is
 	nudges                                    int  // see quietNudge
 }
 
 func (s haggleState) store(started time.Time) store.Negotiation {
 	n := store.Negotiation{Ask: int64(s.ask) * 100, Rounds: s.rounds, BotMsgs: s.botMsgs, Unknowns: s.unknowns,
-		LastOffer: int64(s.lastOffer) * 100, SaidLowest: s.saidLowest, PassCountered: s.passCountered, Nudges: s.nudges, StartedAt: started}
+		LastOffer: int64(s.lastOffer) * 100, SaidLowest: s.saidLowest, PassCountered: s.passCountered, ToldMeal: s.toldMeal, Nudges: s.nudges, StartedAt: started}
 	for _, q := range s.quoted {
 		n.Quoted = append(n.Quoted, int64(q)*100)
 	}
@@ -118,7 +119,7 @@ func (s haggleState) store(started time.Time) store.Negotiation {
 
 func haggleFromStore(n store.Negotiation, maxRupees int) haggleState {
 	s := haggleState{ask: int(n.Ask / 100), rounds: n.Rounds, botMsgs: n.BotMsgs, unknowns: n.Unknowns,
-		lastOffer: int(n.LastOffer / 100), saidLowest: n.SaidLowest, passCountered: n.PassCountered, nudges: n.Nudges}
+		lastOffer: int(n.LastOffer / 100), saidLowest: n.SaidLowest, passCountered: n.PassCountered, toldMeal: n.ToldMeal, nudges: n.Nudges}
 	if s.ask == 0 {
 		s.ask = maxRupees
 	}
@@ -221,14 +222,24 @@ func (h haggle) decide(st haggleState, in intent, now time.Time, competing bool)
 	}
 
 	if in.kind != intentPaid && in.kind != intentAccept && in.wantsOtherMeal(h.meal) {
-		// "i texted for breakfast" to a lunch seller: no price changes that.
-		return step{next: st, pass: true, why: "wants another meal"}
+		// "lunch?" to a dinner seller: they may have misread the post, so
+		// say which meal this is once. Asking for another meal again ends
+		// it; no price changes that.
+		if st.toldMeal {
+			return step{next: st, pass: true, why: "wants another meal"}
+		}
+		next.toldMeal = true
+		return say(a, sayMeal(h.meal, a, priced))
 	}
 	switch in.kind {
 	case intentPass:
 		k, ok := h.passCounter(st)
 		if in.bought {
 			return step{next: st, pass: true, why: "bought elsewhere"}
+		}
+		if len(in.meals) > 0 {
+			// "dont need dinner": they turned down the meal, not the price.
+			return step{next: st, pass: true, why: "doesn't want this meal"}
 		}
 		if !ok {
 			return step{next: st, pass: true}
@@ -389,7 +400,7 @@ func newNegotiation(ctx context.Context, m *sellManager, t store.SellTask, s *sa
 	}
 	n := &negotiation{
 		m: m, t: t, s: s, gate: gate, log: m.log.With("task", t.ID), join: join, pay: newOfferQueue(),
-		h:     newHaggle(int(t.MinPaise/100), int(t.MaxPaise/100), median, have, t.EndsAt, portalMealLabel(s.mess, s.diet, ""), offerDay(m.cfg, t.Date)).forMeal(baseMeal(t.Meal)),
+		h:     newHaggle(int(t.MinPaise/100), int(t.MaxPaise/100), median, have, t.EndsAt, portalMealLabel(s.mess, s.diet, t.Meal), offerDay(m.cfg, t.Date)).forMeal(baseMeal(t.Meal)),
 		slots: make(chan struct{}, maxSessions), sessions: map[types.JID]*session{}, direct: make(chan error, 1),
 		silence: m.cfg.Live().Sell.NegotiationSilence.Duration, revived: make(chan *session, maxSessions),
 		ownMin: int(t.MinPaise / 100), moved: map[types.JID]bool{},

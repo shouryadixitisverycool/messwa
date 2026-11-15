@@ -924,11 +924,12 @@ Buyers message several sellers at once and leave within a minute, so the bot ans
 | `45 final`, `max 45`, `last 45` below its lowest | Says `50`, then `final offer` |
 | `too much`, `negotiable?`, `pls`, `people are selling at 70` | Comes down one step |
 | `ok`, `fine`, `done` (after a price), `same number?`, `gpay?`, `paying` | Agrees to its current price |
-| `nv?`, `kadamba?` | `bakul non-veg, 50` |
+| `nv?`, `kadamba?` | `bakul non-veg lunch, 50` |
 | `upi id?`, `send qr`, `cash?`, `can i pay in other ways` | `only whatsapp pay sorry`, once. Asking again hands them to you |
-| `nvm`, `no thanks`, `not interested`, `not req` | Counters once with a lower price. A second pass, or a pass after its lowest or at `min_price`, stops talking to them |
+| `nvm`, `no thanks`, `not interested`, `not req`, `dont need` | Counters once with a lower price. A second pass, or a pass after its lowest or at `min_price`, stops talking to them |
 | `bought already`, `sorry bought`, `got from other`, `mil gaya` | Stops talking to them, with no counter |
-| `i texted for breakfast`, `bf 60?` (to a lunch seller) | Names only other meals: stops talking to them, with no counter |
+| `dont need lunch` (to a lunch seller) | Turns down the meal itself: stops talking to them, with no counter |
+| `breakfast?`, `i texted for breakfast` (to a lunch seller) | Names only other meals. The first time, the bot says `its lunch` (with the price if it hasn't quoted one). If they name another meal again, it stops talking to them, with no counter |
 
 After two counters the next one is its lowest. A buyer still below that after the bot says so is handed to you.
 
@@ -953,7 +954,7 @@ Every DM the bot sends is in `buyer_text.go`. It writes like the sellers in the 
 | First price | `60`. For a meal that isn't today's: `60, its for tmrw` |
 | Coming down | `how about 50`, then `45?` |
 | Its lowest | `40`, `final offer` |
-| `nv?`, `kadamba?` | `kadamba non-veg for 60` |
+| `nv?`, `kadamba?` | `kadamba non-veg lunch for 60` |
 | A message it can't read | `60, want it?` |
 | Quiet for a minute after the first price | `yes or no?` |
 | Still quiet a minute later | `can do 40 if you want it` |

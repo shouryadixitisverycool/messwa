@@ -225,8 +225,11 @@ func TestHaggleOtherMeal(t *testing.T) {
 		msgs []string
 		want []string
 	}{
-		{"names another meal", []string{"price?", "i actually texted for breakfast"}, []string{"140", "PASS"}},
-		{"offers for another meal", []string{"price?", "bf 60?"}, []string{"140", "PASS"}},
+		{"names another meal", []string{"price?", "i actually texted for breakfast", "breakfast only"}, []string{"140", "its lunch", "PASS"}},
+		{"offers for another meal", []string{"price?", "bf 60?", "bf 60?"}, []string{"140", "its lunch", "PASS"}},
+		{"asks for another meal first", []string{"breakfast?", "120?"}, []string{"its lunch, 140", "140 / final offer"}},
+		{"turns down the meal", []string{"price?", "dont need lunch"}, []string{"140", "PASS"}},
+		{"dont need is a pass", []string{"price?", "dont need", "dont need"}, []string{"140", "how about 120", "PASS"}},
 		{"names the meal on sale", []string{"price?", "lunch for 120?"}, []string{"140", "140 / final offer"}},
 		{"names both", []string{"price?", "breakfast or lunch, 120?"}, []string{"140", "140 / final offer"}},
 		{"not req is a pass", []string{"price?", "not req", "not req"}, []string{"140", "how about 120", "PASS"}},
@@ -235,6 +238,18 @@ func TestHaggleOtherMeal(t *testing.T) {
 		if got := replay(h, end.Add(-4*time.Hour), c.msgs...); strings.Join(got, "|") != strings.Join(c.want, "|") {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
 		}
+	}
+	// The 15 Nov dinner chat: the buyer read the post as lunch. The bot
+	// quoted 30 four times and never said dinner.
+	dinner := newHaggle(25, 30, 0, false, end.Add(7*time.Hour), "kadamba veg dinner", "").forMeal("dinner")
+	if got := replay(dinner, end, "Lunch?", "I thought u mistyped\nDont need dinner"); strings.Join(got, "|") != "its dinner, 30|PASS" {
+		t.Errorf("dinner chat: got %q", got)
+	}
+	if got := replay(dinner, end, "Lunch?", "Lunch na?"); strings.Join(got, "|") != "its dinner, 30|PASS" {
+		t.Errorf("lunch twice: got %q", got)
+	}
+	if got := replay(dinner, end, "price?", "veg?"); strings.Join(got, "|") != "30|kadamba veg dinner for 30" {
+		t.Errorf("which: got %q", got)
 	}
 	// A haggle that doesn't know its meal reads meals as before.
 	if got := replay(newHaggle(100, 140, 0, false, end, "kadamba non-veg", ""), end.Add(-4*time.Hour), "price?", "breakfast?"); len(got) != 2 || got[1] == "PASS" {

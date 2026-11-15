@@ -37,7 +37,7 @@ func TestBuyerTextStyle(t *testing.T) {
 		pick = func(n int) int { return min(v, n-1) }
 		for _, r := range []reply{
 			sayOpening(60, ""), sayOpening(60, "tmrw"), sayCounter(50, 1), sayCounter(45, 2), sayLowest(40),
-			sayWhich("kadamba non-veg", 60), sayRestate(60), sayQueued(50), sayPayOther(), sayNoScreenshots(),
+			sayWhich("kadamba non-veg", 60), sayMeal("dinner", 60, false), sayMeal("dinner", 60, true), sayRestate(60), sayQueued(50), sayPayOther(), sayNoScreenshots(),
 			saySold(), paymentPrompt("30.00", false), paymentPrompt("1.00", true),
 		} {
 			if len(r) == 0 || len(r) > 3 {

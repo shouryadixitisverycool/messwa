@@ -84,10 +84,19 @@ func sayLowest(price int) reply {
 	)
 }
 
-// sayWhich answers "nv?" or "kadamba?". what is the mess and diet, e.g.
-// "kadamba veg".
+// sayWhich answers "nv?" or "kadamba?". what is the mess, diet and meal,
+// e.g. "kadamba veg dinner".
 func sayWhich(what string, price int) reply {
 	return oneOf(msg(fmt.Sprintf("%s for %d", what, price)), msg(fmt.Sprintf("its %s, %d", what, price)), msg(what, fmt.Sprint(price)))
+}
+
+// sayMeal answers a buyer who asked for another meal, such as "lunch?" to
+// a dinner seller. Before any price it quotes one too.
+func sayMeal(meal string, price int, priced bool) reply {
+	if priced {
+		return oneOf(msg("its "+meal), msg("its for "+meal), msg("this is "+meal))
+	}
+	return oneOf(msg(fmt.Sprintf("its %s, %d", meal, price)), msg(fmt.Sprintf("its for %s, %d", meal, price)))
 }
 
 // sayRestate answers the first message the bot couldn't read.
