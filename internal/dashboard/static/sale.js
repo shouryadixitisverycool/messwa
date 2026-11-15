@@ -266,6 +266,7 @@ function scheduledCard(s) {
   auto.title = 'Autopilot sells without waiting on you: it skips any buyer who would need you, even one offering more.';
   const more = el('a', 'ms-btn ghost more', '···');
   more.href = s.for_friend ? 'sales.html' : `sales.html#sell=${encodeURIComponent(`${s.date}|${s.meal}`)}`;
+  if (!s.for_friend) more.addEventListener('click', (e) => { if (openSellHere(s.date, s.meal)) e.preventDefault(); });
   more.setAttribute('aria-label', 'Change the price or unschedule');
   more.title = 'Change the price or unschedule';
   a.append(more);

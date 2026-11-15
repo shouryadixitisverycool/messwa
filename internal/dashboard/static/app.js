@@ -966,7 +966,7 @@ addEventListener('keydown', (e) => {
 const modal = $('modal');
 const sheet = $('sheet');
 modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
-function closeModal() { modal.hidden = true; sheet.replaceChildren(); sheet.className = 'sheet'; saleClosed(); }
+function closeModal() { modal.hidden = true; sheet.replaceChildren(); sheet.className = 'sheet'; sheet.removeAttribute('aria-labelledby'); saleClosed(); }
 
 function digits(phone) { return (phone || '').replace(/\D/g, ''); }
 
@@ -1191,6 +1191,7 @@ function renderNudge() {
 
   const go = el('a', 'nudge-go', 'SELL IT');
   go.href = `sales.html#sell=${encodeURIComponent(key)}`;
+  go.addEventListener('click', (e) => { if (openSellHere(date, c.meal)) e.preventDefault(); });
 
   const x = el('button', 'nudge-x', '×');
   x.type = 'button';
@@ -1203,6 +1204,21 @@ function renderNudge() {
   });
 
   box.replaceChildren(ic, text, go, x);
+}
+
+// The sell sheet (sell.js) opens here over the board, on the ledger the
+// nudge loaded. After an action both the ledger and the board refetch.
+const SELL = sellSheet({ data: () => N, now, toast, close: closeModal, reload: () => { loadNudge(true); load(); } });
+
+// openSellHere opens the sell sheet for one of your meals. It returns
+// false when the ledger doesn't have that meal, so the caller's link to
+// the sales page can do the job instead.
+function openSellHere(date, meal) {
+  const c = ledgerCell(date, meal);
+  if (!c || !N.owner) return false;
+  sheet.className = 'sheet sell-sheet';
+  SELL.open(date, c);
+  return true;
 }
 
 // ---------- live status ----------
