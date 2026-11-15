@@ -322,6 +322,9 @@ type session struct {
 	// heard is set once the buyer writes after the session started, which
 	// stops the nudges. A revived buyer has written.
 	heard bool
+	// repriced wakes run after a range edit lowered the opening price; see
+	// reprice.
+	repriced chan struct{}
 
 	// Guarded by n.mu.
 	state   string
@@ -427,7 +430,8 @@ func (n *negotiation) prices() haggle {
 
 // refreshRange reloads the task's floor and opening price from the store,
 // works out the target again, and records it. Every session's next turn
-// uses them. Calls are serialized and always read the store, so the last
+// uses them. When the opening price drops below what a haggling buyer was
+// last asked, the bot offers them the new price right away (see reprice). Calls are serialized and always read the store, so the last
 // edit wins whatever order they arrive in. In a pool the range is the
 // pool's (see poolPrices).
 func (n *negotiation) refreshRange(ctx context.Context) error {
@@ -450,6 +454,16 @@ func (n *negotiation) refreshRange(ctx context.Context) error {
 	n.h = n.h.withRange(int(lo/100), int(hi/100))
 	n.ownMin = int(t.MinPaise / 100)
 	h := n.h
+	if h.max < old.max {
+		for _, ss := range n.sessions {
+			if ss.state == sessionNegotiating && ss.hs.botMsgs > 0 && ss.hs.ask > h.max {
+				select {
+				case ss.repriced <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}
 	n.mu.Unlock()
 	if h.min == old.min && h.max == old.max {
 		return nil
@@ -475,7 +489,7 @@ func (n *negotiation) sessionLocked(peer types.JID) *session {
 	ss := n.sessions[peer]
 	if ss == nil {
 		ss = &session{n: n, buyer: peer, inbox: make(chan buyerMsg, 32), joined: time.Now(),
-			hs: haggleState{ask: n.h.max}}
+			hs: haggleState{ask: n.h.max}, repriced: make(chan struct{}, 1)}
 		n.sessions[peer] = ss
 	}
 	return ss
@@ -1182,6 +1196,20 @@ func (ss *session) run(first string, slot bool) {
 					paidWait = time.After(paidGrace)
 				}
 			}
+		case <-ss.repriced:
+			if debounce != nil {
+				// The reply to the buyer's pending messages uses the new price.
+				continue
+			}
+			switch ss.reprice() {
+			case handledEnded:
+				return
+			case handledReplied:
+				silence.Reset(n.silence)
+				if !ss.nudgeDue() {
+					nudge = nil
+				}
+			}
 		case <-nudge:
 			nudge = nil
 			switch ss.quietNudge() {
@@ -1260,6 +1288,35 @@ func (ss *session) quietNudge() handled {
 	}
 	ss.timeOut("went quiet after the first message and a follow-up")
 	return handledEnded
+}
+
+// reprice offers a haggling buyer the new opening price after a range edit
+// lowered it below what the bot last asked them: "how about 100". It sends
+// nothing when the buyer was never priced, is no longer haggling, has no
+// replies left, or was already asked that much or less.
+func (ss *session) reprice() handled {
+	n := ss.n
+	if n.gate.muted(n.talk, ss.buyer) {
+		return handledNothing
+	}
+	n.mu.Lock()
+	state, hs := ss.state, ss.hs
+	n.mu.Unlock()
+	k := n.prices().max
+	if state != sessionNegotiating || hs.botMsgs == 0 || hs.botMsgs >= maxBotMsgs || k >= hs.ask {
+		return handledNothing
+	}
+	next := hs
+	next.quoted = slices.Clone(hs.quoted)
+	next.ask = k
+	if !slices.Contains(next.quoted, k) {
+		next.quoted = append(next.quoted, k)
+	}
+	if !ss.say(next, sayCounter(k, 1)) {
+		return handledEnded
+	}
+	n.log.Info("price lowered; offered the buyer the new price", "buyer", ss.buyer, "from", hs.ask, "ask", k)
+	return handledReplied
 }
 
 func (ss *session) current() string {

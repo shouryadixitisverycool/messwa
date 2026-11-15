@@ -351,7 +351,8 @@ func (m *sellManager) Cancel(ctx context.Context, id int64, revoke bool) error {
 
 // SetPrices changes a running task's floor and opening price, in whole
 // rupees, without reposting or restarting it. Buyers mid-haggle get the new
-// range on their next turn. Prices the bot already quoted or agreed stand
+// range on their next turn, and one who was last asked more than the new
+// opening price hears it right away ("how about 100"). Prices the bot already quoted or agreed stand
 // even below a raised floor, and an ask is never raised. Whether the task
 // negotiates can't change: a negotiating task keeps max above min, and a
 // fixed-price one keeps them equal.

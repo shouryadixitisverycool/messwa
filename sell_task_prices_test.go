@@ -371,3 +371,48 @@ func TestSetPricesFlaggedBuyerWritesAgain(t *testing.T) {
 		}
 	})
 }
+
+// TestSetPricesLowerMaxOffersNewPrice: lowering the opening price below
+// what a haggling buyer was asked messages them the new price at once. A
+// buyer already asked less hears nothing.
+func TestSetPricesLowerMaxOffersNewPrice(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m := f.negotiatingManager(ctx, 40)
+		id, err := m.Start(ctx, 0, f.date, "lunch", 30, 60, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		f.conn.emit(f.reply(buyerA, "price?"))
+		f.conn.emit(f.reply(buyerB, "30?"))
+		settle()
+		if got := texts(sentTo(f.conn.messages(), buyerA)); strings.Join(got, "|") != "60" {
+			t.Fatalf("A got %q", got)
+		}
+		if got := texts(sentTo(f.conn.messages(), buyerB)); strings.Join(got, "|") != "how about 45" {
+			t.Fatalf("B got %q", got)
+		}
+
+		if err := m.SetPrices(ctx, id, 30, 50); err != nil {
+			t.Fatal(err)
+		}
+		settle()
+		toA := texts(sentTo(f.conn.messages(), buyerA))
+		if len(toA) != 2 || !strings.Contains(toA[1], "50") {
+			t.Fatalf("A got %q", toA)
+		}
+		if got := texts(sentTo(f.conn.messages(), buyerB)); len(got) != 1 {
+			t.Fatalf("B got %q", got)
+		}
+		// A takes it at the new price.
+		f.conn.emit(dm(buyerA, "ok"))
+		settle()
+		if b := buyerState(t, f, id, buyerA); b.Agreed != "50.00" {
+			t.Fatalf("A = %+v", b)
+		}
+	})
+}
