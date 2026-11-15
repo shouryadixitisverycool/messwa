@@ -638,6 +638,7 @@ function cardActions(v) {
   if (v.state === 'active') {
     btn('grn', '✓ Mark sold', () => saleActionForm(v, 'sold'));
     btn('', '+ Add buyer', () => saleActionForm(v, 'add'));
+    btn('red', '✕ Stop', () => saleActionForm(v, 'stop'), 'Stop selling and delete the offer posts');
   }
   btn('ghost more', '···', () => openMealSheet(v), 'Sale details: posts, tries and price over time');
   return a;
@@ -1030,12 +1031,15 @@ function saleTaskActions(v) {
   const acts = el('div', 'sb-acts');
   acts.append(saleActionButton('✓', 'MARK SOLD', () => saleActionForm(v, 'sold')),
     saleActionButton('+', 'ADD BUYER', () => saleActionForm(v, 'add')));
+  const stop = saleActionButton('✕', 'STOP SELLING', () => saleActionForm(v, 'stop'));
+  stop.classList.add('red');
+  acts.append(stop);
   return acts;
 }
 function saleActionForm(v, action, buyer) {
   saleSheet = { id: v.id, editing: true };
   sheetFor(v, false);
-  const titles = { sold: 'MARK SOLD MANUALLY', add: 'ADD BUYER', mute: 'MUTE BUYER', unmute: 'UNMUTE BUYER' };
+  const titles = { sold: 'MARK SOLD MANUALLY', add: 'ADD BUYER', mute: 'MUTE BUYER', unmute: 'UNMUTE BUYER', stop: 'STOP SELLING' };
   sheet.append(el('div', 'sb-name', titles[action]));
   const form = el('form', 'sale-action-form');
   const fields = {};
@@ -1070,19 +1074,22 @@ function saleActionForm(v, action, buyer) {
     form.append(el('p', 'sb-note', 'Confirm only after you sold the meal. This stops negotiation and records it as paid and sent. The buyer receives no message. Other buyers get the usual sold notice.'));
   } else if (action === 'add') {
     form.append(el('p', 'sb-note', 'The bot will send this buyer its opening quote.'));
+  } else if (action === 'stop') {
+    form.append(el('p', 'sb-note', `Stop selling your ${mealLabel(v)}? The bot stops talking to buyers and deletes its offer posts from the groups. You can start a new sale after.`));
   } else {
     form.append(el('p', 'sb-note', `${buyer.name || buyer.phone || buyer.key}: ${action === 'mute' ? 'stop all bot messages for this task, including sold notices?' : 'allow bot messages for this task again?'}`));
   }
   const error = el('p', 'sb-note');
   error.setAttribute('role', 'alert');
   const acts = el('div', 'sb-acts');
-  const submit = saleActionButton('✓', action === 'sold' || action === 'mute' ? 'CONFIRM' : titles[action], () => {});
+  const submit = saleActionButton(action === 'stop' ? '✕' : '✓', action === 'sold' || action === 'mute' ? 'CONFIRM' : titles[action], () => {});
   submit.type = 'submit';
+  if (action === 'stop') submit.classList.add('red');
   acts.append(submit, saleActionButton('✕', 'CANCEL', () => buyer ? openBuyerSheet(v, buyer.key) : openMealSheet(v)));
   form.append(error, acts);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const data = { action, id: v.id };
+    const data = { action: action === 'stop' ? 'cancel' : action, id: v.id };
     for (const [k, input] of Object.entries(fields)) data[k] = input.value.trim();
     if (pick && pick.value) { data.buyer = pick.value; data.name = ''; }
     if (buyer && (action === 'mute' || action === 'unmute')) data.buyer = buyer.key;
@@ -1095,7 +1102,7 @@ function saleActionForm(v, action, buyer) {
     try {
       await send('POST', 'api/sell-action', data);
       closeModal();
-      toast('Action saved');
+      toast(action === 'stop' ? 'Stopped. The offer posts are being deleted.' : 'Action saved');
       await load();
     } catch (err) { error.textContent = err.message; submit.disabled = false; }
   });

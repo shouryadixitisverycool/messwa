@@ -129,6 +129,7 @@ a.ms-btn { text-decoration: none; display: inline-flex; align-items: center; }
 .ms-btn { padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--slot); color: var(--text); font: 700 9px Pixel; cursor: pointer; }
 .ms-btn:hover { background: var(--slot-hi); }
 .ms-btn.grn { border-color: rgba(52, 196, 99, .5); color: var(--veg); }
+.ms-btn.red { border-color: rgba(255, 107, 91, .5); color: #ff6b5b; }
 .ms-btn.gold { border-color: var(--gold); background: var(--gold); color: #121620; }
 .ms-btn.gold:disabled { opacity: .4; cursor: default; }
 .ms-btn.ghost { border-color: transparent; background: none; color: var(--muted); }
@@ -223,6 +224,7 @@ a.ms-btn { text-decoration: none; display: inline-flex; align-items: center; }
 .sb-act.chat:hover { background: color-mix(in srgb, var(--veg) 85%, #fff); }
 .sb-act.grn { border-color: var(--veg); } .sb-act.grn b { color: var(--veg); }
 .sb-act.gold { border-color: color-mix(in srgb, var(--gold) 65%, transparent); } .sb-act.gold b { color: var(--gold); }
+.sb-act.red { border-color: rgba(255, 107, 91, .65); } .sb-act.red b { color: #ff6b5b; }
 .sb-act.off { opacity: .35; cursor: default; }
 .sb-act:disabled { opacity: .45; cursor: wait; }
 .sb-note { font-size: 12px; color: var(--muted); }
