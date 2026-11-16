@@ -101,6 +101,7 @@ let saleSheet = null; // {id, key} or {id, meal: true} while a sale sheet is ope
 let rangeEdit = null;
 const showGone = new Set(); // sale ids whose finished buyers are listed
 const ENDED_SHOWN = 3; // ended sales listed before the rest fold away
+const CARDS_SHOWN = 3; // sale cards on the board, running first, then the soonest schedules
 let allEnded = false;
 
 const payingNow = (v) => (v.state === 'active' && v.buyers.some((b) => b.state === 'offered')) || (v.pay && LIVE_PAY.includes(v.pay.state) && v.pay.paid);
@@ -118,9 +119,18 @@ function renderSales() {
   const kept = rangeEdit && box.querySelector(`.mysale[data-id="${rangeEdit.id}"] .ms-edit`)?.closest('.mysale');
   const parts = [];
   if (live.length || waiting.length) {
+    // Running sales always show. Schedules (soonest first) fill the rest of
+    // CARDS_SHOWN; the others are on the sales page.
+    const soon = waiting.slice(0, Math.max(0, CARDS_SHOWN - live.length));
     const grid = el('div', 'ms-grid');
-    grid.append(...live.map((v) => (kept && v.id === rangeEdit.id ? kept : chest(v))), ...waiting.map(scheduledCard));
+    grid.append(...live.map((v) => (kept && v.id === rangeEdit.id ? kept : chest(v))), ...soon.map(scheduledCard));
     parts.push(grid);
+    const hidden = waiting.length - soon.length;
+    if (hidden) {
+      const more = el('a', 'ms-more', `+${hidden} more scheduled in My sales`);
+      more.href = 'sales.html';
+      parts.push(more);
+    }
   }
   if (over.length) {
     const shown = allEnded ? over : over.slice(0, ENDED_SHOWN);
