@@ -10,7 +10,11 @@
 ## Screenshots
 
 <!-- Required when the change alters how a dashboard page looks (see AGENTS.md). Delete this section otherwise.
-     Use test data, or blur real phone numbers and names. The repo is public. -->
+     Use test data, or blur real phone numbers and names. The repo is public.
+     The ./*.png paths below only load if gh uploads the files. Keep this body in a file next to the
+     images and run `gh pr create --body-file body.md --attach ./before-desktop.png ...` (or `gh pr edit`)
+     with all four files. If the PR body still shows ./before-desktop.png after that, the upload failed.
+     Opening the PR from the web UI leaves these paths broken; drag the images into the table instead. -->
 
 | | Before | After |
 |---|---|---|
