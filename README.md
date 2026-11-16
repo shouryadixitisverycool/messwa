@@ -353,7 +353,7 @@ claude mcp add --transport http messwa http://127.0.0.1:8766/mcp
 
 ### Docker
 
-On this server the container is the live service. It uses host networking, so `config.toml` works unchanged: the dashboard binds the host's Tailscale address and MCP stays on loopback, where tokenless requests act as the first admin. If that address isn't up yet at boot, the bind fails and Docker restarts the container until it is.
+The live service runs on an AWS EC2 instance in `/opt/messwa`, reached over Tailscale. Pushing to the `prod` branch deploys it (see [Deploying to AWS](#deploying-to-aws)). The container uses host networking, so `config.toml` works unchanged: the dashboard binds the host's Tailscale address and MCP stays on loopback, where tokenless requests act as the first admin. If that address isn't up yet at boot, the bind fails and Docker restarts the container until it is.
 
 ```sh
 docker compose up -d --build        # rebuild and redeploy after code changes
@@ -367,6 +367,19 @@ To serve MCP beyond loopback, set `[mcp] listen` to that address. Every request 
 The old systemd unit (`~/.config/systemd/user/messwa.service`) is disabled. Don't run both: WhatsApp allows one connection per linked device.
 
 `/healthz` reports service availability. A disconnected user does not make the shared service unhealthy; the account page reports that user's connection status.
+
+### Deploying to AWS
+
+Every push to `prod` runs `.github/workflows/deploy.yml`. It runs `go vet` and `go test`, builds the image, pushes it to ECR tagged with the commit SHA, and runs `deploy/aws-deploy.sh` on the instance through Session Manager. The script pulls the image, restarts the container and waits for `/healthz`. If the service doesn't come up healthy within 90 seconds, it puts the previous image back and the job fails.
+
+```sh
+git push origin origin/master:prod     # ship master
+git push origin <sha>:prod --force     # roll back to an older commit
+```
+
+The job logs in to AWS with GitHub's OIDC token, so the repo stores no AWS keys. The IAM role `messwa-github-deploy` only accepts tokens from this repo's `prod` branch. It reads the repo variables `AWS_DEPLOY_ROLE_ARN` and `EC2_INSTANCE_ID`.
+
+The instance reaches the campus-only mess portal (`mess.iiit.ac.in`, 10.10.32.26) through the home server's Tailscale subnet routes and an `/etc/hosts` entry. If the home server is down, portal features fail but WhatsApp and the dashboard keep running.
 
 ### Log files
 
