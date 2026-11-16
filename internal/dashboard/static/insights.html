@@ -23,21 +23,20 @@
         <h1>Market insights</h1>
         <p class="sub">What sells, when, and who's selling</p>
       </div>
-      <nav class="navs" aria-label="Pages">
-        <a class="nav-link" href="./" title="Back to the listings"><span id="navIcon"></span>Auction house</a>
-        <a class="nav-link" href="sales.html" title="Who you sold to, and for how much"><span id="salesIcon"></span>My sales</a>
-        <a class="nav-link" href="usage.html" title="How everyone is using messwa"><span id="useIcon"></span>Usage</a>
-        <a class="nav-link" href="account.html" id="accountLink" title="Your account">Account</a>
-      </nav>
+      <div class="navrow">
+        <nav class="navs" aria-label="Pages">
+          <a class="nav-link" href="./" title="Back to the listings"><span id="navIcon"></span>Auction house</a>
+          <a class="nav-link" href="sales.html" title="Who you sold to, and for how much"><span id="salesIcon"></span>My sales</a>
+          <a class="nav-link" href="usage.html" title="How everyone is using messwa"><span id="useIcon"></span>Usage</a>
+          <a class="nav-link" href="account.html" id="accountLink" title="Your account">Account</a>
+        </nav>
+        <div class="fbar">
+          <button class="win ftoggle" id="fToggle" type="button" aria-label="Filters" title="Filters" aria-haspopup="menu" aria-expanded="false" aria-controls="fMenu"><span id="fIcon"></span></button>
+          <div class="fmenu" id="fMenu" role="menu" aria-label="Filters" hidden></div>
+        </div>
+      </div>
     </div>
   </header>
-
-  <div class="filters" id="filters" aria-label="Filters">
-    <div class="wins" id="fSeason" aria-label="Season"></div>
-    <div class="wins" id="fRange" aria-label="Range"></div>
-    <div class="wins" id="fMess" aria-label="Mess"></div>
-    <div class="wins" id="fDiet" aria-label="Diet"></div>
-  </div>
 
   <p class="notice" id="notice" hidden></p>
 
