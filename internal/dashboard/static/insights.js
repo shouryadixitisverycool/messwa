@@ -389,7 +389,7 @@ function renderBoards() {
   const cells = [];
   for (const m of messes) for (let wd = 0; wd < 7; wd++) for (const ml of meals) cells.push(slot(rows, m, wd, ml, sv[wd]));
   const vals = cells.map(cellValue).filter((v) => v != null);
-  const lo = F.metric === 'ask' ? Math.min(...vals) : 0, hi = F.metric === 'rate' ? 1 : Math.max(...vals, 0.001);
+  const lo = F.metric === 'ask' && vals.length ? Math.min(...vals) : 0, hi = F.metric === 'rate' ? 1 : Math.max(...vals, 0.001);
   const shade = (v) => (v == null ? 0 : (v - lo) / Math.max(hi - lo, 0.001));
   const todayWd = wdOf(D.today);
   const box = $('boards');
@@ -454,8 +454,10 @@ function renderBoards() {
     ramp.append(i);
   }
   const what = { rate: 'share of listings that sold', listed: 'listings per serving', ask: 'median asking price', wanted: 'buy requests per serving' }[F.metric];
-  key.append(el('span', '', F.metric === 'ask' ? `₹${Math.round(lo) || 0}` : '0'), ramp,
-    el('span', '', F.metric === 'rate' ? '100%' : cellLabel({}, hi)), el('span', 'wnote', `${cap(what)}. ×N under a day is how many of it this range covers.${F.metric === 'rate' ? ` Faded slots have fewer than ${MIN_SLOT} listings.` : ''}`));
+  // Rate's scale is always 0-100%. The others come from the data, so with no
+  // values their ends read '-', like an empty cell.
+  const ends = F.metric === 'rate' ? ['0', '100%'] : vals.length ? [F.metric === 'ask' ? cellLabel({}, lo) : '0', cellLabel({}, hi)] : ['-', '-'];
+  key.append(el('span', '', ends[0]), ramp, el('span', '', ends[1]), el('span', 'wnote', `${cap(what)}. ×N under a day is how many of it this range covers.${F.metric === 'rate' ? ` Faded slots have fewer than ${MIN_SLOT} listings.` : ''}`));
   keyPop(box.closest('.chest').querySelector('.chest-head')).replaceChildren(key);
   renderRanks(cells);
   renderSlot(rows, sv);
