@@ -622,9 +622,8 @@ func (s *Server) Get(ctx context.Context, id int64) (GetOut, error) {
 // except the ones their settings hide.
 func (s *Server) MealSchedule() *meals.Schedule { return s.sched.Without(s.cfg.Live().HiddenMeal) }
 
-// PrevMeal is the meal served before date's meal, counting meals the
-// settings hide, since the mess still serves them. An offer for the meal
-// may go up only once it ends.
+// PrevMeal is the meal served before date's meal, skipping meals the
+// settings hide. An offer for the meal may go up only once it ends.
 func (s *Server) PrevMeal(date, meal string) (meals.Slot, bool) {
 	day, err := time.ParseInLocation("2006-01-02", date, s.sched.Location())
 	if err != nil {
@@ -633,7 +632,7 @@ func (s *Server) PrevMeal(date, meal string) (meals.Slot, bool) {
 	meal, _, _ = strings.Cut(meal, "#")
 	for _, w := range s.sched.Windows(day) {
 		if w.Meal == meal {
-			return s.sched.Prev(w)
+			return s.MealSchedule().Prev(w)
 		}
 	}
 	return meals.Slot{}, false

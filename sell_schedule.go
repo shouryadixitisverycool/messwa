@@ -140,15 +140,21 @@ func listTime(start, end time.Time, offset time.Duration, opens time.Time) time.
 // listOpens is the earliest an offer for slot may go up: when the meal
 // before it ends. Zero when there is none.
 func listOpens(cfg *config.Config, slot meals.Slot) time.Time {
-	if prev, ok := meals.New(cfg).Prev(slot); ok {
+	if prev, ok := prevMeal(cfg, slot); ok {
 		return prev.End
 	}
 	return time.Time{}
 }
 
+// prevMeal is the meal served before slot, skipping meals the settings
+// hide: with snacks hidden, dinner's offer can go up once lunch ends.
+func prevMeal(cfg *config.Config, slot meals.Slot) (meals.Slot, bool) {
+	return meals.New(cfg).Without(cfg.Live().HiddenMeal).Prev(slot)
+}
+
 // tooEarly is the error for starting slot's offer before listOpens.
 func tooEarly(cfg *config.Config, slot meals.Slot, now time.Time) error {
-	prev, ok := meals.New(cfg).Prev(slot)
+	prev, ok := prevMeal(cfg, slot)
 	if !ok || !now.Before(prev.End) {
 		return nil
 	}

@@ -361,3 +361,24 @@ func TestSellScheduleStartsOnAutopilot(t *testing.T) {
 		synctest.Wait()
 	})
 }
+
+// TestHiddenMealDoesNotHoldTheNextOffer covers hide_snacks: dinner's offer
+// waits for lunch, not snacks.
+func TestHiddenMealDoesNotHoldTheNextOffer(t *testing.T) {
+	f := newSellFixture(t, filepath.Join(t.TempDir(), "data.db"))
+	dinner, err := findSlot(f.cfg, f.date, "dinner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prev, _ := prevMeal(f.cfg, dinner); prev.Meal != "snacks" {
+		t.Fatalf("meal before dinner %q, want snacks", prev.Meal)
+	}
+	f.cfg.HideSnacks = true
+	prev, _ := prevMeal(f.cfg, dinner)
+	if prev.Meal != "lunch" {
+		t.Fatalf("meal before dinner with snacks hidden %q, want lunch", prev.Meal)
+	}
+	if got := listOpens(f.cfg, dinner); !got.Equal(prev.End) {
+		t.Fatalf("dinner opens %v, want lunch's end %v", got, prev.End)
+	}
+}
