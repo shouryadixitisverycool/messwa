@@ -150,24 +150,47 @@ table.sellers .slot-cell svg { width: 13px; height: 13px; }
 .ftoggle svg { display: block; }
 .fmenu {
   position: absolute; top: calc(100% + 6px); right: 0; z-index: 40;
-  width: 280px; max-width: calc(100vw - 32px); padding: 6px;
+  width: 300px; max-width: calc(100vw - 20px); padding: 8px;
   background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
   box-shadow: 0 12px 32px rgb(0 0 0 / .5);
 }
+.fhead {
+  display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 2px 6px 8px 8px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--line); font: 700 9px Pixel; letter-spacing: .6px; color: var(--muted);
+}
+.fhead b { flex: 1; font-weight: 700; }
+.freset, .fbackbtn {
+  height: 24px; padding: 0 9px 1px; border-radius: 6px; cursor: pointer;
+  background: var(--slot); border: 1px solid var(--line);
+  font: 700 8px Pixel; letter-spacing: .6px; color: var(--gold);
+}
+.freset:hover:not(:disabled), .fbackbtn:hover { background: var(--slot-hi); border-color: color-mix(in srgb, var(--gold) 55%, transparent); }
+.freset:disabled { color: var(--dim); cursor: default; opacity: .6; }
+.fbackbtn { display: grid; place-items: center; width: 26px; padding: 0; }
 .fitem {
-  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 42px; padding: 0 12px;
-  background: none; border: 0; border-radius: 8px; cursor: pointer;
-  font: 14px var(--sans); color: var(--text); text-align: left;
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 50px; padding: 6px 10px 6px 8px;
+  background: none; border: 0; border-radius: 9px; cursor: pointer; text-align: left; color: var(--text);
+  transition: background .12s;
 }
 .fitem:hover, .fitem:focus-visible { background: var(--slot-hi); outline: none; }
-.fitem .fname { flex: 1; min-width: 0; }
-.fitem .fval { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 55%; }
-.fitem svg, .fitem .fnoicon { flex: none; width: 12px; }
-.fitem.on { color: var(--gold); }
-.fback { color: var(--muted); border-bottom: 1px solid var(--line); border-radius: 8px 8px 0 0; margin-bottom: 4px; }
-.freset { margin-top: 4px; border-top: 1px solid var(--line); border-radius: 0 0 8px 8px; color: var(--muted); }
-.freset:disabled { opacity: .45; cursor: default; }
-.freset:disabled:hover { background: none; }
+.fitem > svg { flex: none; opacity: .55; }
+/* Each pick sits in an inventory slot. */
+.ftile {
+  flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 8px;
+  background: var(--bg); border: 1px solid var(--line); box-shadow: inset 0 -2px 0 rgb(0 0 0 / .35);
+}
+.ftile svg { display: block; }
+.ftext { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.ftext b { font: 700 8px Pixel; letter-spacing: .7px; color: var(--dim); }
+.ftext span { font: 14px/1.2 var(--sans); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ftext small { font-size: 12px; color: var(--muted); }
+/* A group off its default, and the picked choice, glow gold. */
+.fitem.set .ftext span, .fopt.on .ftext span { color: var(--gold); }
+.fitem.set .ftile, .fopt.on .ftile {
+  border-color: color-mix(in srgb, var(--gold) 65%, transparent);
+  box-shadow: inset 0 -2px 0 rgb(0 0 0 / .35), 0 0 8px color-mix(in srgb, var(--gold) 25%, transparent);
+}
+.fopt.on > svg { opacity: 1; }
 
 @media (max-width: 640px) {
   /* The links stay one swipeable strip, cut off before the hopper. */

@@ -218,27 +218,55 @@ const HOPPER_ON = pix(HOPPER_ROWS, { o: '#5c4513', L: '#ffc53d', D: '#c98f16', d
 const DIET_NAMES = [['all', 'Any diet'], ['veg', 'Veg'], ['nonveg', 'Non-veg'], ['egg', 'Egg']];
 let fView = ''; // the group open in the filter menu, '' for the list of groups
 
-// filterGroups lists the menu's groups. Each item is [value, label, icon, tip].
+// Icons for the picks that have none of their own.
+const ANY_SEASON = pix(Array(12).fill('bbbbbbgggggg'), { b: TERM, g: '#ffc53d' });
+const ANY_DIET = pix([
+  '............',
+  '.gggg..rrrr.',
+  '.gggg..rrrr.',
+  '.gggg..rrrr.',
+  '.gggg..rrrr.',
+  '............',
+  '............',
+  '....yyyy....',
+  '....yyyy....',
+  '....yyyy....',
+  '....yyyy....',
+  '............',
+], { g: '#34c463', r: '#e2553f', y: '#f2b51b' });
+// weeksIcon draws a range as three bars of four weeks; all weeks fills them blue.
+function weeksIcon(n) {
+  const rows = [];
+  for (let i = 0; i < 3; i++) {
+    const c = !n ? 'b' : i < n / 4 ? 'g' : 'd';
+    rows.push(c.repeat(12), c.repeat(12), c.repeat(12), '............');
+  }
+  return pix(rows, { g: '#ffc53d', d: '#2b3346', b: TERM });
+}
+
+// filterGroups lists the menu's groups. Each item is [value, label, icon, tip, note].
 function filterGroups() {
   const sel = F.season || D.current;
-  const swatch = (s) => pix(['xxx', 'xxx', 'xxx'], { x: s.term ? TERM : '#ffc53d' });
+  const swatch = (s) => pix(Array(12).fill('xxxxxxxxxxxx'), { x: s.term ? TERM : '#ffc53d' });
   return [
     {
       key: 'season', name: 'Season', on: (v) => v === sel,
-      items: [...shownSeasons().map((s) => [s.key, `${s.name.replace(/ term$/i, '')} '${seasonYear(s).slice(2)}`, swatch(s), seasonTip(s)]),
-        ['all', 'All seasons', null, () => [[{ t: 'All seasons', c: 'nm' }], [{ t: 'Terms and breaks together. Weekday patterns blend two different markets.', c: 'c7' }]]]],
+      items: [...shownSeasons().map((s) => [s.key, `${s.name.replace(/ term$/i, '')} '${seasonYear(s).slice(2)}`, swatch(s), seasonTip(s), `${fmtShort(s.from)} to ${fmtShort(s.to)}`]),
+        ['all', 'All seasons', ANY_SEASON, () => [[{ t: 'All seasons', c: 'nm' }], [{ t: 'Terms and breaks together. Weekday patterns blend two different markets.', c: 'c7' }]], 'Terms and breaks together']],
       set: (v) => { F.season = v === D.current ? '' : v; pick = null; load(); },
     },
-    { key: 'range', name: 'Range', on: (v) => F.weeks === v, items: RANGES.map(([v]) => [v, v ? `${v} weeks` : 'All weeks']), set: () => load(), field: 'weeks' },
+    { key: 'range', name: 'Range', field: 'weeks', on: (v) => F.weeks === v, items: RANGES.map(([v]) => [v, v ? `${v} weeks` : 'All weeks', weeksIcon(v)]), set: () => load() },
     {
-      key: 'mess', name: 'Mess', on: (v) => F.mess === v,
-      items: [['all', 'All messes'], ...D.messes.map((m) => [m.name, cap(m.name), messIcon(m.name)])],
-      set: (v) => { if (pick && v !== 'all' && pick.mess !== v) pick = null; render(); }, field: 'mess',
+      key: 'mess', name: 'Mess', field: 'mess', on: (v) => F.mess === v,
+      items: [['all', 'All messes', icon('all')], ...D.messes.map((m) => [m.name, cap(m.name), messIcon(m.name)])],
+      set: (v) => { if (pick && v !== 'all' && pick.mess !== v) pick = null; render(); },
     },
-    { key: 'diet', name: 'Diet', on: (v) => F.diet === v, items: DIET_NAMES.map(([v, t]) => [v, t, v === 'all' ? null : dietMark(v)]), set: () => render(), field: 'diet' },
+    { key: 'diet', name: 'Diet', field: 'diet', on: (v) => F.diet === v, items: DIET_NAMES.map(([v, t]) => [v, t, v === 'all' ? ANY_DIET : dietMark(v)]), set: () => render() },
   ];
 }
-const picked = (g) => (g.items.find(([v]) => g.on(v)) || [])[1] || '';
+const current = (g) => g.items.find(([v]) => g.on(v)) || [];
+const picked = (g) => current(g)[1] || '';
+const changed = (g) => (g.field ? F[g.field] !== FDEF[g.field] : F.season !== FDEF.season);
 const filtered = () => Object.keys(FDEF).some((k) => F[k] !== FDEF[k]);
 
 function renderFilters() {
@@ -267,11 +295,19 @@ const pixIcon = (markup, size) => {
   return i;
 };
 
-// renderMenu draws the filter menu: the groups with their current pick, or
-// the open group's choices with a way back.
+// renderMenu draws the filter menu: a slot per group showing its current
+// pick, or the open group's choices with a way back.
 function renderMenu(gs = filterGroups()) {
   const m = $('fMenu');
   m.replaceChildren();
+  const tile = (markup) => { const t = el('span', 'ftile'); if (markup) t.append(pixIcon(markup, 16)); return t; };
+  const text = (top, main, note) => {
+    const t = el('span', 'ftext');
+    if (top) t.append(el('b', '', top));
+    t.append(el('span', '', main));
+    if (note) t.append(el('small', '', note));
+    return t;
+  };
   const row = (cls, ...kids) => {
     const b = el('button', `fitem ${cls}`);
     b.type = 'button';
@@ -280,13 +316,14 @@ function renderMenu(gs = filterGroups()) {
     m.append(b);
     return b;
   };
+  const head = el('div', 'fhead');
+  m.append(head);
   const g = gs.find((x) => x.key === fView);
+  const back = () => { fView = ''; renderMenu(gs); m.querySelector('.fitem').focus(); };
   if (!g) {
-    for (const x of gs) {
-      row('', el('span', 'fname', x.name), el('span', 'fval', picked(x)), pixIcon(icon('next'), 10))
-        .addEventListener('click', () => { fView = x.key; renderMenu(gs); m.querySelector('.fitem').focus(); });
-    }
-    const r = row('freset', el('span', 'fname', 'Reset filters'));
+    head.append(pixIcon(HOPPER, 14), el('b', '', 'FILTERS'));
+    const r = el('button', 'freset', 'RESET');
+    r.type = 'button';
     r.disabled = !filtered();
     r.addEventListener('click', () => {
       const reload = F.season !== FDEF.season || F.weeks !== FDEF.weeks;
@@ -295,13 +332,22 @@ function renderMenu(gs = filterGroups()) {
       savePrefs();
       if (reload) load(); else { renderFilters(); render(); }
     });
+    head.append(r);
+    for (const x of gs) {
+      row(changed(x) ? 'set' : '', tile(current(x)[2]), text(x.name.toUpperCase(), picked(x)), pixIcon(icon('next'), 10))
+        .addEventListener('click', () => { fView = x.key; renderMenu(gs); m.querySelector('.fitem').focus(); });
+    }
     return;
   }
-  row('fback', pixIcon(icon('prev'), 10), el('span', 'fname', g.name))
-    .addEventListener('click', () => { fView = ''; renderMenu(gs); m.querySelector('.fitem').focus(); });
-  for (const [v, label, mark, tipFn] of g.items) {
+  const bk = el('button', 'fbackbtn');
+  bk.type = 'button';
+  bk.setAttribute('aria-label', 'Back to filters');
+  bk.append(pixIcon(icon('prev'), 10));
+  bk.addEventListener('click', back);
+  head.append(bk, el('b', '', g.name.toUpperCase()));
+  for (const [v, label, mark, tipFn, note] of g.items) {
     const on = g.on(v);
-    const b = row(on ? 'on' : '', mark ? pixIcon(mark, 12) : el('span', 'fnoicon'), el('span', 'fname', label));
+    const b = row(`fopt${on ? ' on' : ''}`, tile(mark), text('', label, note));
     if (on) b.append(pixIcon(icon('check'), 12));
     b.setAttribute('role', 'menuitemradio');
     b.setAttribute('aria-checked', on);
