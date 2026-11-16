@@ -764,6 +764,10 @@ a.copy.linked:hover .copy-go { color: var(--gold); }
 .sell-form input:not([type=range], [type=radio], [type=file]), .sell-form select { width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--slot); color: var(--text); font: inherit; }
 .sell-form input:not([type=range], [type=radio], [type=file]):focus-visible, .sell-form select:focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; }
 .sell-form .sell-note, .sell-form .sell-err, .sell-form .sell-acts { margin-top: 0; }
+/* The −/+ price box inside a form keeps its own look, not a form field's. */
+.sell-form .pr-in input.pr-num, .sell-form .pr-in input.pr-num:focus-visible {
+  padding: 0 6px 0 2px; border: 0; border-radius: 0; outline: none; background: none; font: 400 18px/1 Pixel; color: var(--gold);
+}
 @media (max-width: 420px) { .sell-tools { grid-template-columns: 1fr; } }
 /* A schedule's tools: START NOW beside AUTOPILOT, then prices and unschedule. */
 .sell-tools.pairs { grid-template-columns: 1fr 1fr; }

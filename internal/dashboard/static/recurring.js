@@ -12,7 +12,6 @@ let recurringLoadedAt = 0;
 let recurringLoading = false;
 let recurringSlider = null;
 let recurringEditing = null;
-let recurringPriceLabel = null;
 // The % of median a meal sells at, per meal; kept while meals are toggled.
 let recurringRelative = {};
 const recurringRelDefault = { low: -15, high: 25 };
@@ -56,52 +55,111 @@ function ruleMedian(meal) {
   return m ? m.median : null;
 }
 
+// The meal rows' bar runs from 50% under the median to double it.
+const relBar = (v) => Math.min(100, Math.max(0, ((v + 50) / 150) * 100));
+
+// pctBox is a −/+ box for a percentage around the median, in steps of 5.
+function pctBox(label, aria, get, set) {
+  const w = el('div', 'pr-box'), field = el('div', 'pr-in sm');
+  const minus = el('button', '', '−'), plus = el('button', '', '+'), n = el('input', 'pr-num');
+  Object.assign(n, { type: 'text', inputMode: 'numeric', autocomplete: 'off', enterKeyHint: 'done' });
+  n.setAttribute('aria-label', `${aria}, percent above or below the median`);
+  const show = () => { n.value = get() > 0 ? `+${get()}` : String(get()); };
+  for (const [btn, d, word] of [[minus, -5, 'down'], [plus, 5, 'up']]) {
+    btn.type = 'button';
+    btn.setAttribute('aria-label', `${aria} ${word} 5%`);
+    btn.addEventListener('click', () => { set(Math.round((get() + d) / 5) * 5); show(); });
+  }
+  n.addEventListener('input', () => { const v = parseInt(n.value.replace(/[^\d-]/g, ''), 10); if (!Number.isNaN(v)) set(v, true); });
+  n.addEventListener('change', show);
+  n.addEventListener('keydown', (k) => {
+    if (k.key === 'ArrowUp' || k.key === 'ArrowDown') { k.preventDefault(); (k.key === 'ArrowUp' ? plus : minus).click(); }
+  });
+  field.append(minus, el('span', 'cur pct', '%'), n, plus);
+  w.append(el('span', 'pr-k', label), field);
+  show();
+  return { node: w, show };
+}
+
+// renderRuleRelative shows the price controls for the chosen mode: the
+// ₹ range alone, or a row per meal in % of its median plus the ₹ range for
+// meals with no median yet.
 function renderRuleRelative() {
   const median = rulePricingMode() === 'median';
-  const box = $('ruleRelative');
-  box.hidden = !median;
-  if (recurringPriceLabel) recurringPriceLabel.textContent = median ? 'If a meal has no median yet, use' : 'Price';
+  const box = $('ruleRelative'), fixed = $('rulePrice');
+  box.hidden = !median; fixed.hidden = median;
   box.replaceChildren();
+  if (recurringSlider && !median) fixed.replaceChildren(...recurringSlider.nodes);
   if (!median) return;
   const r5 = (v) => Math.max(1, Math.round(v / 5) * 5);
   for (const input of $('ruleMeals').querySelectorAll('input:checked')) {
     const meal = input.value;
     const rel = recurringRelative[meal] || (recurringRelative[meal] = { ...recurringRelDefault });
-    const row = el('div', 'rule-rel-row'), name = el('span', 'rr-meal'), est = el('span', 'rr-est');
+    const row = el('div', 'rr-row'), top = el('div', 'rr-top'), name = el('span', 'rr-meal'), est = el('span', 'rr-est');
     name.append(svgEl(icon(meal)), cap(meal));
-    const field = (label, key) => {
-      const l = el('label', 'rr-field'), wrap = el('span', 'rr-in'), n = el('input');
-      Object.assign(n, { type: 'number', min: -90, max: key === 'low' ? 200 : 300, step: 5, value: rel[key] });
-      n.setAttribute('aria-label', `${cap(meal)} ${label.toLowerCase()}, percent above or below the median`);
-      n.addEventListener('input', () => { rel[key] = Number(n.value); draw(); });
-      wrap.append(n, el('i', '', '%'));
-      l.append(el('span', '', label), wrap);
-      return l;
-    };
+    top.append(name, est);
+    const bar = el('div', 'rr-bar'), band = el('i', 'band'), tick = el('i', 'mid');
+    tick.style.left = `${relBar(0)}%`;
+    bar.append(band, tick);
+    const lo = pctBox('LOWEST', `${cap(meal)} lowest`, () => rel.low, (v, typing) => {
+      rel.low = Math.max(-90, Math.min(200, v));
+      if (rel.high < rel.low) { rel.high = rel.low; hi.show(); }
+      if (!typing) lo.show();
+      draw();
+    });
+    const hi = pctBox('OPENS AT', `${cap(meal)} opening`, () => rel.high, (v, typing) => {
+      rel.high = Math.max(-90, Math.min(300, v));
+      if (rel.low > rel.high) { rel.low = rel.high; lo.show(); }
+      if (!typing) hi.show();
+      draw();
+    });
+    const vals = el('div', 'pr-vals');
+    vals.append(lo.node, hi.node);
     const draw = () => {
+      band.style.left = `${relBar(rel.low)}%`;
+      band.style.right = `${100 - relBar(rel.high)}%`;
       const m = ruleMedian(meal);
       est.replaceChildren();
-      if (m == null) { est.append(el('b', '', `${signedPct(rel.low)} to ${signedPct(rel.high)}`), el('small', '', 'no median yet')); return; }
-      const lo = r5(m * (100 + rel.low) / 100), hi = Math.max(lo, r5(m * (100 + rel.high) / 100));
-      est.append(el('b', '', lo === hi ? `≈ ₹${lo}` : `≈ ₹${lo}-${hi}`), el('small', '', `median ₹${Math.round(m)}`));
+      if (m == null) { est.append(el('small', '', 'no median yet')); return; }
+      const a = r5(m * (100 + rel.low) / 100), b = Math.max(a, r5(m * (100 + rel.high) / 100));
+      est.append(el('b', '', a === b ? `₹${a}` : `₹${a}–${b}`), el('small', '', `median ₹${Math.round(m)}`));
     };
-    row.append(name, field('Lowest', 'low'), field('Opens at', 'high'), est);
+    row.append(top, vals, bar);
     draw();
     box.append(row);
   }
-  if (!box.children.length) box.append(el('p', 'sell-note', 'Pick a meal to set its price.'));
-  else box.append(el('p', 'sell-note', 'Each meal goes by its own recent median for your mess and diet, on the same weekday. Waiting meals follow the market until they go up; meals you edit by hand keep your prices.'));
+  if (!box.children.length) { box.append(el('p', 'sell-note', 'Pick a meal to price it.')); return; }
+  if (recurringSlider) {
+    const row = el('div', 'rr-row rr-fallback'), top = el('div', 'rr-top'), name = el('span', 'rr-meal');
+    name.append(el('i', 'rr-q', '?'), 'No median yet');
+    top.append(name, el('span', 'rr-est', ''));
+    row.append(top, recurringSlider.nodes[0]);
+    box.append(row);
+  }
 }
 
 function rulePayload(action) {
   return { action, rule: ruleForm(), apply_waiting: $('ruleApply').checked };
 }
 
+// Saving needs a fresh preview: any change swaps SAVE back to PREVIEW.
 function invalidateRulePreview() {
   recurringPreviewKey = '';
   $('ruleSave').disabled = true;
+  $('ruleSave').hidden = true;
+  $('rulePreview').hidden = false;
+  $('rulePreviewBox').hidden = true;
   $('rulePreviewSum').hidden = true;
-  $('rulePreviewText').textContent = 'Preview the rule to see which meals it schedules, then save.';
+  $('rulePreviewText').textContent = '';
+}
+
+// ruleSpanText is how long the rule runs, for the dates label.
+function ruleSpanText() {
+  const a = $('ruleFrom').value, b = $('ruleThrough').value;
+  if (!a || !b) return '';
+  const days = Math.round((Date.parse(b + 'T12:00:00Z') - Date.parse(a + 'T12:00:00Z')) / 86400000) + 1;
+  if (!(days > 0)) return '';
+  return days % 7 === 0 ? `${days / 7} week${days === 7 ? '' : 's'}` : `${days} day${days === 1 ? '' : 's'}`;
 }
 
 function setRuleBusy(busy) {
@@ -132,8 +190,8 @@ function ruleDateText(date) {
   return typeof fmtDay === 'function' ? fmtDay(date) : date;
 }
 
-function ruleChip(parent, type, value, label, checked, art) {
-  const l = el('label', 'chip'), input = el('input'), span = el('span');
+function ruleChip(parent, type, value, label, checked, art, cls = 'rseg-i') {
+  const l = el('label', cls), input = el('input'), span = el('span');
   input.type = type; input.value = String(value); input.checked = checked;
   if (art) span.append(svgEl(art));
   span.append(label);
@@ -151,13 +209,12 @@ function fillRuleTimes(before) {
 
 function drawRulePrice(min, max) {
   $('ruleMin').value = min; $('ruleMax').value = max;
-  if (typeof priceSlider !== 'function') return;
-  recurringSlider = priceSlider({ planner: true, schedule: { min, max } });
-  const box = $('rulePrice');
-  recurringPriceLabel = el('span', 'fr-k', 'Price');
-  box.replaceChildren(recurringPriceLabel, ...recurringSlider.nodes);
+  if (typeof priceRange !== 'function') return;
+  const hi = Math.max(150, Math.ceil(max / 50) * 50);
+  recurringSlider = priceRange({ lo: min, hi: max, bounds: { lo: 1, hi }, axis: ['₹1', '', `₹${hi}`] });
   // Runs before the form's listener, so the preview check sees new prices.
-  box.oninput = () => { const [lo, hi] = recurringSlider.get(); $('ruleMin').value = lo; $('ruleMax').value = hi; };
+  const sync = () => { const [lo, top] = recurringSlider.get(); $('ruleMin').value = lo; $('ruleMax').value = top; };
+  for (const n of recurringSlider.nodes) { n.addEventListener('input', sync); n.addEventListener('click', sync); }
 }
 
 function showRuleSheet(open) {
@@ -185,6 +242,7 @@ function editRecurringRule(rule, open = true) {
   };
   recurringEditing = r.id ? r : null;
   for (const [id, key] of [['ruleID', 'id'], ['ruleRevision', 'revision'], ['ruleName', 'name'], ['ruleFrom', 'from'], ['ruleThrough', 'through']]) $(id).value = r[key];
+  $('ruleSpan').textContent = ruleSpanText();
   $('ruleAuto').checked = !!r.autopilot; $('ruleEnabled').checked = !!r.enabled;
   $('ruleApply').checked = false; $('ruleRemoveWaiting').checked = false;
   $('ruleApplyRow').hidden = !r.id || !r.waiting;
@@ -196,9 +254,9 @@ function editRecurringRule(rule, open = true) {
   fillRuleTimes(r.before);
   recurringRelative = JSON.parse(JSON.stringify(r.relative || {}));
   const pricing = $('rulePricing');
-  pricing.replaceChildren(el('legend', '', 'Price'));
-  for (const [value, label] of [['', 'Fixed ₹'], ['median', '% of median']]) {
-    ruleChip(pricing, 'radio', value, label, (r.pricing || '') === value);
+  pricing.replaceChildren(el('legend', '', 'Pricing'));
+  for (const [value, label] of [['', '₹ Fixed'], ['median', '% Median']]) {
+    ruleChip(pricing, 'radio', value, label, (r.pricing || '') === value, '', 't2-i');
     const input = pricing.children[pricing.children.length - 1].children[0];
     input.name = 'rulePricing';
   }
@@ -206,8 +264,8 @@ function editRecurringRule(rule, open = true) {
   renderRuleRelative();
   $('ruleTitle').textContent = r.id ? r.name : 'New rule';
   $('ruleSub').textContent = r.id
-    ? `${r.enabled ? 'Active' : 'Paused'} · ${r.waiting || 0} meal${r.waiting === 1 ? '' : 's'} waiting. Changes apply to meals it schedules from now on.`
-    : 'Schedules your registered meals that match, up to four weeks ahead. It checks for new registrations every five minutes.';
+    ? `${r.enabled ? 'Active' : 'Paused'} · ${r.waiting || 0} waiting · changes apply to new meals`
+    : 'Sells matching registered meals up to four weeks ahead.';
   $('ruleDeleteAsk').hidden = !r.id;
   $('ruleError').textContent = r.last_error ? `Last run: ${r.last_error}` : '';
   showRuleDelete(false);
@@ -296,17 +354,23 @@ function previewTiles(out, applying) {
   const tiles = [['NEW', out.new, out.new ? 'gold' : ''], ['START NOW', out.starts_now, out.starts_now ? 'gold' : ''], ['KEPT', out.kept, '']];
   if (recurringEditing) tiles.push([applying ? 'UPDATED' : 'UNCHANGED', out.waiting, ''], ['YOUR EDITS', out.preserved_overrides, '']);
   if (out.existing) tiles.push(['ALREADY SET', out.existing, '']);
-  if (out.new && out.highest) tiles.push(['PRICES', out.lowest === out.highest ? `₹${out.lowest}` : `₹${out.lowest}-${out.highest}`, 'gold']);
+  if (out.new && out.highest) tiles.push(['PRICES', out.lowest === out.highest ? `₹${out.lowest}` : `₹${out.lowest}–${out.highest}`, 'gold']);
   if (out.fallback) tiles.push(['NO MEDIAN', out.fallback, '']);
   return tiles.map(([k, v, cls]) => { const t = el('div', 'st'); t.append(el('span', '', k), el('b', cls, String(v))); return t; });
 }
 
 $('ruleIcon').append?.(svgEl(icon('clock')));
-$('ruleForm').addEventListener('input', invalidateRulePreview);
+$('ruleClock').append?.(svgEl(icon('clock')));
+$('ruleForm').addEventListener('input', (e) => {
+  invalidateRulePreview();
+  if (e?.target === $('ruleFrom') || e?.target === $('ruleThrough')) $('ruleSpan').textContent = ruleSpanText();
+});
 $('ruleForm').addEventListener('change', (e) => {
   invalidateRulePreview();
   if (e.target?.name === 'rulePricing' || e.target?.closest?.('#ruleMeals')) renderRuleRelative();
 });
+// The −/+ boxes change prices on click, which fires no input event.
+$('ruleForm').addEventListener('click', (e) => { if (e.target?.closest?.('.pr-in button')) invalidateRulePreview(); });
 $('ruleNew').onclick = () => editRecurringRule();
 $('ruleCancel').onclick = closeRuleSheet;
 $('ruleDeleteAsk').onclick = () => showRuleDelete(true);
@@ -321,12 +385,15 @@ $('rulePreview').onclick = async () => {
   try {
     const out = await send('POST', 'api/recurring-rules', payload);
     recurringPreviewKey = JSON.stringify(rulePayload('save'));
-    $('rulePreviewText').textContent = (out.starts_now
-      ? `${out.new} new meal${out.new === 1 ? '' : 's'} to schedule; ${out.starts_now} start selling immediately when you save.`
-      : `${out.new} new meal${out.new === 1 ? '' : 's'} to schedule. Nothing starts selling right away.`)
-      + (out.fallback ? ` ${out.fallback} ${out.fallback === 1 ? 'has' : 'have'} no market median yet and use${out.fallback === 1 ? 's' : ''} the fixed price.` : '');
+    $('rulePreviewText').textContent = [
+      out.starts_now ? `${out.starts_now} start selling immediately when you save.` : '',
+      out.fallback ? `${out.fallback} ${out.fallback === 1 ? 'has' : 'have'} no median yet and use${out.fallback === 1 ? 's' : ''} the ₹ range.` : '',
+    ].filter(Boolean).join(' ');
     $('rulePreviewSum').replaceChildren(...previewTiles(out, payload.apply_waiting));
     $('rulePreviewSum').hidden = false;
+    $('rulePreviewBox').hidden = false;
+    $('rulePreview').hidden = true;
+    $('ruleSave').hidden = false;
     ok = true;
   } catch (e) { $('ruleError').textContent = e.message; invalidateRulePreview(); }
   finally { setRuleBusy(false); $('ruleSave').disabled = !ok; }

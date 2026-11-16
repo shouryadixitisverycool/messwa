@@ -195,44 +195,53 @@
   <div class="sheet sell-sheet rule-sheet" role="dialog" aria-modal="true" aria-labelledby="ruleTitle">
     <div class="sell-head">
       <h2 id="ruleTitle">New rule</h2>
-      <div class="sub" id="ruleSub">Schedules matching registered meals up to four weeks ahead, checking every five minutes.</div>
+      <div class="sub" id="ruleSub">Sells matching registered meals up to four weeks ahead.</div>
     </div>
     <form id="ruleForm" class="sell-form" novalidate>
       <fieldset class="plan-fieldset rule-fields" id="ruleFields">
         <input id="ruleID" type="hidden"><input id="ruleRevision" type="hidden">
         <input id="ruleMin" type="hidden"><input id="ruleMax" type="hidden">
-        <label>Name<input id="ruleName" maxlength="80" autocomplete="off" placeholder="e.g. Weekday lunches"></label>
-        <fieldset class="chips rule-days" id="ruleDays"><legend>Days</legend></fieldset>
-        <fieldset class="chips rule-meals" id="ruleMeals"><legend>Meals</legend></fieldset>
-        <div class="rule-row">
-          <label>From<input type="date" id="ruleFrom"></label>
-          <label>Until<input type="date" id="ruleThrough"></label>
+        <input id="ruleName" class="rule-name" maxlength="80" autocomplete="off" placeholder="Name, e.g. Weekday lunches" aria-label="Rule name">
+        <fieldset class="rseg rule-days" id="ruleDays"><legend>Days</legend></fieldset>
+        <fieldset class="rseg rule-meals" id="ruleMeals"><legend>Meals</legend></fieldset>
+        <div class="rf">
+          <span class="rf-k">Dates <b id="ruleSpan"></b></span>
+          <div class="rule-dates">
+            <input type="date" id="ruleFrom" aria-label="From">
+            <span class="rd-arrow" aria-hidden="true">&rarr;</span>
+            <input type="date" id="ruleThrough" aria-label="Until">
+          </div>
         </div>
-        <fieldset class="chips rule-pricing" id="rulePricing"><legend>Price</legend></fieldset>
-        <div class="rule-rel" id="ruleRelative" hidden></div>
-        <div class="fr-price" id="rulePrice"></div>
-        <label>Goes up<select id="ruleBefore"></select></label>
-        <div class="rule-toggles">
-          <label class="rule-toggle auto"><input id="ruleAuto" type="checkbox"><b>AUTOPILOT</b><small>Skip buyers who need you</small></label>
-          <label class="rule-toggle on"><input id="ruleEnabled" type="checkbox"><b>ACTIVE</b><small>Keep scheduling new meals</small></label>
+        <div class="rf">
+          <div class="rf-top">
+            <span class="rf-k">Price</span>
+            <fieldset class="toggle2" id="rulePricing"><legend>Pricing</legend></fieldset>
+          </div>
+          <div class="rule-rel" id="ruleRelative" hidden></div>
+          <div class="fr-price" id="rulePrice"></div>
         </div>
-        <label class="plan-auto rule-apply" id="ruleApplyRow" hidden><input id="ruleApply" type="checkbox"><span>Also update its <b id="ruleWaitingCount">0</b> waiting meals. Meals you edited by hand keep their own settings.</span></label>
+        <label class="rf rule-when"><span class="rf-k">Goes up</span><span class="rw-in"><i id="ruleClock" aria-hidden="true"></i><select id="ruleBefore"></select></span></label>
+        <div class="rule-switches">
+          <label class="rsw"><span class="rsw-t"><b>Autopilot</b><small>Skips buyers who need you</small></span><input id="ruleAuto" type="checkbox" role="switch"><i aria-hidden="true"></i></label>
+          <label class="rsw"><span class="rsw-t"><b>Active</b><small>Keeps scheduling new meals</small></span><input id="ruleEnabled" type="checkbox" role="switch"><i aria-hidden="true"></i></label>
+          <label class="rsw" id="ruleApplyRow" hidden><span class="rsw-t"><b>Update <span id="ruleWaitingCount">0</span> waiting</b><small>Meals you edited by hand keep theirs</small></span><input id="ruleApply" type="checkbox" role="switch"><i aria-hidden="true"></i></label>
+        </div>
       </fieldset>
-      <div class="rule-preview" id="rulePreviewBox">
-        <p class="sell-note" id="rulePreviewText" role="status"></p>
+      <div class="rule-preview" id="rulePreviewBox" hidden>
         <div class="sell-sum" id="rulePreviewSum" hidden></div>
+        <p class="sell-note" id="rulePreviewText" role="status"></p>
       </div>
       <div class="rule-delete" id="ruleDeleteBox" hidden>
-        <p class="sell-note">Deleting stops this rule. Meals already selling carry on. Its waiting meals stay scheduled unless you remove them, and removed meals stay out of every rule until you allow them again from the planner.</p>
-        <label class="plan-auto"><input id="ruleRemoveWaiting" type="checkbox">Remove its waiting meals too</label>
+        <p class="sell-note">Stops the rule. Meals already selling carry on, and its waiting meals stay scheduled unless you remove them. Removed meals stay out of every rule until you allow them again from the planner.</p>
+        <label class="rsw"><span class="rsw-t"><b>Remove its waiting meals</b></span><input id="ruleRemoveWaiting" type="checkbox" role="switch"><i aria-hidden="true"></i></label>
         <div class="sell-acts"><button type="button" class="sell-btn" id="ruleDeleteBack">BACK</button><button type="button" class="sell-btn red" id="ruleDelete">DELETE RULE</button></div>
       </div>
       <p class="sell-err" id="ruleError" role="alert"></p>
       <div class="sell-acts" id="ruleActs">
         <button type="button" class="sell-btn red rule-del" id="ruleDeleteAsk" hidden>DELETE</button>
         <button type="button" class="sell-btn" id="ruleCancel">CANCEL</button>
-        <button type="button" class="sell-btn" id="rulePreview">PREVIEW</button>
-        <button type="submit" class="sell-btn gold" id="ruleSave" disabled>SAVE RULE</button>
+        <button type="button" class="sell-btn gold" id="rulePreview">PREVIEW</button>
+        <button type="submit" class="sell-btn gold" id="ruleSave" disabled hidden>SAVE RULE</button>
       </div>
     </form>
   </div>
