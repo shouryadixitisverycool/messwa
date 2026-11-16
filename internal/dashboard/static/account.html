@@ -20,7 +20,6 @@
       <span class="logo" id="logo"></span>
       <div>
         <h1 id="who">Account</h1>
-        <p class="sub" id="role">&nbsp;</p>
       </div>
       <nav class="navs" aria-label="Pages">
         <a class="nav-link" href="./" title="Back to the listings"><span id="navIcon"></span>Auction house</a>
@@ -36,7 +35,6 @@
       <span class="head-meta" id="suMeta"></span>
     </div>
     <div class="form">
-      <p class="note">People who made an account on the sign-up page. They can't see the board until you approve them. Declined accounts can still sign in, but only to see that you declined them; remove them with <code>messwa user remove</code>.</p>
       <p class="err" id="suErr" role="alert" hidden></p>
       <table class="signups"><tbody id="suBody"></tbody></table>
     </div>
@@ -49,7 +47,6 @@
       <span class="head-meta" id="waMeta"></span>
     </div>
     <div class="form">
-      <p class="note">Your own WhatsApp, linked as a device. Your chats, buyers and sales are private to you. Linking sends no messages. How it sells is on the <a href="settings.html">settings page</a>.</p>
       <p class="wa-status" id="waStatus">Checking…</p>
       <img id="waQR" alt="QR code to scan in WhatsApp, Linked devices" hidden class="pairing-qr">
       <div class="actions"><button class="btn primary" id="waLink" type="button">Link WhatsApp</button><button class="btn" id="waUnlink" type="button" hidden>Unlink</button></div>
@@ -64,7 +61,7 @@
       <span class="head-meta" id="keyMeta"></span>
     </div>
     <div class="form">
-      <p class="note">Your key for the IIIT mess portal. messwa uses it to read your own registrations and QR: on <a href="sales.html">your meals page</a>, and in the <code>my_registrations</code> and <code>my_qr</code> MCP tools. It's stored encrypted and never shown again after you save it.</p>
+      <p class="note">messwa uses it to read your own registrations and QR. It's stored encrypted and never shown again.</p>
       <p class="notice" id="noSecret" hidden>The server has no <code>MESSWA_SECRET_KEY</code>, so it can't store keys yet. Ask the admin to set it.</p>
       <form id="keyForm" class="row">
         <label class="grow">New key<input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your mess API key" required></label>
@@ -82,7 +79,6 @@
       <span class="head-meta" id="tokMeta"></span>
     </div>
     <div class="form">
-      <p class="note">An agent connects to messwa's MCP server with one of these as its bearer token, and acts as you. Make one per device so you can revoke it alone.</p>
       <form id="tokForm" class="row">
         <label class="grow">Label<input id="label" maxlength="64" placeholder="laptop" autocomplete="off"></label>
         <button class="btn primary" type="submit">Create token</button>

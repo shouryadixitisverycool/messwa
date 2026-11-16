@@ -37,8 +37,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   const text = el('div', 'attn-text');
   const line = el('span', 'attn-line');
   line.setAttribute('role', 'status');
-  const sub = el('span', 'attn-sub', 'Mark one done once you have handled it. That doesn\'t refund or resend anything.');
-  text.append(line, sub);
+  text.append(line);
   const bell = el('button', 'attn-bell');
   bell.type = 'button';
   head.append(mark, text, bell);
@@ -100,7 +99,8 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     const title = el('b', '', item.title);
     const w = when(item);
     if (w) title.append(el('small', '', ' · ' + w));
-    copy.append(title, el('p', '', item.detail));
+    copy.append(title);
+    if (item.detail) copy.append(el('p', '', item.detail));
     const acts = el('div', 'attn-acts');
     const go = el('a', 'attn-btn go', item.account ? 'RECONNECT' : item.task ? 'OPEN SALE' : item.rule ? 'OPEN RULE' : 'VIEW MEAL');
     go.href = target(item);

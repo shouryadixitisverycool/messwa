@@ -113,7 +113,7 @@ func (s *Server) Attention(ctx context.Context, user int64) ([]AttentionItem, er
 	}
 	if active && s.Device != nil {
 		if status, ok := s.Device.Status().(map[string]any); ok && status["connected"] == false {
-			add("whatsapp", "whatsapp", "WhatsApp disconnected", "Your sales can't post or reply until you reconnect.", "", "", 0, true, false)
+			add("whatsapp", "whatsapp", "WhatsApp disconnected", "", "", "", 0, true, false)
 		}
 	}
 	return out, nil

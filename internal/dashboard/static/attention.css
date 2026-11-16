@@ -20,7 +20,6 @@
 }
 .attn-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .attn-line { font: 700 13px Pixel, var(--sans); color: var(--tone); letter-spacing: .3px; }
-.attn-sub { color: var(--muted); font-size: 12.5px; }
 
 .attn-bell {
   padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--slot);
@@ -68,7 +67,6 @@
 
 @media (max-width: 640px) {
   .attn { padding: 10px 8px 10px 12px; }
-  .attn-sub { display: none; }
   .attn-row { grid-template-columns: 1fr; gap: 6px; padding: 9px 9px 9px 12px; }
   .attn-acts .attn-btn { flex: 1; justify-content: center; padding: 9px 10px; }
 }

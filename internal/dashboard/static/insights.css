@@ -130,6 +130,7 @@ table.sellers .slot-cell svg { width: 13px; height: 13px; }
   .odds { grid-template-columns: minmax(0, 1fr); }
   .insights .chest-head { flex-wrap: wrap; }
   .insights .head-meta { display: block; flex-basis: 100%; order: 3; }
+  .insights .head-meta:empty { display: none; }
   /* Metric buttons take their own row so the key's ? stays top right. */
   .insights .chest-head:has(> .keybtn) .wins { order: 2; flex-basis: 100%; margin-left: 0; }
   .wc { height: 40px; }

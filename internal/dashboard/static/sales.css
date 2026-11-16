@@ -254,7 +254,6 @@ button.friend { cursor: pointer; }
 
 /* The panel, with a meal or a pick open in it. */
 .panel.calm { background: linear-gradient(rgba(16, 0, 16, .95), rgba(16, 0, 16, .95)) padding-box, linear-gradient(180deg, #3a1a90, #1c0a55) border-box; }
-.cal-how { margin: 10px 0 0; font-size: 12.5px; }
 .cal-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
 .cal-head > div { min-width: 0; }
 .cal-x { flex: none; margin: -2px -4px 0 0; font-size: 16px; }

@@ -277,11 +277,6 @@ function calWeekPanel(panel) {
   if (D.owner && free) lines.push([{ t: 'Registered, not up for sale ', c: 'c7' }, { t: String(free), c: 'cf' }]);
   if (lines.length === 2) lines.push([{ t: all.length ? 'Nothing sold or scheduled.' : 'Nothing registered this week.', c: 'c8' }]);
   fillLines(panel, lines);
-  const how = el('p', 'lore cal-how');
-  how.append(D.owner
-    ? 'Click a meal to see it, or to sell one still to come. To set several at once, shift-click them, click a day or meal icon, or turn on Pick several.'
-    : 'Click a meal to see what became of it.');
-  panel.append(how);
 }
 
 // calInfoPanel is a meal the panel can't schedule: past, selling or sold.

@@ -24,7 +24,6 @@ async function paintMe() {
   const m = await me();
   $('who').textContent = m.name;
   $('pwUser').value = m.name;
-  $('role').textContent = 'Your WhatsApp account, meals and sales are private to you.';
   $('noSecret').hidden = m.can_store_keys;
   $('keyMeta').replaceChildren(m.mess_key_set ? el('b', '', 'saved') : el('span', 'red', 'not set'));
   $('key').placeholder = m.mess_key_set ? 'Paste a new key to replace it' : 'Paste your mess API key';

@@ -854,7 +854,7 @@ $('varHelp').addEventListener('click', (e) => { if (e.target === $('varHelp')) $
   const m = await me();
   const admin = m.role === 'admin';
   isAdmin = admin;
-  $('role').textContent = admin ? 'Selling tabs are yours. 👑 tabs change messwa for everyone.' : 'Selling tabs are for your own WhatsApp.';
+  $('role').textContent = admin ? 'Selling tabs are yours.' : 'Selling tabs are for your own WhatsApp.';
   paintTiles(m);
   try {
     const r = await fetch('api/settings', { cache: 'no-store' });
