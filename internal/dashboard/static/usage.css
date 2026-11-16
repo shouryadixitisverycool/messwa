@@ -19,10 +19,6 @@
 .u-man { background: var(--u-man); }
 .u-img { background: var(--u-img); }
 
-/* The colors mean nothing without their key, so legends stay at every width. */
-.usage .pleg { display: flex; flex-wrap: wrap; }
-.usage .chest-head { flex-wrap: wrap; }
-
 .u-note { margin: 10px 2px 0; font-size: 11.5px; color: var(--dim); }
 .u-note b { color: var(--text); font-weight: 600; }
 

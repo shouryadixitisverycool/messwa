@@ -455,8 +455,8 @@ function renderBoards() {
   }
   const what = { rate: 'share of listings that sold', listed: 'listings per serving', ask: 'median asking price', wanted: 'buy requests per serving' }[F.metric];
   key.append(el('span', '', F.metric === 'ask' ? `₹${Math.round(lo) || 0}` : '0'), ramp,
-    el('span', '', F.metric === 'rate' ? '100%' : cellLabel({}, hi)), el('span', '', `· ${what}. ×N under a day is how many of it this range covers.${F.metric === 'rate' ? ` Faded slots have fewer than ${MIN_SLOT} listings.` : ''}`));
-  box.append(key);
+    el('span', '', F.metric === 'rate' ? '100%' : cellLabel({}, hi)), el('span', 'wnote', `${cap(what)}. ×N under a day is how many of it this range covers.${F.metric === 'rate' ? ` Faded slots have fewer than ${MIN_SLOT} listings.` : ''}`));
+  keyPop(box.closest('.chest').querySelector('.chest-head')).replaceChildren(key);
   renderRanks(cells);
   renderSlot(rows, sv);
 }

@@ -379,6 +379,62 @@ function tip(node, fn) {
   node.addEventListener('pointerleave', hideTip);
 }
 
+// ---------- keys ----------
+
+// A chart's key hides behind a ? button at the right end of its box's
+// header and opens as a popover. keyPop returns the popover for a header,
+// making the button the first time, so a page can fill it again on every
+// render. The popover lives inside the box so the box's CSS variables still
+// color the swatches.
+function keyPop(head) {
+  const old = head.querySelector(':scope > .keybtn');
+  if (old) return old.popoverTargetElement;
+  const pop = el('div', 'keypop');
+  pop.popover = 'auto';
+  pop.setAttribute('role', 'dialog');
+  pop.setAttribute('aria-label', 'Key');
+  const b = el('button', 'keybtn', '?');
+  b.type = 'button';
+  b.title = 'What the colors mean';
+  b.setAttribute('aria-label', 'Show the key');
+  b.setAttribute('aria-expanded', 'false');
+  b.popoverTargetElement = pop;
+  pop.addEventListener('toggle', (e) => {
+    const open = e.newState === 'open';
+    b.setAttribute('aria-expanded', String(open));
+    if (open) placeKey(b, pop);
+  });
+  head.append(b);
+  head.closest('.chest, .mini').append(pop);
+  return pop;
+}
+
+// placeKey hangs the popover under its button, right edges lined up, and
+// keeps it on screen.
+function placeKey(b, pop) {
+  const r = b.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
+  const left = Math.max(8, Math.min(r.right - w, innerWidth - w - 8));
+  const top = r.bottom + 6 + h > innerHeight - 8 ? Math.max(8, r.top - 6 - h) : r.bottom + 6;
+  pop.style.left = `${left}px`;
+  pop.style.top = `${top}px`;
+}
+
+// The popover is fixed to the screen, so it follows its button on scroll.
+const followKey = () => {
+  const pop = document.querySelector('.keypop:popover-open');
+  if (pop) placeKey(pop.parentElement.querySelector('.keybtn[aria-expanded="true"]'), pop);
+};
+addEventListener('scroll', followKey, { passive: true, capture: true });
+addEventListener('resize', followKey);
+
+// Keys written into the page's HTML move behind their box's button. A key
+// inside a small chart (.mini) gets its own button by that chart's title.
+for (const leg of document.querySelectorAll('.chest .slegend, .chest .legend, .chest .pleg')) {
+  const box = leg.closest('.mini') || leg.closest('.chest');
+  const head = box.querySelector(box.matches('.mini') ? 'h4' : '.chest-head');
+  if (head) keyPop(head).append(leg);
+}
+
 // ---------- money ----------
 
 // rupees prints whole amounts bare and paise with two decimals: ₹60, ₹2.37.

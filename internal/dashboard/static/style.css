@@ -163,6 +163,28 @@ button.nav-link { cursor: pointer; }
   font: 600 16px/1 var(--sans); padding-bottom: 2px;
 }
 .pg:disabled { opacity: .3; cursor: default; }
+
+/* A box's key: a ? at the right end of its header that opens a popover. */
+.keybtn {
+  flex: none; width: 24px; height: 24px; margin-left: auto; padding: 0 0 1px; border-radius: 7px; cursor: pointer;
+  background: var(--slot); border: 1px solid var(--line);
+  font: 700 11px/1 Pixel, var(--sans); color: var(--muted);
+}
+.keybtn:hover, .keybtn[aria-expanded="true"] { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 55%, var(--line)); }
+.mini h4:has(> .keybtn) { display: flex; align-items: center; gap: 8px; }
+.mini h4 > .keybtn { width: 20px; height: 20px; border-radius: 6px; font-size: 9px; letter-spacing: 0; }
+.keypop {
+  position: fixed; inset: auto; margin: 0;
+  max-width: min(300px, calc(100vw - 16px)); padding: 12px 14px; border-radius: 12px;
+  background: #1d2330; border: 1px solid var(--line); box-shadow: 0 12px 30px rgba(0, 0, 0, .5);
+  color: var(--muted); font-size: 12px;
+}
+.keypop[popover] > :is(.pleg, .legend, .slegend, .wkey) {
+  flex-direction: column; align-items: flex-start; gap: 9px;
+  margin: 0; padding: 0; border: 0; white-space: normal;
+}
+.keypop[popover] > .wkey { flex-direction: row; flex-wrap: wrap; gap: 6px 8px; }
+.keypop .wnote { flex-basis: 100%; }
 .live { display: flex; align-items: center; gap: 6px; font-size: 11.5px; padding-left: 10px; border-left: 1px solid var(--line); white-space: nowrap; }
 .live i { width: 7px; height: 7px; border-radius: 50%; background: var(--veg); box-shadow: 0 0 0 0 rgba(52, 196, 99, .6); animation: pulse 2.4s infinite; }
 .live.off i { background: var(--nonveg); animation: none; }
@@ -480,7 +502,7 @@ a.copy.linked:hover .copy-go { color: var(--gold); }
 
 /* width 0 + min-width 100%: match the board's width without widening it */
 .pulse { width: 0; min-width: 100%; }
-.legend { display: flex; gap: 12px; font-size: 11.5px; white-space: nowrap; }
+.legend { display: flex; gap: 12px; font-size: 11.5px; }
 .legend i { display: inline-block; width: 7px; height: 10px; margin-right: 5px; border-radius: 2px 2px 0 0; background: var(--text); vertical-align: -1px; }
 .legend i.m { background: color-mix(in srgb, var(--text) 30%, transparent); }
 .wins { display: flex; gap: 4px; padding-left: 10px; border-left: 1px solid var(--line); }
@@ -558,11 +580,12 @@ a.copy.linked:hover .copy-go { color: var(--gold); }
 }
 @media (max-width: 640px) {
   .cards { grid-template-columns: minmax(0, 1fr); }
-  .legend { display: none; }
   .pulse .head-name { flex: 1; white-space: nowrap; }
-  /* The window buttons wrap under the title on the narrowest phones. */
+  /* The window buttons get their own row under the title, which keeps the
+     key's ? in the top right corner. */
   .pulse .chest-head { flex-wrap: wrap; row-gap: 8px; }
   .wins { margin-left: auto; }
+  .pulse .wins { order: 1; flex-basis: 100%; justify-content: flex-end; padding-left: 0; border-left: 0; }
   .win { padding: 0 6px 1px; }
 }
 

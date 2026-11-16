@@ -140,7 +140,6 @@
   .ledger, .rbody { flex-direction: column; }
   .lside, .tiers { width: 100%; }
   .ecards { grid-template-columns: minmax(0, 1fr); }
-  .pleg { display: none; }
   .price { font-size: 16px; }
 }
 
