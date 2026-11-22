@@ -7,7 +7,7 @@
 // ---------- state ----------
 
 const saved = (() => { try { return JSON.parse(localStorage.getItem('mah') || '{}'); } catch { return {}; } })();
-const S = Object.assign({ tab: 'kadamba', mode: 'sell', sort: 'recent', recentDir: 'desc', priceDir: 'asc', diet: 'all', meal: 'all', sold: false, win: 30, via: 'whatsapp' }, saved, { page: 0, q: '' });
+const S = Object.assign({ tab: 'kadamba', mode: 'sell', sort: 'recent', recentDir: 'desc', priceDir: 'asc', diet: 'all', meal: 'all', sold: false, win: 30, via: 'whatsapp' }, saved, { page: 0 });
 const persist = () => {
   const { tab, mode, sort, recentDir, priceDir, diet, meal, sold, win, via } = S;
   localStorage.setItem('mah', JSON.stringify({ tab, mode, sort, recentDir, priceDir, diet, meal, sold, win, via }));
@@ -139,10 +139,6 @@ function matches(l, tab) {
   if (!S.sold && l.status !== 'available') return false;
   if (S.meal !== 'all' && l.meal !== S.meal) return false;
   if (S.diet !== 'all' && (tab === 'all' || !vegOnly(tab)) && (l.diet || '') !== S.diet) return false;
-  if (S.q) {
-    const hay = [l.text, l.seller.name, l.seller.phone, l.mess, l.meal, ...(l.groups || [])].join(' ').toLowerCase();
-    if (!S.q.toLowerCase().split(/\s+/).every((w) => hay.includes(w))) return false;
-  }
   return true;
 }
 
@@ -257,16 +253,6 @@ function renderDay() {
   const mark = el('div', 'now-mark');
   mark.style.setProperty('left', pct(n));
   track.append(mark);
-
-  const lab = $('dayLabel');
-  lab.replaceChildren();
-  if (D.current) {
-    lab.append(el('b', '', cap(D.current.meal)), ' is being served. ',
-      el('span', 'gold', `${dur(D.current.end - n)} left`), `, until ${hm(D.current.end)}`);
-  } else if (D.next) {
-    lab.append('Next up: ', el('b', '', cap(D.next.meal)), ` at ${hm(D.next.start)} ${dayWord(D.next.date) === 'today' ? '' : dayWord(D.next.date)}`,
-      el('span', 'gold', ` (in ${dur(D.next.start - n)})`));
-  }
 }
 
 function renderTabs() {
@@ -316,7 +302,7 @@ function renderGrid() {
   if (!list.length) {
     const box = el('div', 'empty');
     const inner = el('div');
-    inner.append(el('b', '', S.q ? 'NO MATCHES' : 'NOTHING HERE'), emptyText());
+    inner.append(el('b', '', 'NOTHING HERE'), emptyText());
     box.append(inner);
     grid.append(box);
   }
@@ -328,7 +314,6 @@ function renderGrid() {
   const bits = [`${avail} ${S.mode === 'sell' ? 'for sale' : 'wanted'}`];
   if (S.meal !== 'all') bits.push(S.meal);
   if (S.diet !== 'all' && (S.tab === 'all' || !vegOnly(S.tab))) bits.push(DIET_LABEL[S.diet].toLowerCase());
-  if (S.q) bits.push(`matching "${S.q}"`);
   $('headMeta').textContent = bits.join(' · ');
   $('pgText').textContent = `${S.page + 1}/${pages}`;
   $('pgPrev').disabled = S.page === 0;
@@ -630,7 +615,7 @@ function renderControls() {
   if (!left.firstChild) {
     const help = el('button', 'slot ctl help');
     help.append(el('span', 'q', '?'), el('span', 'lbl', 'KEYS'));
-    help.addEventListener('click', () => toast('Keys: 1-5 messes, arrows pages, R P D M S W, / search'));
+    help.addEventListener('click', () => toast('Keys: 1-5 messes, arrows pages, R P D M S W'));
     tip(help, () => [
       [{ t: 'Mess Auction House', c: 'nm c6' }],
       [{ t: 'Merged from your 4 mess groups.', c: 'c8' }],
@@ -641,7 +626,6 @@ function renderControls() {
       [{ t: 'D / M ', c: 'ce' }, { t: 'diet / meal filter, Shift goes back', c: 'c7' }],
       [{ t: 'S ', c: 'ce' }, { t: `show ${modeDone().toLowerCase()}`, c: 'c7' }],
       [{ t: 'W ', c: 'ce' }, { t: 'selling or wanted', c: 'c7' }],
-      [{ t: '/ ', c: 'ce' }, { t: 'search', c: 'c7' }],
       0,
       [{ t: 'Slot corners', c: 'c7' }],
       [{ t: '  diet mark, meal, quantity', c: 'c8' }],
@@ -925,16 +909,9 @@ const toggleMode = () => update(() => { S.mode = S.mode === 'sell' ? 'buy' : 'se
 $('pgPrev').addEventListener('click', () => turn(-1));
 $('pgNext').addEventListener('click', () => turn(1));
 
-const q = $('q');
-q.addEventListener('input', () => { S.q = q.value.trim(); S.page = 0; render(); });
-
 addEventListener('keydown', (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   if (!$('modal').hidden) { if (e.key === 'Escape') closeModal(); return; }
-  if (document.activeElement === q) {
-    if (e.key === 'Escape') { q.value = ''; S.q = ''; q.blur(); render(); }
-    return;
-  }
   const k = e.key.toLowerCase();
   // The keys drive the market board, so they do nothing while it's off the
   // home page.
@@ -949,7 +926,6 @@ addEventListener('keydown', (e) => {
   else if (k === 'm') cycleMeal(e.shiftKey ? -1 : 1);
   else if (k === 's') toggleSold();
   else if (k === 'w') toggleMode();
-  else if (k === '/') { e.preventDefault(); q.focus(); }
   else return;
 });
 

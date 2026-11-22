@@ -70,7 +70,7 @@ svg { display: block; }
 
 .top {
   display: grid;
-  grid-template-columns: auto minmax(200px, 1fr) auto;
+  grid-template-columns: auto minmax(200px, 1fr);
   gap: 28px;
   align-items: center;
 }
@@ -92,10 +92,7 @@ button.nav-link { cursor: pointer; }
 .nav-link b { font-weight: inherit; }
 .nav-link span svg { width: 14px; height: 14px; display: block; }
 
-.day { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
-.day-label { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.day-label b { color: var(--text); font-weight: 600; }
-.day-label .gold { color: var(--gold); }
+.day { min-width: 0; padding: 5px 0 15px; }
 .track {
   position: relative;
   height: 8px;
@@ -115,25 +112,6 @@ button.nav-link { cursor: pointer; }
 .seg-glyph.coin.armed svg { border-radius: 50%; animation: ring 1.8s infinite; }
 @keyframes ring { 0% { box-shadow: 0 0 0 0 rgba(255, 197, 61, .6); } 70% { box-shadow: 0 0 0 6px rgba(255, 197, 61, 0); } 100% { box-shadow: 0 0 0 0 rgba(255, 197, 61, 0); } }
 .now-mark { position: absolute; top: -5px; bottom: -5px; width: 2px; margin-left: -1px; border-radius: 2px; background: #fff; box-shadow: 0 0 8px #fff8; }
-.day { padding-bottom: 14px; }
-
-.search {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  width: 250px;
-  height: 38px;
-  padding: 0 12px;
-  border-radius: 11px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  transition: border-color .15s, box-shadow .15s;
-}
-.search:focus-within { border-color: #3d4860; box-shadow: 0 0 0 3px rgba(122, 162, 255, .14); }
-.search-key { font: 700 11px Pixel; color: var(--dim); border: 1px solid var(--line); border-radius: 5px; padding: 0 5px 1px; }
-.search input { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--text); font: inherit; }
-.search input::placeholder { color: var(--dim); }
-.search input::-webkit-search-cancel-button { filter: invert(.6); }
 
 /* ---------- chest ---------- */
 
@@ -591,23 +569,17 @@ a.copy.linked:hover .copy-go { color: var(--gold); }
 
 /* ---------- small screens ---------- */
 
-/* Title, links, day bar and search need ~1360px in one row. Below that the
-   links drop under the title, and below 1100px the day bar gets its own row. */
-@media (max-width: 1380px) {
+/* Title, links and day bar need ~1200px in one row. Below that the links
+   drop under the title and the day bar gets its own row. */
+@media (max-width: 1200px) {
+  .top { grid-template-columns: 1fr; gap: 14px; }
   .brand { flex-wrap: wrap; row-gap: 10px; min-width: 0; }
   .navs { display: flex; flex: 1 1 100%; flex-wrap: wrap; gap: 6px; }
   .nav-link { margin-left: 0; }
 }
-@media (max-width: 1100px) {
-  .top { grid-template-columns: minmax(0, 1fr) auto; gap: 14px 20px; }
-  .day { grid-column: 1 / -1; grid-row: 2; }
-  .search { width: 200px; }
-}
 @media (max-width: 640px) {
   :root { --s: 56px; --gap: 5px; --cols: 5; --rows: 7; }
   .app { padding: 16px 10px 28px; gap: 14px; }
-  .top { grid-template-columns: 1fr; }
-  .search { width: 100%; grid-row: 3; }
   .brand .sub { display: none; }
   .brand { flex: 1 1 100%; min-width: 0; flex-wrap: wrap; row-gap: 12px; }
   .brand h1 { font-size: 15px; }

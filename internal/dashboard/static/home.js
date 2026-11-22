@@ -206,7 +206,6 @@ function homeApply() {
     sec.hidden = true;
     host.append(sec);
   }
-  $('searchBox').hidden = !homeHas('market');
   $('homeEmpty').hidden = homeOrder.length > 0;
   for (const id of homeOrder) homeDraw(id);
   if (typeof D !== 'undefined' && D) {
@@ -319,7 +318,7 @@ function withDemo(fn) {
   if (!demo || Math.abs(demo.state.now - now()) > 600) demo = demoData(Math.floor(now()));
   const d0 = D, n0 = N, s0 = { ...S };
   D = demo.state; N = demo.sales;
-  Object.assign(S, { tab: 'all', mode: 'sell', sold: false, meal: 'all', diet: 'all', q: '', page: 0 });
+  Object.assign(S, { tab: 'all', mode: 'sell', sold: false, meal: 'all', diet: 'all', page: 0 });
   try { return fn(); } finally { D = d0; N = n0; Object.assign(S, s0); }
 }
 
