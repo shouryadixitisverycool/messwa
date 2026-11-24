@@ -166,8 +166,10 @@ div.ms-done:hover { opacity: .75; }
 .sb-face.need { border-color: var(--red); } .sb-face.chk { border-color: var(--egg); } .sb-face.pay, .sb-face.won { border-color: var(--veg); }
 .sb-who { flex: 1; min-width: 0; }
 .sb-name { color: var(--text); font-weight: 600; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sb-phone { display: flex; gap: 6px; align-items: baseline; margin-top: 2px; font-size: 12px; color: var(--muted); }
-.sb-copy { padding: 0; border: none; background: none; color: var(--blue); font: inherit; font-size: 12px; cursor: pointer; }
+.sb-phone { display: flex; gap: 6px; align-items: center; margin-top: 2px; font-size: 12px; color: var(--muted); }
+.sb-copy { display: grid; place-items: center; padding: 2px; border: none; border-radius: 4px; background: none; color: var(--blue); cursor: pointer; }
+.sb-copy:hover { background: color-mix(in srgb, var(--blue) 15%, transparent); }
+.sb-copy svg { display: block; width: 14px; height: 14px; }
 .sb-x { width: 30px; height: 30px; flex: none; border-radius: 8px; border: 1px solid var(--line); background: none; color: var(--muted); font-size: 14px; cursor: pointer; }
 .sb-x:hover { color: var(--text); }
 

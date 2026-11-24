@@ -240,6 +240,21 @@ const ART = {
     '............',
     '............',
   ], { c: '#5be37a' }],
+  // Two sheets, the front one over the back. It takes the button's colour.
+  copy: [[
+    '............',
+    '.cccccc.....',
+    '.c....c.....',
+    '.c..cccccc..',
+    '.c..c....c..',
+    '.c..c....c..',
+    '.cccc....c..',
+    '....c....c..',
+    '....c....c..',
+    '....cccccc..',
+    '............',
+    '............',
+  ], { c: 'currentColor' }],
   chart: [[
     '............',
     '..........bb',

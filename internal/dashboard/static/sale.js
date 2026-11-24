@@ -875,9 +875,11 @@ function openBuyerSheet(v, key, keep) {
   who.append(nm);
   if (b.phone) {
     const ph = el('div', 'sb-phone');
-    const copy = el('button', 'sb-copy', 'copy');
+    const copy = el('button', 'sb-copy');
     copy.type = 'button';
+    copy.title = 'Copy number';
     copy.setAttribute('aria-label', 'Copy number');
+    copy.append(svgEl(icon('copy')));
     copy.addEventListener('click', () => navigator.clipboard?.writeText(b.phone).then(() => toast('Number copied'), () => toast(b.phone)));
     ph.append(el('span', '', b.phone), copy);
     who.append(ph);
