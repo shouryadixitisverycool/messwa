@@ -143,6 +143,8 @@ a.ms-btn { text-decoration: none; display: inline-flex; align-items: center; }
 .ms-sec { margin-top: 4px; font: 700 8px Pixel; letter-spacing: 1px; color: var(--dim); }
 .ms-done { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 14px; border-radius: 12px; border: 1px solid var(--line); background: #141821; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; opacity: .75; }
 .ms-done:hover { opacity: 1; }
+div.ms-done { cursor: default; }
+div.ms-done:hover { opacity: .75; }
 .ms-done .nm { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ms-done .st { flex: none; font: 700 9px Pixel; color: var(--dim); }
 .ms-done.won .st { color: var(--veg); }
@@ -235,36 +237,6 @@ a.ms-btn { text-decoration: none; display: inline-flex; align-items: center; }
 
 .sale-sheet .sec { display: flex; align-items: center; gap: 6px; font: 700 7px Pixel; color: var(--dim); letter-spacing: .5px; margin: 0 0 -8px; }
 .sale-sheet .sec::after { content: ""; flex: 1; height: 1px; background: var(--line); }
-.sale-sheet .ms-top .ms-meal { font: 700 10px Pixel; letter-spacing: .4px; }
-.sb-count { font: 700 20px Pixel; color: var(--veg); }
-.sb-count.small { margin-left: auto; font-size: 14px; color: var(--gold); }
-.sb-count small { font-size: 8px; color: var(--muted); }
-.sb-chip { font: 700 8px Pixel; letter-spacing: .3px; padding: 3px 6px; border-radius: 5px; border: 1px solid var(--line); color: var(--muted); }
-.sb-chip.grn { color: var(--veg); border-color: color-mix(in srgb, var(--veg) 50%, transparent); }
-.tug-i { font: 400 7px Pixel; }
-svg.chart { display: block; width: 100%; }
-.mp-posts { display: grid; gap: 6px; }
-.mp-post { display: flex; align-items: center; gap: 8px; }
-.mp-group { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-.mp-group:first-child { margin-top: 0; }
-.mp-group b { font: 700 10px Pixel; }
-.mp-group .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 700 8px Pixel; color: var(--text); }
-.mp-group .times { font: 700 7px Pixel; color: var(--dim); }
-.mp-post { padding-left: 18px; }
-.mp-post.old { opacity: .55; }
-.mp-post .when { font: 700 7px Pixel; color: var(--muted); width: 34px; flex: none; }
-.mp-bar { flex: 1; display: flex; height: 10px; border-radius: 3px; overflow: hidden; }
-.mp-bar .me { width: 4%; background: var(--gold); }
-.mp-bar .after { background: #3a4152; }
-.mp-bar .after.red { background: var(--red); opacity: .8; }
-.mp-bar.failed { border: 1px dashed var(--red); }
-.mp-post .n { font: 700 9px Pixel; color: var(--muted); min-width: 26px; text-align: right; }
-.mp-post .n.red { color: var(--red); }
-.mp-tries { display: grid; grid-template-columns: repeat(auto-fill, minmax(52px, 1fr)); gap: 6px; }
-.mp-try { height: 34px; border-radius: 7px; background: var(--slot); border: 1px solid #262d3b; display: grid; place-items: center; font: 700 8px Pixel; color: var(--dim); }
-.mp-try.h-active { color: var(--veg); border-color: var(--veg); background: color-mix(in srgb, var(--veg) 15%, var(--slot)); }
-.mp-try.h-sold { color: var(--veg); border-color: color-mix(in srgb, var(--veg) 50%, transparent); }
-.mp-try.cur { box-shadow: 0 0 0 1px var(--gold); }
 
 .sale-action-form { display: grid; gap: 12px; }
 .sale-action-form label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
@@ -292,18 +264,6 @@ svg.chart { display: block; width: 100%; }
 .fold-body .sec { margin: 4px 0 -4px; }
 .fold-body .sb-note { margin: 0; line-height: 1.45; }
 .fold-body .sb-strip div { padding: 7px 6px; }
-/* a buyer's fold inside the sale fold: a row like the card's buyer list,
-   the name truncating first so the state and chevron stay on screen */
-.sb-fold .sb-convo { overflow: hidden; background: var(--panel); border: none; border-left: 3px solid var(--dim); }
-.sb-fold .sb-convo.won, .sb-fold .sb-convo.pay { border-left-color: var(--veg); }
-.sb-fold .sb-convo.need { border-left-color: var(--red); }
-.sb-fold .sb-convo.chk { border-left-color: var(--egg); }
-.sb-fold .sb-convo.talk { border-left-color: var(--blue); }
-.sb-fold .sb-convo.wait { border-left-color: var(--gold); }
-.sb-fold .sb-convo > summary { padding: 8px 10px; border-radius: 0; }
-.sb-fold .sb-convo > summary .ttl { flex: 0 1 auto; min-width: 0; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sb-fold .sb-convo > summary .sub { flex: 0 0 auto; }
-.sb-fold .sb-convo .fold-body { padding: 2px 10px 10px; }
 
 /* chat bubbles: the buyer on the left, you and the bot on the right */
 .cv-msg { align-self: flex-start; display: flex; flex-direction: column; gap: 4px; max-width: 86%; padding: 7px 10px; border-radius: 10px 10px 10px 3px; background: var(--slot-hi); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
@@ -315,6 +275,7 @@ svg.chart { display: block; width: 100%; }
 .cv-text.dim { color: var(--muted); font-size: 12px; }
 .cv-check { display: flex; align-items: baseline; gap: 6px; font-size: 12px; color: var(--egg); }
 .cv-check .sb-chip { flex: none; }
+.sb-chip { font: 700 8px Pixel; letter-spacing: .3px; padding: 3px 6px; border-radius: 5px; border: 1px solid var(--line); color: var(--muted); }
 .sb-chip.egg { color: var(--egg); border-color: color-mix(in srgb, var(--egg) 55%, transparent); }
 .cv-msg img { display: block; max-width: 100%; max-height: 320px; object-fit: contain; border-radius: 7px; background: var(--bg); }
 a.cv-file { align-self: flex-start; color: var(--blue); text-decoration: none; }

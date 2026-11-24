@@ -81,7 +81,11 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   async function openSale(id) {
     const r = await fetch('api/attention-sale?id=' + id, { cache: 'no-store' });
     if (!r.ok) throw new Error('Could not open that sale.');
-    openMealSheet(await r.json());
+    // A tap on a sale opens the buyer who most likely needs you. A sale
+    // nobody answered has no buyer sheet; a running one opens its sell
+    // menu instead.
+    const v = await r.json();
+    if (!openSaleBuyer(v) && !openTaskMenu(v)) throw new Error('Nobody has answered this sale yet.');
   }
 
   // "Lunch · Fri 13 Nov", or today/tomorrow/yesterday when it is close.
@@ -108,7 +112,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     const acts = el('div', 'attn-acts');
     const go = el('a', 'attn-btn go', item.account ? 'RECONNECT' : item.task ? 'OPEN SALE' : item.rule ? 'OPEN RULE' : 'VIEW MEAL');
     go.href = target(item);
-    if (item.task && typeof openMealSheet === 'function') {
+    if (item.task && typeof openSaleBuyer === 'function') {
       go.onclick = async (e) => {
         e.preventDefault();
         try { await openSale(item.task); } catch (err) { note.textContent = err.message; }
@@ -176,7 +180,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       keepScroll(draw);
       alertNew();
       const m = /^#attention-sale=(\d+)$/.exec(location.hash);
-      if (m && typeof openMealSheet === 'function' && typeof D !== 'undefined' && D) {
+      if (m && typeof openSaleBuyer === 'function' && typeof D !== 'undefined' && D) {
         history.replaceState(null, '', location.pathname + location.search);
         await openSale(Number(m[1]));
       }

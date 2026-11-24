@@ -95,7 +95,7 @@ function buyerTip(b) {
 
 // ---------- chest ----------
 
-let saleSheet = null; // {id, key} or {id, meal: true} while a sale sheet is open
+let saleSheet = null; // {id, key} while a buyer sheet is open, {id, editing: true} while a form is
 // rangeEdit is the price range being edited on a card: {id, lo, hi}. While
 // it is open that card keeps its DOM across live updates, so a drag in
 // progress isn't cut off.
@@ -120,7 +120,7 @@ function renderSales() {
   tickSales();
   if (saleSheet && !saleSheet.editing && !modal.hidden) {
     const v = list.find((x) => x.id === saleSheet.id);
-    if (v) (saleSheet.meal ? openMealSheet : openBuyerSheet)(v, saleSheet.key, true);
+    if (v) openBuyerSheet(v, saleSheet.key, true);
   }
 }
 function saleClosed() { saleSheet = null; }
@@ -239,9 +239,7 @@ function mealTile(date, meal, v) {
     t.append(a);
     t.classList.add('can-sell');
   }
-  if (v) {
-    tapCard(t, () => openMealSheet(v));
-  }
+  if (v && v.buyers.length) tapCard(t, () => openSaleBuyer(v));
   return t;
 }
 
@@ -323,7 +321,7 @@ function chest(v) {
   if (mk) c.append(mk);
   const acts = cardActions(v);
   if (acts) c.append(acts);
-  tapCard(c, () => openTaskMenu(v) || openMealSheet(v));
+  tapCard(c, () => openTaskMenu(v) || openSaleBuyer(v));
   return c;
 }
 
@@ -760,10 +758,14 @@ function cardActions(v) {
   return a.children.length ? a : null;
 }
 
-// endedRow is a finished sale, folded to one line. It opens the meal sheet.
+// endedRow is a finished sale, folded to one line. It opens the sheet of
+// the buyer openSaleBuyer picks; a sale nobody answered has nothing to open.
 function endedRow(v) {
-  const r = el('button', 'ms-done' + (won(v) ? ' won' : ''));
-  r.type = 'button';
+  const r = el(v.buyers.length ? 'button' : 'div', 'ms-done' + (won(v) ? ' won' : ''));
+  if (v.buyers.length) {
+    r.type = 'button';
+    r.addEventListener('click', () => openSaleBuyer(v));
+  }
   r.append(...mealHead(v, 'nm'));
   const bought = v.buyers.find((b) => b.state === 'bought');
   const amount = v.pay ? v.pay.amount : bought && (bought.asked || bought.agreed);
@@ -771,7 +773,6 @@ function endedRow(v) {
   const n = v.buyers.length;
   r.append(el('span', 'sub', `${hm(v.started)}–${hm(v.ended || v.ends)} · ${n} ${n === 1 ? 'buyer' : 'buyers'}`));
   tip(r, () => heroTip(v));
-  r.addEventListener('click', () => openMealSheet(v));
   return r;
 }
 
@@ -829,6 +830,32 @@ const closeButton = () => {
   return x;
 };
 
+// mainBuyer is the buyer a tap on a whole sale opens: one who needs you,
+// then the one paying or who bought, then whoever did something last.
+// Null while nobody has answered.
+function mainBuyer(v) {
+  const rank = (b) => {
+    const c = look(b, v).cls;
+    if (c === 'need' || c === 'chk') return 0;
+    return c === 'pay' || c === 'won' || (v.pay && v.pay.buyer === b.key) ? 1 : 2;
+  };
+  const lastAt = (b) => Math.max(b.joined || 0, ...b.events.map((e) => e.at || 0));
+  let best = null;
+  for (const b of v.buyers) {
+    if (!best || rank(b) < rank(best) || (rank(b) === rank(best) && lastAt(b) > lastAt(best))) best = b;
+  }
+  return best;
+}
+
+// openSaleBuyer opens mainBuyer's sheet. It returns false when the sale
+// has no buyers, so callers can fall back to something else.
+function openSaleBuyer(v) {
+  const b = mainBuyer(v);
+  if (!b) return false;
+  openBuyerSheet(v, b.key);
+  return true;
+}
+
 function openBuyerSheet(v, key, keep) {
   const b = v.buyers.find((x) => x.key === key);
   if (!b) return;
@@ -862,7 +889,7 @@ function openBuyerSheet(v, key, keep) {
   }
   const rounds = haggleRounds(b, v);
   if (rounds) sheet.append(el('div', 'sec', 'HAGGLE'), rounds);
-  sheet.append(saleInformation(v, false), conversationFold(v, b, 'CONVERSATION'));
+  sheet.append(saleInformation(v), conversationFold(v, b, 'CONVERSATION'));
 
   const acts = el('div', 'sb-acts');
   const link = chatLink(b);
@@ -1031,120 +1058,6 @@ function payPips(b, v) {
   return box;
 }
 
-// postList is the sheet's POSTS: each group with every copy under it.
-function postList(v) {
-  const posts = el('div', 'mp-posts');
-  for (const g of postGroups(v)) {
-    const h = el('div', 'mp-group');
-    h.append(el('b', g.cur.state === 'failed' ? 'red' : g.cur.state === 'posted' ? 'grn' : '', postMark(g.cur)), el('span', 'name', g.name));
-    if (g.copies.length > 1) h.append(el('span', 'times', `×${g.copies.length}`));
-    posts.append(h);
-    g.copies.forEach((p, i) => {
-      const r = el('div', 'mp-post' + (p === g.cur ? '' : ' old'));
-      r.append(el('span', 'when', hm(p.at)));
-      const bar = el('span', 'mp-bar' + (p.state === 'failed' ? ' failed' : ''));
-      if (p.state === 'posted') {
-        const me = el('i', 'me'), after = el('i', 'after' + (p.after > BURIED ? ' red' : ''));
-        after.style.setProperty('width', `${Math.min(1, p.after / 25) * 96}%`);
-        bar.append(me, after);
-      }
-      r.append(bar, el('span', 'n' + (p.state === 'failed' || p.after > BURIED ? ' red' : ''),
-        p.state === 'failed' ? errCode(p.error) : p.state === 'posting' ? '…' : `${p.after}↑`));
-      if (p.resend) r.append(resendButton(v, p));
-      tip(r, () => [[{ t: g.name, c: 'nm' }], copyLine(p, i)]);
-      posts.append(r);
-    });
-  }
-  return posts;
-}
-
-function openMealSheet(v, _key, keep) {
-  saleSheet = { id: v.id, meal: true };
-  const restore = sheetFor(v, keep);
-  const top = el('div', 'ms-top');
-  const dot = el('span', 'ms-mess');
-  dot.style.setProperty('--m', messColor(v.mess));
-  const diet = el('span', 'ms-diet');
-  diet.append(svgEl(dietMark(v.diet)));
-  top.append(dot, diet, el('span', 'ms-meal', `${v.mess.toUpperCase()} ${mealLabel(v).toUpperCase()}`));
-  if (v.state === 'active') {
-    const cd = el('b', 'sb-count small');
-    cd.dataset.until = v.ends;
-    cd.dataset.fmt = 'mins';
-    top.append(cd);
-  } else {
-    top.append(el('span', 'sb-chip ' + (won(v) ? 'grn' : ''), v.state.replace('_', ' ').toUpperCase()));
-  }
-  sheet.append(top);
-  sheet.append(priceChart(v));
-  if (v.state === 'active') sheet.append(saleTaskActions(v));
-
-  sheet.append(el('div', 'sec', 'POSTS'));
-  sheet.append(postList(v));
-
-  sheet.append(el('div', 'sec', `${v.history.length} ${v.history.length === 1 ? 'TRY' : 'TRIES'}`));
-  const tries = el('div', 'mp-tries');
-  for (const x of v.history) {
-    const t = el('div', 'mp-try h-' + x.state + (x.id === v.id ? ' cur' : ''), `${x.state === 'active' ? '' : x.state === 'sold' ? '✓' : '✕'}${x.id}`);
-    tip(t, () => [[{ t: `#${x.id} ${x.state.replace('_', ' ')}`, c: 'nm' }], [{ t: `${hm(x.started)}–${x.ended ? hm(x.ended) : ''} · ${x.buyers} buyers`, c: 'c8' }]]);
-    tries.append(t);
-  }
-  sheet.append(tries, saleInformation(v, true));
-  if (v.detail && v.state !== 'active') sheet.append(el('div', 'sb-note', v.detail));
-
-  const acts = el('div', 'sb-acts');
-  const close = el('button', 'sb-act');
-  close.append(el('b', '', '✕'), el('span', '', 'CLOSE'));
-  close.addEventListener('click', closeModal);
-  acts.append(close);
-  sheet.append(acts);
-  tickSales();
-  restore();
-}
-
-// walk is market.Walk: the lowest price the bot takes at t when nobody else
-// is interested.
-function walk(v, t) {
-  const unit = v.max < 20 ? 1 : 5;
-  const frac = Math.min(1, Math.max(0, (v.ends - t) / (2 * 3600)));
-  const w = v.min + Math.ceil(frac * (v.target - v.min) / unit) * unit;
-  return Math.min(Math.max(w, v.min), v.target);
-}
-
-// priceChart: the bot's lowest over the task, offers as dots, now marked.
-function priceChart(v) {
-  const t0 = Math.min(v.started, v.ends - 2 * 3600), t1 = v.ends;
-  const offers = v.buyers.flatMap((b) => b.events.filter((e) => e.kind === 'read' && e.n).map((e) => ({ at: e.at, n: e.n, b })));
-  const lo = Math.floor(Math.min(v.min, ...offers.map((o) => o.n)) / 5) * 5, hi = v.max;
-  const W = 316, H = 118, X0 = 8, X1 = 308, Y0 = 10, Y1 = 100;
-  const x = (t) => X0 + (t - t0) / Math.max(1, t1 - t0) * (X1 - X0);
-  const y = (p) => Y1 - (p - lo) / Math.max(1, hi - lo) * (Y1 - Y0);
-  const s = sv('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', class: 'chart' });
-  for (const [p, col] of v.target > v.min ? [[v.target, C.gold], [v.min, C.red]] : [[v.min, C.red]]) {
-    s.append(sv('line', { x1: X0, x2: X1, y1: y(p), y2: y(p), stroke: col, 'stroke-opacity': 0.6, 'stroke-dasharray': '3 3' }));
-    s.append(sv('text', { x: X1, y: y(p) - 3, 'text-anchor': 'end', fill: col, class: 'tug-i' }, String(p)));
-  }
-  const n = Math.min(now(), t1);
-  const pts = (a, b) => { const out = []; for (let t = a; t <= b; t += 60) out.push(`${x(t).toFixed(1)},${y(walk(v, t)).toFixed(1)}`); return out.join(' '); };
-  if (v.negotiates) {
-    s.append(sv('polyline', { points: pts(t0, n), fill: 'none', stroke: '#e8ecf3', 'stroke-width': 2 }));
-    s.append(sv('polyline', { points: pts(n, t1), fill: 'none', stroke: '#e8ecf3', 'stroke-opacity': 0.3, 'stroke-width': 2, 'stroke-dasharray': '2 3' }));
-  }
-  s.append(sv('line', { x1: x(v.started), x2: x(v.started), y1: Y0, y2: Y1, stroke: C.dim, 'stroke-dasharray': '1 2' }));
-  for (const o of offers) {
-    const l = look(o.b, v);
-    s.append(sv('circle', { cx: x(o.at), cy: y(o.n), r: 4, fill: l.cls === 'need' || l.cls === 'gone' ? 'none' : l.tone, stroke: l.tone, 'stroke-width': 2 }));
-  }
-  if (v.state === 'active') {
-    s.append(sv('circle', { cx: x(n), cy: y(v.lowest), r: 4.5, fill: v.held ? C.gold : C.veg }));
-    s.append(sv('text', { x: x(n), y: H - 4, 'text-anchor': 'middle', fill: C.veg, class: 'tug-i' }, 'NOW'));
-  }
-  s.append(sv('text', { x: X0, y: H - 4, fill: C.dim, class: 'tug-i' }, hm(t0)));
-  s.append(sv('text', { x: X1, y: H - 4, 'text-anchor': 'end', fill: C.dim, class: 'tug-i' }, hm(t1)));
-  return s;
-}
-
-
 // Operator forms stay open across live updates, preserving entered values.
 function saleActionButton(glyph, label, action) {
   const b = el('button', 'sb-act');
@@ -1152,15 +1065,6 @@ function saleActionButton(glyph, label, action) {
   b.append(el('b', '', glyph), el('span', '', label));
   b.addEventListener('click', action);
   return b;
-}
-function saleTaskActions(v) {
-  const acts = el('div', 'sb-acts');
-  acts.append(saleActionButton('✓', 'SOLD + SEND QR', () => saleActionForm(v, 'sold')),
-    saleActionButton('+', 'ADD BUYER', () => saleActionForm(v, 'add')));
-  const stop = saleActionButton('✕', 'STOP SELLING', () => saleActionForm(v, 'stop'));
-  stop.classList.add('red');
-  acts.append(stop);
-  return acts;
 }
 function saleActionForm(v, action, buyer) {
   saleSheet = { id: v.id, editing: true };
@@ -1211,7 +1115,7 @@ function saleActionForm(v, action, buyer) {
   const submit = saleActionButton(action === 'stop' ? '✕' : '✓', action === 'sold' || action === 'mute' ? 'CONFIRM' : titles[action], () => {});
   submit.type = 'submit';
   if (action === 'stop') submit.classList.add('red');
-  acts.append(submit, saleActionButton('✕', 'CANCEL', () => buyer ? openBuyerSheet(v, buyer.key) : openMealSheet(v)));
+  acts.append(submit, saleActionButton('✕', 'CANCEL', () => (buyer ? openBuyerSheet(v, buyer.key) : closeModal())));
   form.append(error, acts);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1237,10 +1141,9 @@ function saleActionForm(v, action, buyer) {
 }
 
 // saleInformation is a fold with who bought, at what price, and how many
-// buyers the bot reached and, with convos, a fold per buyer with the
-// retained conversation. It is read-only: payment warnings here never
+// buyers the bot reached. It is read-only: payment warnings here never
 // pause selling.
-function saleInformation(v, convos) {
+function saleInformation(v) {
   const buyers = v.buyers || [];
   const winner = buyers.find((b) => b.state === 'bought');
   const contacted = buyers.filter((b) => b.events.some((e) => ['prompt', 'buy_post', 'nudged'].includes(e.kind)) || b.bot_msgs > 0).length;
@@ -1266,10 +1169,6 @@ function saleInformation(v, convos) {
   }
   body.append(strip, el('p', 'sb-note', 'Counts cover buyers the bot recorded, not everyone who saw a group post. Dropped means skipped, timed out or told sold. CHECK flags are for you to review and do not pause selling.'));
 
-  if (convos && buyers.length) {
-    body.append(el('div', 'sec', 'CONVERSATIONS'));
-    for (const b of buyers) body.append(conversationFold(v, b));
-  }
   return box;
 }
 
