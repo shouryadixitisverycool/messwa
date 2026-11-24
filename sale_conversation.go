@@ -30,6 +30,15 @@ func (m *sellManager) observeConversation(evt any) {
 	m.recordConversation(peer.String(), alt, e.Info.ID, e.Info.Timestamp, e.Info.IsFromMe, e.Message)
 }
 
+// conversationRetry is how long the recorder waits before each further
+// lookup of a message that matched no sale. A new buyer's first DM races
+// the offer handler admitting them, so it can miss the first lookup.
+var conversationRetry = []time.Duration{2 * time.Second, 5 * time.Second}
+
+// mediaSlots bounds attachment downloads at once, so a burst of buyer
+// media can't crowd out live selling.
+var mediaSlots = make(chan struct{}, 2)
+
 func (m *sellManager) recordConversation(peer, alt, id string, at time.Time, fromMe bool, msg *waE2E.Message) {
 	if msg == nil || id == "" {
 		return
@@ -44,6 +53,17 @@ func (m *sellManager) recordConversation(peer, alt, id string, at time.Time, fro
 			quote = copyMsg.GetImageMessage().GetContextInfo().GetStanzaID()
 		}
 		task, canonical, err := m.st.ConversationTask(ctx, peer, alt, quote, at.Unix())
+		for _, wait := range conversationRetry {
+			if err != nil || task != 0 || fromMe {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+			task, canonical, err = m.st.ConversationTask(ctx, peer, alt, quote, at.Unix())
+		}
 		if err != nil || task == 0 {
 			return
 		}
@@ -94,6 +114,12 @@ func (m *sellManager) recordConversation(peer, alt, id string, at time.Time, fro
 				DownloadConversationMedia(context.Context, *waE2E.Message) ([]byte, error)
 			}); ok {
 				if size <= 10<<20 {
+					select {
+					case mediaSlots <- struct{}{}:
+						defer func() { <-mediaSlots }()
+					case <-ctx.Done():
+						return
+					}
 					data, err := d.DownloadConversationMedia(ctx, copyMsg)
 					if err == nil && len(data) <= 10<<20 {
 						_ = m.st.SetSaleMessageMedia(ctx, task, canonical, id, mime, data)
