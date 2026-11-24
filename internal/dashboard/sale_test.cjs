@@ -30,6 +30,17 @@ test('otherwise whoever did something last', () => {
   assert.equal(mainBuyer(v).key, 'a');
 });
 
+test('a refund due beats a buyer who bought, even when muted, after the sale ends', () => {
+  const v = sale([buyer('a', 'bought', 90, { asked: 60 }), buyer('b', 'passed', 10, { refund: 60, muted: true })], { state: 'sold' });
+  assert.equal(mainBuyer(v).key, 'b');
+});
+
+test('a handed-off buyer needs you only while the sale runs', () => {
+  const bs = [buyer('a', 'bought', 10, { asked: 60 }), buyer('b', 'handed_off', 90)];
+  assert.equal(mainBuyer(sale(bs)).key, 'b');
+  assert.equal(mainBuyer(sale(bs, { state: 'sold' })).key, 'a');
+});
+
 test('no buyers, no pick', () => {
   assert.equal(mainBuyer(sale([])), null);
 });

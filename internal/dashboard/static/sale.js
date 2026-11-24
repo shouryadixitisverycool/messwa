@@ -321,7 +321,7 @@ function chest(v) {
   if (mk) c.append(mk);
   const acts = cardActions(v);
   if (acts) c.append(acts);
-  tapCard(c, () => openTaskMenu(v) || openSaleBuyer(v));
+  if (v.state === 'active' || v.buyers.length) tapCard(c, () => openTaskMenu(v) || openSaleBuyer(v));
   return c;
 }
 
@@ -832,11 +832,13 @@ const closeButton = () => {
 
 // mainBuyer is the buyer a tap on a whole sale opens: one who needs you,
 // then the one paying or who bought, then whoever did something last.
-// Null while nobody has answered.
+// A refund due or a payment picture needs you even from a muted or paying
+// buyer; anything else stops needing you once the sale is over. Null while
+// nobody has answered.
 function mainBuyer(v) {
   const rank = (b) => {
     const c = look(b, v).cls;
-    if (c === 'need' || c === 'chk') return 0;
+    if (b.refund || sentPicture(b) || c === 'need' || (c === 'chk' && v.state === 'active')) return 0;
     return c === 'pay' || c === 'won' || (v.pay && v.pay.buyer === b.key) ? 1 : 2;
   };
   const lastAt = (b) => Math.max(b.joined || 0, ...b.events.map((e) => e.at || 0));
@@ -847,10 +849,11 @@ function mainBuyer(v) {
   return best;
 }
 
-// openSaleBuyer opens mainBuyer's sheet. It returns false when the sale
-// has no buyers, so callers can fall back to something else.
-function openSaleBuyer(v) {
-  const b = mainBuyer(v);
+// openSaleBuyer opens the sheet of the buyer with key, or else mainBuyer's.
+// It returns false when the sale has no buyers, so callers can fall back to
+// something else.
+function openSaleBuyer(v, key) {
+  const b = v.buyers.find((x) => x.key === key) || mainBuyer(v);
   if (!b) return false;
   openBuyerSheet(v, b.key);
   return true;

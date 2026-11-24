@@ -23,6 +23,9 @@ type AttentionItem struct {
 	Resolvable bool   `json:"resolvable"`
 	// Rule is the recurring rule a rule item is about.
 	Rule int64 `json:"rule,omitempty"`
+	// Buyer is the key of the buyer a refund item is about, as the sale
+	// view's buyers carry it, so the dashboard opens that buyer's sheet.
+	Buyer string `json:"buyer,omitempty"`
 }
 
 func (s *Server) Attention(ctx context.Context, user int64) ([]AttentionItem, error) {
@@ -61,7 +64,11 @@ func (s *Server) Attention(ctx context.Context, user int64) ([]AttentionItem, er
 		}
 		for _, b := range bs {
 			if rupeesStr(b.Refund) > 0 {
+				n := len(out)
 				add("refund", fmt.Sprintf("refund:%d:%s", t.ID, b.Peer), "Refund due", fmt.Sprintf("Send ₹%s back to %s, unless they got the meal.", b.Refund, s.attentionWho(ctx, b)), t.Date, t.Meal, t.ID, false, true)
+				if len(out) > n {
+					out[n].Buyer = firstOf(s.person(ctx, b.Peer, b.Alt, "").Phone, b.Peer)
+				}
 			}
 		}
 		if t.State == store.TaskFailed {

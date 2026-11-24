@@ -77,6 +77,12 @@ func TestAttentionRefundSurvivesBoardLinger(t *testing.T) {
 	if err != nil || len(items) != 1 || items[0].Title != "Refund due" {
 		t.Fatalf("refund missing: %v %v", items, err)
 	}
+	// The dashboard opens the buyer the refund is for, by the key the sale
+	// view gives that buyer.
+	v, err := s.AttentionSale(ctx, id)
+	if err != nil || v == nil || len(v.Buyers) != 1 || items[0].Buyer != v.Buyers[0].Key {
+		t.Fatalf("refund buyer %q does not match the sale view: %+v %v", items[0].Buyer, v, err)
+	}
 	if err = s.ResolveAttention(ctx, 1, items[0].ID); err != nil {
 		t.Fatal(err)
 	}

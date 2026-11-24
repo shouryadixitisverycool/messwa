@@ -74,18 +74,23 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   drawBell();
 
   const target = (item) => item.account ? 'account.html'
-    : item.task ? './#attention-sale=' + item.task
+    : item.task ? './#attention-sale=' + item.task + (item.buyer ? '&buyer=' + encodeURIComponent(item.buyer) : '')
     : item.rule ? 'sales.html#recurring-rule=' + item.rule
     : 'sales.html#attention-meal=' + encodeURIComponent(item.date + '|' + item.meal);
 
-  async function openSale(id) {
+  // openSale opens the buyer an item is about, or the one who most likely
+  // needs you. A sale nobody answered has no buyer sheet; a running one
+  // opens its sell menu, which needs the sales ledger loaded.
+  async function openSale(id, buyer) {
     const r = await fetch('api/attention-sale?id=' + id, { cache: 'no-store' });
     if (!r.ok) throw new Error('Could not open that sale.');
-    // A tap on a sale opens the buyer who most likely needs you. A sale
-    // nobody answered has no buyer sheet; a running one opens its sell
-    // menu instead.
     const v = await r.json();
-    if (!openSaleBuyer(v) && !openTaskMenu(v)) throw new Error('Nobody has answered this sale yet.');
+    if (openSaleBuyer(v, buyer)) return;
+    if (v.state === 'active') {
+      if (!N) await loadNudge(true);
+      if (openTaskMenu(v)) return;
+    }
+    throw new Error(v.state === 'active' ? 'Nobody has answered this sale yet.' : 'Nobody answered this sale before it ended.');
   }
 
   // "Lunch · Fri 13 Nov", or today/tomorrow/yesterday when it is close.
@@ -115,7 +120,8 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     if (item.task && typeof openSaleBuyer === 'function') {
       go.onclick = async (e) => {
         e.preventDefault();
-        try { await openSale(item.task); } catch (err) { note.textContent = err.message; }
+        note.textContent = '';
+        try { await openSale(item.task, item.buyer); } catch (err) { note.textContent = err.message; }
       };
     }
     acts.append(go);
@@ -179,10 +185,12 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       note.textContent = '';
       keepScroll(draw);
       alertNew();
-      const m = /^#attention-sale=(\d+)$/.exec(location.hash);
+      const m = /^#attention-sale=(\d+)(?:&buyer=([^&]*))?$/.exec(location.hash);
       if (m && typeof openSaleBuyer === 'function' && typeof D !== 'undefined' && D) {
         history.replaceState(null, '', location.pathname + location.search);
-        await openSale(Number(m[1]));
+        // Its own catch, so a sale with nothing to open doesn't read as a
+        // failed refresh.
+        try { await openSale(Number(m[1]), m[2] && decodeURIComponent(m[2])); } catch (err) { note.textContent = err.message; }
       }
     } catch (e) {
       note.textContent = e.message + ' Showing what loaded last.';
