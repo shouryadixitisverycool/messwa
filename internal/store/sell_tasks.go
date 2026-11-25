@@ -109,6 +109,9 @@ type SellTask struct {
 	// you are skipped, screenshots never count as payment, nothing is
 	// handed off and the task never pools.
 	Autopilot bool
+	// Extra is the extra item name when selling an extra separately (e.g.
+	// "Egg"), and empty for a regular meal or friend's meal.
+	Extra string
 }
 
 // SellOffer is one copy of a task's offer in a group. Seq 0 is the first
@@ -176,8 +179,8 @@ func (s *Store) CreateSellTask(ctx context.Context, t SellTask) (int64, error) {
 	if t.Handoff == "" {
 		t.Handoff = "never"
 	}
-	r, err := tx.ExecContext(ctx, `INSERT INTO sell_tasks(date,meal,min_paise,max_paise,user_id,account_hash,mess,diet,handoff,created_at,ends_at,autopilot)
- VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, t.Date, t.Meal, t.MinPaise, t.MaxPaise, t.UserID, t.AccountHash, t.Mess, t.Diet, t.Handoff, t.CreatedAt.Unix(), t.EndsAt.Unix(), t.Autopilot)
+	r, err := tx.ExecContext(ctx, `INSERT INTO sell_tasks(date,meal,min_paise,max_paise,user_id,account_hash,mess,diet,handoff,created_at,ends_at,autopilot,extra)
+ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, t.Date, t.Meal, t.MinPaise, t.MaxPaise, t.UserID, t.AccountHash, t.Mess, t.Diet, t.Handoff, t.CreatedAt.Unix(), t.EndsAt.Unix(), t.Autopilot, t.Extra)
 	if err != nil {
 		return 0, err
 	}
@@ -196,12 +199,12 @@ func (s *Store) CreateSellTask(ctx context.Context, t SellTask) (int64, error) {
 	return id, tx.Commit()
 }
 
-const sellTaskCols = `id,date,meal,min_paise,max_paise,user_id,account_hash,mess,diet,handoff,state,detail,created_at,ends_at,coalesce(ended_at,0),target_paise,autopilot`
+const sellTaskCols = `id,date,meal,min_paise,max_paise,user_id,account_hash,mess,diet,handoff,state,detail,created_at,ends_at,coalesce(ended_at,0),target_paise,autopilot,extra`
 
 func scanSellTask(row interface{ Scan(...any) error }) (SellTask, error) {
 	var t SellTask
 	var created, ends, ended int64
-	err := row.Scan(&t.ID, &t.Date, &t.Meal, &t.MinPaise, &t.MaxPaise, &t.UserID, &t.AccountHash, &t.Mess, &t.Diet, &t.Handoff, &t.State, &t.Detail, &created, &ends, &ended, &t.TargetPaise, &t.Autopilot)
+	err := row.Scan(&t.ID, &t.Date, &t.Meal, &t.MinPaise, &t.MaxPaise, &t.UserID, &t.AccountHash, &t.Mess, &t.Diet, &t.Handoff, &t.State, &t.Detail, &created, &ends, &ended, &t.TargetPaise, &t.Autopilot, &t.Extra)
 	t.CreatedAt, t.EndsAt = time.Unix(created, 0), time.Unix(ends, 0)
 	if ended != 0 {
 		t.EndedAt = time.Unix(ended, 0)
@@ -499,8 +502,8 @@ func (s *Store) ArmTaskDelivery(ctx context.Context, taskID int64, d Delivery) (
 			return time.Time{}, errors.Join(err, fmt.Errorf("INR %s is below the task's floor of INR %s", d.Amount, FormatPaise(minPaise)))
 		}
 	}
-	r, err := tx.ExecContext(ctx, `INSERT INTO qr_deliveries(date,meal,peer,amount,image_hash,armed_at,mess,diet,task_id)
- VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(date,meal) DO NOTHING`, d.Date, d.Meal, d.Peer, d.Amount, d.ImageHash, d.ArmedAt.Unix(), d.Mess, d.Diet, taskID)
+	r, err := tx.ExecContext(ctx, `INSERT INTO qr_deliveries(date,meal,peer,amount,image_hash,armed_at,mess,diet,extra,task_id)
+ VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(date,meal) DO NOTHING`, d.Date, d.Meal, d.Peer, d.Amount, d.ImageHash, d.ArmedAt.Unix(), d.Mess, d.Diet, d.Extra, taskID)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -529,8 +532,8 @@ func (s *Store) HandOffTaskDelivery(ctx context.Context, taskID int64, d Deliver
 	case date != d.Date || meal != d.Meal:
 		return errors.New("delivery is for a different meal than the task")
 	}
-	r, err := tx.ExecContext(ctx, `INSERT INTO qr_deliveries(date,meal,peer,amount,image_hash,armed_at,state,mess,diet,buyer_name,task_id)
- VALUES(?,?,?,?,?,?,'handed_off',?,?,?,?) ON CONFLICT(date,meal) DO NOTHING`, d.Date, d.Meal, d.Peer, d.Amount, d.ImageHash, d.ArmedAt.Unix(), d.Mess, d.Diet, buyerName, taskID)
+	r, err := tx.ExecContext(ctx, `INSERT INTO qr_deliveries(date,meal,peer,amount,image_hash,armed_at,state,mess,diet,extra,buyer_name,task_id)
+ VALUES(?,?,?,?,?,?,'handed_off',?,?,?,?,?) ON CONFLICT(date,meal) DO NOTHING`, d.Date, d.Meal, d.Peer, d.Amount, d.ImageHash, d.ArmedAt.Unix(), d.Mess, d.Diet, d.Extra, buyerName, taskID)
 	if err != nil {
 		return err
 	}
@@ -556,8 +559,8 @@ func (s *Store) TaskDelivery(ctx context.Context, taskID int64) (*Delivery, stri
 	var d Delivery
 	var state string
 	var armed int64
-	err := s.db.QueryRowContext(ctx, `SELECT date,meal,peer,amount,image_hash,armed_at,mess,diet,state FROM qr_deliveries WHERE task_id=?`, taskID).
-		Scan(&d.Date, &d.Meal, &d.Peer, &d.Amount, &d.ImageHash, &armed, &d.Mess, &d.Diet, &state)
+	err := s.db.QueryRowContext(ctx, `SELECT date,meal,peer,amount,image_hash,armed_at,mess,diet,extra,state FROM qr_deliveries WHERE task_id=?`, taskID).
+		Scan(&d.Date, &d.Meal, &d.Peer, &d.Amount, &d.ImageHash, &armed, &d.Mess, &d.Diet, &d.Extra, &state)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, "", nil
 	}

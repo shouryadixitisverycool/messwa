@@ -50,6 +50,16 @@ const priceDiet = (d) => (d === 'nonveg' || d === 'egg' ? d : 'veg');
 const marketFor = (meal, diet) => D.market.find((x) => x.meal === meal && x.diet === priceDiet(diet))
   || D.market.find((x) => x.meal === meal && !x.diet);
 const recentSales = () => D.sales.filter((s) => isSold(s) && s.date >= D.recent && s.date <= D.today);
+// saleWhat names what a sale sold: "dinner", or "dinner egg" for an extra.
+const saleWhat = (s) => (s.extra ? `${s.meal} ${s.extra.toLowerCase()}` : s.meal);
+
+// extrasCount adds up a meal's registered extras (Kadamba's dinner eggs):
+// how many the portal lists and how many are still free to sell.
+function extrasCount(c) {
+  let total = 0, left = 0, slots = 0;
+  for (const x of c.extras || []) { total += x.total || 0; left += x.available || 0; slots += (x.slots || []).length; }
+  return { total, left, slots };
+}
 
 function span(cls, markup) {
   const s = el('span', cls);
@@ -65,6 +75,7 @@ async function load() {
     if (r.status === 401) return toLogin();
     if (!r.ok) throw new Error(r.status);
     D = await r.json();
+    if (typeof calXPageLoaded === 'function') calXPageLoaded();
     skew = D.now - Date.now() / 1000;
     failed = false;
     lastOK = Date.now();
@@ -76,19 +87,27 @@ async function load() {
   tickLive();
 }
 
-// The board's "sell it" link lands here as #sell=date|meal, and the
-// attention banner's as #attention-meal=date|meal. Either shows that meal's
-// week with the meal open in the panel; a running or finished sale also
-// opens its sell sheet.
+// The board's "sell it" link lands here as #sell=date|meal, the attention
+// banner's as #attention-meal=date|meal, and its extras link as
+// #extras=date|meal. Each shows that meal's week with the meal open in the
+// panel; #sell on a running or finished sale also opens its sell sheet, and
+// #sell=date|dinner#e1 opens that extra's sheet.
 function openFromHash() {
-  const m = /^#(sell|attention-meal)=(.+)$/.exec(location.hash);
+  const m = /^#(sell|attention-meal|extras)=(.+)$/.exec(location.hash);
   if (!m) return;
   history.replaceState(null, '', location.pathname + location.search);
-  const [date, meal] = decodeURIComponent(m[2]).split('|');
+  const [date, slotName = ''] = decodeURIComponent(m[2]).split('|');
+  const meal = slotName.split('#')[0];
   const hit = calFind(`${date}|${meal}`);
   if (!hit) return;
   calGoto(date, meal);
   const c = hit[1];
+  if (slotName !== meal) {
+    const x = SELL.findExtra(c, slotName);
+    if (x && D.owner) openSell(date, SELL.extraCell(date, c, ...x));
+    return;
+  }
+  if (m[1] === 'extras') { const sec = document.querySelector('#insp .cal-xsec'); if (sec) sec.scrollIntoView({ block: 'center' }); return; }
   if (m[1] === 'sell' && !calPlannable(c) && canSell(c)) openSell(date, c);
 }
 
@@ -170,7 +189,11 @@ function renderSaved() {
 
   const row = $('savedRow');
   const left = el('span');
-  left.append(el('b', '', `${M.sold} meal${M.sold === 1 ? '' : 's'}`), ' sold');
+  const xs = M.extras_sold || 0;
+  if (M.sold || !xs) left.append(el('b', '', `${M.sold} meal${M.sold === 1 ? '' : 's'}`));
+  if (M.sold && xs) left.append(' + ');
+  if (xs) left.append(el('b', '', `${xs} extra${xs === 1 ? '' : 's'}`));
+  left.append(' sold');
   if (M.fee > 0) left.append(` against a ${rupees(M.fee)} mess bill`);
   else if (M.bill) left.append(el('span', 'dim', '. The portal shows no mess bill this month'));
   else left.append(el('span', 'dim', '. Couldn\'t read your mess bill from the portal to measure it against'));
@@ -191,6 +214,7 @@ function savedTip() {
   return [
     [{ t: `${monthName} so far`, c: 'nm' }],
     D.owner ? [{ t: 'Earned ', c: 'c7' }, { t: rupees(M.earned), c: 'ca' }, { t: ` from ${M.sold} sold`, c: 'c8' }] : null,
+    D.owner && M.extras_sold ? [{ t: 'Extras ', c: 'c7' }, { t: rupees(M.extras_earned || 0), c: 'ca' }, { t: ` from ${M.extras_sold} sold, included above`, c: 'c8' }] : null,
     M.wasted ? [{ t: 'Left on the table ', c: 'c7' }, { t: rupees(Math.round(M.potential)), c: 'c6' }, { t: ` from ${M.wasted} wasted`, c: 'c8' }] : null,
     M.fee > 0 ? [{ t: 'Mess bill ', c: 'c7' }, { t: rupees(M.fee), c: 'cf' }, { t: M.bill ? '' : ' from config.toml', c: 'c8' }] : null,
     ...(M.bill ? [[{ t: 'Availed ', c: 'c7' }, { t: rupees(M.bill.availed), c: 'cf' }, { t: ' + projected ', c: 'c7' }, { t: rupees(M.bill.projected), c: 'cf' }]] : []),
@@ -246,6 +270,7 @@ function cellNode(date, c) {
     if (c.state === 'wasted') n.append(el('span', 'stamp', 'WASTED'));
     if (c.sellable) n.append(el('span', 'sell-tag', 'SELL'));
   }
+  if (c.extras && c.extras.length) n.append(extrasBadge(c));
   if (canSell(c)) {
     n.classList.add('sellable');
     n.tabIndex = 0;
@@ -257,7 +282,36 @@ function cellNode(date, c) {
   return n;
 }
 
-function cellLines(date, c) {
+// extrasBadge is the egg tab on a meal's bottom-right corner: how many
+// extras are registered, or left/registered once some are sold or up for
+// sale. It sits half outside the slot, so it never covers a stamp, the
+// price or the SELL tag.
+function extrasBadge(c) {
+  const { total, left, slots } = extrasCount(c);
+  const n = total || slots;
+  const b = el('span', 'xbadge' + (left ? '' : ' none'));
+  b.append(svgEl(extraIcon()), el('b', '', left && left < n ? `${left}/${n}` : String(n)));
+  return b;
+}
+
+// extrasLines describe a meal's extras for its tooltip.
+function extrasLines(c) {
+  const out = [];
+  for (const x of c.extras || []) {
+    const bits = [];
+    if (x.available) bits.push({ t: ` · ${x.available} to sell`, c: 'c6' });
+    if (x.selling) bits.push({ t: ` · ${x.selling} selling`, c: 'c6' });
+    if (x.scheduled) bits.push({ t: ` · ${x.scheduled} scheduled`, c: 'ce' });
+    if (x.sold) bits.push({ t: ` · ${x.sold} sold`, c: 'ca' });
+    if (x.availed) bits.push({ t: ` · ${x.availed} eaten`, c: 'c8' });
+    out.push([{ t: `${x.name} `, c: 'c7' }, { t: `${x.total} registered`, c: 'cf' }, ...bits]);
+    if (x.earned) out.push([{ t: `${x.name} sales `, c: 'c7' }, { t: rupees(x.earned), c: 'c6' }]);
+  }
+  if (c.extras_err) out.push([{ t: `Couldn't check extras: ${c.extras_err}`, c: 'c8' }]);
+  return out;
+}
+
+function cellLines(date, c, opts = {}) {
   const s = c.sale != null ? D.sales[c.sale] : null;
   // The row already says which meal it is, so the title names the diet,
   // and the meal moves down to the time line.
@@ -329,10 +383,19 @@ function cellLines(date, c) {
     if (a) lines.push(a);
     if (canSell(c)) lines.push(null, [{ t: 'Click to put it up for sale.', c: 'lore' }]);
     lines.push({ rar: 'REGISTERED', c: 'c8' });
+  } else if (c.state === 'none') {
+    lines.push([{ t: 'Not registered for this meal.', c: 'c8' }]);
+    lines.push({ rar: 'NOT REGISTERED', c: 'c8' });
   } else {
     lines.push([{ t: "The portal couldn't be read, so this could be eaten, wasted or not registered.", c: 'c8' }]);
     if (s) lines.push([{ t: `Your offer of ${rupees(s.amount)} lapsed.`, c: 'c8' }]);
     lines.push({ rar: 'UNKNOWN', c: 'c8' });
+  }
+  // Extras go after what became of the meal, before the click hint.
+  const xs = opts.extras === false ? [] : extrasLines(c);
+  if (xs.length) {
+    const lore = lines.findIndex((l) => Array.isArray(l) && l[0] && l[0].c === 'lore');
+    lines.splice(lore > 0 && lines[lore - 1] === null ? lore - 1 : lines.length - 1, 0, null, ...xs);
   }
   return lines;
 }
@@ -350,9 +413,9 @@ function closeModal() { modal.hidden = true; sheet.replaceChildren(); }
 modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
 
 // The sell sheet lives in sell.js; the board opens the same one.
-const SELL = sellSheet({ data: () => D, now, close: closeModal, toast, reload: load });
+const SELL = sellSheet({ data: () => D, now, close: closeModal, toast, reload: () => { if (typeof calXReset === 'function') calXReset(); return load(); } });
 // ledger.js prices meals with the same slider and defaults.
-const { priceSlider, priceText, listAt, listWhen, sellBounds, sellDefaults } = SELL;
+const { priceSlider, priceText, listAt, listWhen, sellBounds, sellDefaults, extraCell } = SELL;
 const openSell = (date, c, view) => SELL.open(date, c, view);
 
 // ---------- friends' meals ----------
@@ -625,7 +688,7 @@ function buyerLines(b) {
   const t = tierOf(b.n);
   const usual = new Map();
   for (const s of b.sales) {
-    const k = `${messName(s.mess)} ${s.meal}`;
+    const k = `${messName(s.mess)} ${saleWhat(s)}`;
     usual.set(k, (usual.get(k) || 0) + 1);
   }
   const fav = [...usual.entries()].sort((x, y) => y[1] - x[1])[0];
@@ -635,7 +698,7 @@ function buyerLines(b) {
     [{ t: b.name || fmtPhone(b.phone) || 'Unknown buyer', c: 'nm', color: t.color }],
     b.name && b.phone ? [{ t: fmtPhone(b.phone), c: 'c8' }] : null,
     null,
-    [{ t: 'Meals bought ', c: 'c7' }, { t: String(b.n), c: 'cf' }],
+    [{ t: 'Bought ', c: 'c7' }, { t: String(b.n), c: 'cf' }, ...(() => { const x = b.sales.filter((s) => s.extra).length; return x ? [{ t: `, ${x} of them extra${x === 1 ? '' : 's'}`, c: 'c8' }] : []; })()],
     [{ t: 'Spent ', c: 'c7' }, { t: rupees(b.spent), c: 'c6' }, { t: ` · avg ${rupees(Math.round(b.spent / b.n))}`, c: 'c8' }],
     [{ t: 'Usual ', c: 'c7' }, { t: fav[0], c: 'cf' }],
     [{ t: 'First ', c: 'c7' }, { t: dayWord(first), c: 'c8' }, { t: '   Last ', c: 'c7' }, { t: dayWord(last), c: 'c8' }],
@@ -657,7 +720,9 @@ function renderPrices() {
   box.replaceChildren();
   pricesNarrow = pricesTooNarrow();
   const narrow = pricesNarrow;
-  const mine = recentSales();
+  // Extras sell for a fraction of a meal and have no market median, so the
+  // price check is meals only. Earnings below count both.
+  const mine = recentSales().filter((s) => !s.extra);
   // A row per meal and diet you sold in: the market's asks in that diet
   // against your sales in it.
   const rows = [];
@@ -744,15 +809,19 @@ function renderEarnings() {
   const mine = recentSales();
   const days = [];
   for (let d = D.recent; d <= D.today; d = addDays(d, 1)) days.push(d);
-  // A card per mess and diet you sold something in.
+  // A card per mess and diet you sold something in. Extras sold apart from
+  // their meal get a card of their own, so an egg never drags down a meal's
+  // median.
   const names = D.messes.map((m) => m.name);
   const messOf = (s) => (names.includes(s.mess) ? s.mess : '');
   const keyOf = (mess, diet) => `${mess}|${diet}`;
+  const dietOf = (s) => (s.extra ? 'extra' : priceDiet(s.diet));
+  const dietName = (d) => (d === 'extra' ? 'Extras' : DIET_LABEL[d]);
   const cards = [];
   for (const m of [...D.messes, { name: '' }]) {
     const sold = mine.filter((s) => messOf(s) === m.name);
-    for (const diet of ['veg', 'nonveg', 'egg']) {
-      if (sold.some((s) => priceDiet(s.diet) === diet)) cards.push({ mess: m.name, diet });
+    for (const diet of ['veg', 'nonveg', 'egg', 'extra']) {
+      if (sold.some((s) => dietOf(s) === diet)) cards.push({ mess: m.name, diet });
     }
   }
   if (!cards.length) {
@@ -760,7 +829,7 @@ function renderEarnings() {
     return;
   }
   const per = new Map(cards.map((k) => [keyOf(k.mess, k.diet), days.map(() => 0)]));
-  for (const s of mine) per.get(keyOf(messOf(s), priceDiet(s.diet)))[days.indexOf(s.date)] += s.amount;
+  for (const s of mine) per.get(keyOf(messOf(s), dietOf(s)))[days.indexOf(s.date)] += s.amount;
   const mx = Math.max(1, ...[...per.values()].flat());
   const totals = cards.map((k) => sum(per.get(keyOf(k.mess, k.diet))));
   const best = Math.max(...totals);
@@ -769,22 +838,22 @@ function renderEarnings() {
   const w0 = days.indexOf(week[0]), w1 = days.indexOf(week[6]);
 
   cards.forEach(({ mess: m, diet }, ci) => {
-    const list = mine.filter((s) => messOf(s) === m && priceDiet(s.diet) === diet);
+    const list = mine.filter((s) => messOf(s) === m && dietOf(s) === diet);
     const c = el('div', 'card');
     c.style.setProperty('--m', messColor(m));
     const head = el('div', 'card-head');
     head.append(svgEl(messIcon(m)));
     const nm = el('span', 'card-name', messName(m));
     nm.style.setProperty('color', messColor(m));
-    const dt = span('card-diet', dietMark(diet));
-    dt.append(DIET_LABEL[diet]);
+    const dt = span('card-diet', diet === 'extra' ? extraIcon() : dietMark(diet));
+    dt.append(dietName(diet));
     nm.append(dt);
     head.append(nm);
     if (ci === top) head.append(el('span', 'verdict hot', 'TOP EARNER'));
     const kpis = el('div', 'kpis');
     const kpi = (v, label) => { const k = el('div', 'kpi'); k.append(el('b', v == null ? 'none' : '', v == null ? '-' : v), el('span', '', label)); return k; };
     const med = median(list.map((s) => s.amount));
-    kpis.append(kpi(String(list.length), 'MEALS SOLD'), kpi(rupees(totals[ci]), 'EARNED'), kpi(med == null ? null : rupees(Math.round(med)), 'MEDIAN PRICE'));
+    kpis.append(kpi(String(list.length), diet === 'extra' ? 'EXTRAS SOLD' : 'MEALS SOLD'), kpi(rupees(totals[ci]), 'EARNED'), kpi(med == null ? null : rupees(Math.round(med)), 'MEDIAN PRICE'));
     const spark = el('div', 'spark');
     spark.style.setProperty('--n', days.length);
     if (w1 >= 0 || w0 >= 0) {
@@ -804,8 +873,8 @@ function renderEarnings() {
       }
       const ds = list.filter((s) => s.date === days[i]);
       tip(bk, () => [
-        [{ t: `${messName(m)} ${DIET_LABEL[diet].toLowerCase()}, ${fmtDay(days[i])}`, c: 'nm', color: messColor(m) }],
-        ...(ds.length ? ds.map((s) => [{ t: `${cap(s.meal)} `, c: 'c7' }, { t: rupees(s.amount), c: 'c6' }, { t: ` · ${s.name || fmtPhone(s.phone) || 'Unknown buyer'}`, c: 'c8' }]) : [[{ t: 'No sales', c: 'c8' }]]),
+        [{ t: `${messName(m)} ${dietName(diet).toLowerCase()}, ${fmtDay(days[i])}`, c: 'nm', color: messColor(m) }],
+        ...(ds.length ? ds.map((s) => [{ t: `${cap(saleWhat(s))} `, c: 'c7' }, { t: rupees(s.amount), c: 'c6' }, { t: ` · ${s.name || fmtPhone(s.phone) || 'Unknown buyer'}`, c: 'c8' }]) : [[{ t: 'No sales', c: 'c8' }]]),
         ds.length > 1 ? [{ t: 'Total ', c: 'c7' }, { t: rupees(v), c: 'cf' }] : null,
       ].filter((x) => x !== null));
       spark.append(bk);

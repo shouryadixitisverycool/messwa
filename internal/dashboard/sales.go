@@ -2,7 +2,9 @@ package dashboard
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -128,6 +130,39 @@ type cell struct {
 	// OpensAfter, ends. Start now waits for it.
 	Opens      int64  `json:"opens,omitempty"`
 	OpensAfter string `json:"opens_after,omitempty"`
+	// Extras lists registered extras (such as Egg) verified from the mess
+	// portal for this meal, along with any separate extra sales/schedules.
+	Extras           []cellExtra `json:"extras,omitempty"`
+	ExtrasErr        string      `json:"extras_err,omitempty"`
+	ExtrasVerifiedAt int64       `json:"extras_verified_at,omitempty"`
+}
+
+// cellExtra is one registered extra item on a meal (e.g. "Egg"), combining
+// live mess-portal counts with separately sold/selling/scheduled extra slots.
+type cellExtra struct {
+	Name      string      `json:"name"`
+	Mess      string      `json:"mess,omitempty"`
+	Rate      float64     `json:"rate,omitempty"`
+	Total     int         `json:"total"`
+	Availed   int         `json:"availed"`
+	Unavailed int         `json:"unavailed"`
+	Available int         `json:"available"`
+	Sold      int         `json:"sold"`
+	Selling   int         `json:"selling"`
+	Scheduled int         `json:"scheduled"`
+	Earned    float64     `json:"earned,omitempty"`
+	Slots     []extraSlot `json:"slots,omitempty"`
+}
+
+// extraSlot is one separately sold, selling, or scheduled extra slot
+// (e.g. "dinner#e1").
+type extraSlot struct {
+	Slot     string        `json:"slot"`
+	State    string        `json:"state"` // selling, scheduled, armed, sending, sold, handoff
+	Amount   float64       `json:"amount,omitempty"`
+	Buyer    string        `json:"buyer,omitempty"`
+	Task     *cellTask     `json:"task,omitempty"`
+	Schedule *cellSchedule `json:"schedule,omitempty"`
 }
 
 // cellTask is a running sell task: its price range in rupees and who has
@@ -178,6 +213,8 @@ type taskBuyer struct {
 type sale struct {
 	Date   string  `json:"date"`
 	Meal   string  `json:"meal"`
+	Slot   string  `json:"slot,omitempty"`
+	Extra  string  `json:"extra,omitempty"`
 	Mess   string  `json:"mess,omitempty"`
 	Diet   string  `json:"diet,omitempty"`
 	Amount float64 `json:"amount"`
@@ -219,11 +256,13 @@ type month struct {
 	// loads, else sales.monthly_fee. 0 when neither is there.
 	Fee float64 `json:"fee"`
 	// Bill splits Fee when it came from the portal.
-	Bill    *bill   `json:"bill,omitempty"`
-	BillErr string  `json:"bill_err,omitempty"`
-	Earned  float64 `json:"earned"`
-	Sold    int     `json:"sold"`
-	Wasted  int     `json:"wasted"`
+	Bill         *bill   `json:"bill,omitempty"`
+	BillErr      string  `json:"bill_err,omitempty"`
+	Earned       float64 `json:"earned"`
+	Sold         int     `json:"sold"`
+	ExtrasSold   int     `json:"extras_sold,omitempty"`
+	ExtrasEarned float64 `json:"extras_earned,omitempty"`
+	Wasted       int     `json:"wasted"`
 	// Potential is what the wasted meals would have fetched at the median
 	// ask. Unpriced counts wasted meals with no market price to go on.
 	Potential float64 `json:"potential"`
@@ -256,13 +295,26 @@ var readBill = func(ctx context.Context, acc *accounts.Accounts, userID int64, y
 	return c.Bill(ctx, year, month)
 }
 
+// readExtras reads that user's registered extras for one meal. Tests replace it.
+var readExtras = func(ctx context.Context, acc *accounts.Accounts, userID int64, date, meal string) ([]portal.ExtraRegistration, error) {
+	if acc == nil {
+		return nil, portal.ErrNoKey
+	}
+	c, err := acc.Portal(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return c.ExtraRegistrations(ctx, date, meal)
+}
+
 // regCache keeps each user's last portal reads in memory for a minute, so
 // live updates on the page don't hit the portal for every market post.
 type regCache struct {
-	mu    sync.Mutex
-	acc   *accounts.Accounts
-	users map[int64]*regEntry
-	bills map[int64]*billEntry
+	mu     sync.Mutex
+	acc    *accounts.Accounts
+	users  map[int64]*regEntry
+	bills  map[int64]*billEntry
+	extras map[int64]map[string]*extrasEntry
 }
 
 type regEntry struct {
@@ -279,8 +331,37 @@ type billEntry struct {
 	err         error
 }
 
+type extrasEntry struct {
+	at   time.Time
+	rows []portal.ExtraRegistration
+	err  error
+}
+
 func newRegCache(acc *accounts.Accounts) *regCache {
-	return &regCache{acc: acc, users: map[int64]*regEntry{}, bills: map[int64]*billEntry{}}
+	return &regCache{acc: acc, users: map[int64]*regEntry{}, bills: map[int64]*billEntry{}, extras: map[int64]map[string]*extrasEntry{}}
+}
+
+func (c *regCache) getExtras(ctx context.Context, userID int64, date, meal string, refresh bool) ([]portal.ExtraRegistration, time.Time, error) {
+	key := date + "|" + meal
+	c.mu.Lock()
+	if !refresh {
+		if m := c.extras[userID]; m != nil {
+			if e := m[key]; e != nil && time.Since(e.at) < time.Minute {
+				c.mu.Unlock()
+				return e.rows, e.at, e.err
+			}
+		}
+	}
+	c.mu.Unlock()
+	rows, err := readExtras(ctx, c.acc, userID, date, meal)
+	now := time.Now()
+	c.mu.Lock()
+	if c.extras[userID] == nil {
+		c.extras[userID] = map[string]*extrasEntry{}
+	}
+	c.extras[userID][key] = &extrasEntry{at: now, rows: rows, err: err}
+	c.mu.Unlock()
+	return rows, now, err
 }
 
 func (c *regCache) bill(ctx context.Context, userID int64, year, month int) (portal.Bill, error) {
@@ -315,6 +396,7 @@ func (c *regCache) forget(userID int64) {
 	c.mu.Lock()
 	delete(c.users, userID)
 	delete(c.bills, userID)
+	delete(c.extras, userID)
 	c.mu.Unlock()
 }
 
@@ -375,6 +457,10 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 	running := map[string]*cellTask{}
 	waiting := map[string]*cellSchedule{}
 	issues := map[string]store.SellSchedule{}
+	// Extra slots grouped by "date|baseMeal" so they attach to their meal cell.
+	extraTasks := map[string][]extraTaskRec{}
+	extraSchedules := map[string][]extraSchedRec{}
+	extraDeliveries := map[string][]extraDelivRec{}
 	// ahead is the next meal when it is tomorrow's, after today's last one.
 	var ahead *meals.Slot
 	sellable := map[string]bool{}
@@ -402,6 +488,10 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 				t.Buyers = append(t.Buyers, taskBuyer{Key: b.Key, Name: b.Name, Phone: b.Phone, State: b.State, Price: price, Muted: b.Muted})
 			}
 			running[v.Date+"|"+v.Meal] = t
+			if v.Extra != "" || store.IsExtraSlot(v.Meal) {
+				bk := v.Date + "|" + store.BaseMeal(v.Meal)
+				extraTasks[bk] = append(extraTasks[bk], extraTaskRec{slot: v.Meal, extra: v.Extra, mess: v.Mess, task: t})
+			}
 		}
 		scs, err := srv.SellSchedules(ctx)
 		if err != nil {
@@ -412,7 +502,12 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 				issues[sc.Date+"|"+sc.Meal] = sc
 			}
 			if sc.State == store.ScheduleWaiting || sc.State == store.ScheduleStarting {
-				waiting[sc.Date+"|"+sc.Meal] = &cellSchedule{ID: sc.ID, RuleID: sc.RuleID, Overridden: sc.Overridden, Revision: sc.Revision, State: sc.State, Detail: sc.Detail, RetryAt: unix(sc.RetryAt), At: srv.ScheduledAt(sc).Unix(), Min: float64(sc.MinPaise) / 100, Max: float64(sc.MaxPaise) / 100, Autopilot: sc.Autopilot}
+				cs := &cellSchedule{ID: sc.ID, RuleID: sc.RuleID, Overridden: sc.Overridden, Revision: sc.Revision, State: sc.State, Detail: sc.Detail, RetryAt: unix(sc.RetryAt), At: srv.ScheduledAt(sc).Unix(), Min: float64(sc.MinPaise) / 100, Max: float64(sc.MaxPaise) / 100, Autopilot: sc.Autopilot}
+				waiting[sc.Date+"|"+sc.Meal] = cs
+				if sc.Extra != "" || store.IsExtraSlot(sc.Meal) {
+					bk := sc.Date + "|" + store.BaseMeal(sc.Meal)
+					extraSchedules[bk] = append(extraSchedules[bk], extraSchedRec{slot: sc.Meal, extra: sc.Extra, sched: cs})
+				}
 			}
 		}
 		if _, err := srv.SellControl(); err != nil {
@@ -434,24 +529,33 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 		if d.State != "armed" && d.State != "sending" && d.State != "sent" && d.State != "handed_off" {
 			continue
 		}
-		// A "dinner#2" slot is someone else's meal, sold through yours.
-		if strings.Contains(d.Meal, "#") {
+		isExtra := store.IsExtraSlot(d.Meal) || d.Extra != ""
+		// Friends' meals ("dinner#f1") and legacy proxy slots ("dinner#2") stay out of your totals.
+		if !isExtra && strings.Contains(d.Meal, "#") {
 			slotSales[d.Date+"|"+d.Meal] = d
 			continue
 		}
+		baseMeal := store.BaseMeal(d.Meal)
 		day, err := time.ParseInLocation("2006-01-02", d.Date, loc)
 		if err != nil {
 			continue
 		}
 		var end time.Time
 		for _, w := range sched.Windows(day) {
-			if w.Meal == d.Meal {
+			if w.Meal == baseMeal {
 				end = w.End
 			}
 		}
 		amount, _ := strconv.ParseFloat(d.Amount, 64)
-		s := sale{Date: d.Date, Meal: d.Meal, Mess: d.Mess, Diet: d.Diet, Amount: amount, Name: d.BuyerName,
+		s := sale{Date: d.Date, Meal: baseMeal, Mess: d.Mess, Diet: d.Diet, Amount: amount, Name: d.BuyerName,
 			End: end.Unix(), ArmedAt: unix(d.ArmedAt), OfferAt: unix(d.OfferAt), PaidAt: unix(d.PaidAt), SentAt: unix(d.SentAt), PaidBy: d.PaymentKind}
+		if isExtra {
+			s.Slot = d.Meal
+			s.Extra = d.Extra
+			if s.Extra == "" {
+				s.Extra = "Extra"
+			}
+		}
 		switch {
 		case d.State == "sent":
 			s.State = "sold"
@@ -472,7 +576,16 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 		if s.Buyer == "" {
 			s.Buyer = d.Peer
 		}
-		byMeal[d.Date+"|"+d.Meal] = len(out.Sales)
+		if isExtra {
+			bk := d.Date + "|" + baseMeal
+			var sentAt time.Time
+			if d.State == "sent" {
+				sentAt = d.SentAt
+			}
+			extraDeliveries[bk] = append(extraDeliveries[bk], extraDelivRec{slot: d.Meal, extra: s.Extra, mess: d.Mess, state: s.State, amount: amount, buyer: firstStr(s.Name, s.Phone, s.Buyer), task: running[d.Date+"|"+d.Meal], sentAt: sentAt})
+		} else {
+			byMeal[d.Date+"|"+d.Meal] = len(out.Sales)
+		}
 		out.Sales = append(out.Sales, s)
 	}
 
@@ -501,6 +614,57 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 		if !r.Cancelled() {
 			regs[r.Date+"|"+r.Meal] = append(regs[r.Date+"|"+r.Meal], r)
 		}
+	}
+
+	// Fetch portal extras for today and tomorrow's meals (including cancelled
+	// main meals, since registered extras can still be sold separately), plus
+	// any active/upcoming meal (date >= today) that already has extra slots.
+	todayStr := ymd(today)
+	tomorrowStr := ymd(today.AddDate(0, 0, 1))
+	wantExtras := map[string][2]string{}
+	for _, r := range rows {
+		if r.Date == todayStr || r.Date == tomorrowStr {
+			wantExtras[r.Date+"|"+r.Meal] = [2]string{r.Date, r.Meal}
+		}
+	}
+	for _, mp := range []map[string]struct{}{
+		keysOf(extraTasks), keysOf(extraSchedules), keysOf(extraDeliveries),
+	} {
+		for k := range mp {
+			if d, m, ok := strings.Cut(k, "|"); ok && d >= todayStr {
+				wantExtras[k] = [2]string{d, m}
+			}
+		}
+	}
+	portalExtras := map[string][]portal.ExtraRegistration{}
+	portalExtrasErr := map[string]string{}
+	portalExtrasAt := map[string]int64{}
+	if len(wantExtras) > 0 && out.Portal == "" {
+		var wg sync.WaitGroup
+		var emu sync.Mutex
+		sem := make(chan struct{}, 4)
+		for k, dm := range wantExtras {
+			wg.Add(1)
+			go func(key, date, meal string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				erows, fetchedAt, eerr := cache.getExtras(ctx, u.ID, date, meal, false)
+				emu.Lock()
+				defer emu.Unlock()
+				if !fetchedAt.IsZero() {
+					portalExtrasAt[key] = fetchedAt.Unix()
+				}
+				if eerr != nil {
+					if !errors.Is(eerr, portal.ErrNoKey) {
+						portalExtrasErr[key] = eerr.Error()
+					}
+					return
+				}
+				portalExtras[key] = erows
+			}(k, dm[0], dm[1])
+		}
+		wg.Wait()
 	}
 
 	// cellFor is what became of the meal in window w on date.
@@ -556,6 +720,18 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 		if c.State != "none" && c.State != "ate" {
 			c.Ask = asks.estimate(date, w.Meal, c.Mess, c.Diet)
 		}
+		if exs := buildCellExtras(portalExtras[key], extraDeliveries[key], extraTasks[key], extraSchedules[key], c.Mess, loc); len(exs) > 0 {
+			c.Extras = exs
+			if c.Mess == "" && exs[0].Mess != "" {
+				c.Mess = exs[0].Mess
+			}
+		}
+		if vat := portalExtrasAt[key]; vat > 0 {
+			c.ExtrasVerifiedAt = vat
+		}
+		if eerr := portalExtrasErr[key]; eerr != "" {
+			c.ExtrasErr = eerr
+		}
 		return c
 	}
 	for day := from; !day.After(today); day = day.AddDate(0, 0, 1) {
@@ -599,13 +775,289 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 
 	for i := range out.Sales {
 		s := &out.Sales[i]
-		s.Ask = asks.estimate(s.Date, s.Meal, s.Mess, s.Diet)
+		if s.Extra == "" {
+			s.Ask = asks.estimate(s.Date, s.Meal, s.Mess, s.Diet)
+		}
 		if (s.State == "sold" || s.State == "sending") && s.Date >= out.Month.Start && s.Date <= out.Today {
 			out.Month.Earned += s.Amount
-			out.Month.Sold++
+			if s.Extra != "" {
+				out.Month.ExtrasSold++
+				out.Month.ExtrasEarned += s.Amount
+			} else {
+				out.Month.Sold++
+			}
 		}
 	}
 	return out, nil
+}
+
+type extraTaskRec struct {
+	slot, extra, mess string
+	task              *cellTask
+}
+
+type extraSchedRec struct {
+	slot, extra string
+	sched       *cellSchedule
+}
+
+type extraDelivRec struct {
+	slot, extra, mess, state, buyer string
+	amount                          float64
+	task                            *cellTask
+	sentAt                          time.Time
+}
+
+func firstStr(ss ...string) string {
+	for _, s := range ss {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+func keysOf[V any](m map[string]V) map[string]struct{} {
+	out := make(map[string]struct{}, len(m))
+	for k := range m {
+		out[k] = struct{}{}
+	}
+	return out
+}
+
+func extraSlotNum(slot string) int {
+	_, suffix, ok := strings.Cut(slot, store.ExtraSlotPrefix)
+	if !ok {
+		return 0
+	}
+	n, _ := strconv.Atoi(suffix)
+	return n
+}
+
+// buildCellExtras merges live mess-portal extra registrations with any
+// separately sold, actively selling, or scheduled extra slots for one meal.
+func buildCellExtras(rows []portal.ExtraRegistration, delivs []extraDelivRec, tasks []extraTaskRec, scheds []extraSchedRec, defaultMess string, loc *time.Location) []cellExtra {
+	byKey := map[string]*cellExtra{}
+	var order []string
+	ensure := func(name, mess string) *cellExtra {
+		name = portal.NormalizeExtraName(name)
+		if name == "" {
+			name = "Extra"
+		}
+		k := strings.ToLower(name)
+		ce, ok := byKey[k]
+		if !ok {
+			ce = &cellExtra{Name: name, Mess: firstStr(mess, defaultMess)}
+			byKey[k] = ce
+			order = append(order, k)
+		} else if ce.Mess == "" {
+			ce.Mess = firstStr(mess, defaultMess)
+		}
+		return ce
+	}
+	for _, sum := range portal.SummarizeExtras(rows) {
+		ce := ensure(sum.Name, sum.Mess)
+		ce.Total = sum.Total
+		ce.Availed = sum.Availed
+		ce.Unavailed = sum.Unavailed
+		if sum.RatePaise > 0 {
+			ce.Rate = float64(sum.RatePaise) / 100
+		}
+	}
+	delivSlots := map[string]bool{}
+	soldSentAt := map[string][]time.Time{}
+	for _, d := range delivs {
+		if d.state == "lapsed" {
+			continue
+		}
+		ce := ensure(d.extra, d.mess)
+		k := strings.ToLower(ce.Name)
+		delivSlots[d.slot] = true
+		if d.state == "armed" {
+			// Unpaid reservation: still in play (selling), not sold yet.
+			ce.Selling++
+		} else {
+			ce.Sold++
+			soldSentAt[k] = append(soldSentAt[k], d.sentAt)
+			if d.state == "sold" || d.state == "sending" {
+				ce.Earned += d.amount
+			}
+		}
+		ce.Slots = append(ce.Slots, extraSlot{
+			Slot: d.slot, State: d.state, Amount: d.amount, Buyer: d.buyer, Task: d.task,
+		})
+	}
+	taskSlots := map[string]bool{}
+	for _, t := range tasks {
+		if delivSlots[t.slot] {
+			continue
+		}
+		taskSlots[t.slot] = true
+		ce := ensure(t.extra, t.mess)
+		ce.Selling++
+		ce.Slots = append(ce.Slots, extraSlot{Slot: t.slot, State: "selling", Task: t.task})
+	}
+	for _, sc := range scheds {
+		if delivSlots[sc.slot] || taskSlots[sc.slot] {
+			continue
+		}
+		ce := ensure(sc.extra, "")
+		ce.Scheduled++
+		ce.Slots = append(ce.Slots, extraSlot{Slot: sc.slot, State: "scheduled", Schedule: sc.sched})
+	}
+	out := make([]cellExtra, 0, len(order))
+	for _, k := range order {
+		ce := byKey[k]
+		_, _, _, avail := portal.AvailableExtras(rows, ce.Name, soldSentAt[k], ce.Selling+ce.Scheduled, loc)
+		ce.Available = avail
+		sort.SliceStable(ce.Slots, func(i, j int) bool {
+			ni, nj := extraSlotNum(ce.Slots[i].Slot), extraSlotNum(ce.Slots[j].Slot)
+			if ni != nj {
+				return ni < nj
+			}
+			return ce.Slots[i].Slot < ce.Slots[j].Slot
+		})
+		out = append(out, *ce)
+	}
+	return out
+}
+
+type mealExtrasResp struct {
+	Date       string      `json:"date"`
+	Meal       string      `json:"meal"`
+	Extras     []cellExtra `json:"extras"`
+	VerifiedAt int64       `json:"verified_at"`
+	Error      string      `json:"error,omitempty"`
+}
+
+// mealExtrasHandler verifies and returns registered extras for one (date, meal)
+// on demand, e.g. when inspecting an upcoming meal in the planner or clicking
+// refresh.
+func mealExtrasHandler(cfg *config.Config, srv *mcpserver.Server, cache *regCache) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		date := strings.TrimSpace(r.URL.Query().Get("date"))
+		meal := strings.TrimSpace(r.URL.Query().Get("meal"))
+		refresh := r.URL.Query().Get("refresh") == "1"
+		liveCfg := cfg.Live()
+		loc := liveCfg.Location()
+		day, err := time.ParseInLocation("2006-01-02", date, loc)
+		if err != nil {
+			jsonError(w, "date must be YYYY-MM-DD", http.StatusBadRequest)
+			return
+		}
+		validMeal := false
+		for _, m := range liveCfg.Meals {
+			if m.Name == meal {
+				validMeal = true
+				break
+			}
+		}
+		if !validMeal {
+			jsonError(w, "meal must name a configured meal", http.StatusBadRequest)
+			return
+		}
+		var mealEnd time.Time
+		for _, win := range meals.New(liveCfg).Windows(day) {
+			if win.Meal == meal {
+				mealEnd = win.End
+				break
+			}
+		}
+		now := srv.Now()
+		u := accounts.UserFrom(ctx)
+		owner := srv.Scoped() || u.IsAdmin()
+		rows, fetchedAt, err := cache.getExtras(ctx, u.ID, date, meal, refresh)
+		verifiedAt := now.Unix()
+		if !fetchedAt.IsZero() {
+			verifiedAt = fetchedAt.Unix()
+		}
+		resp := mealExtrasResp{Date: date, Meal: meal, Extras: []cellExtra{}, VerifiedAt: verifiedAt}
+		if err != nil {
+			resp.Error = err.Error()
+		}
+		var delivs []extraDelivRec
+		var tasks []extraTaskRec
+		var scheds []extraSchedRec
+		if owner {
+			running := map[string]*cellTask{}
+			views, verr := srv.SaleViews(ctx)
+			if verr != nil {
+				jsonError(w, verr.Error(), http.StatusInternalServerError)
+				return
+			}
+			for _, v := range views {
+				if v.State != store.TaskActive || v.Date != date || store.BaseMeal(v.Meal) != meal {
+					continue
+				}
+				if v.Extra == "" && !store.IsExtraSlot(v.Meal) {
+					continue
+				}
+				t := &cellTask{ID: v.ID, Min: v.Min, Max: v.Max, Buyers: []taskBuyer{}, Autopilot: v.Autopilot}
+				for _, b := range v.Buyers {
+					price := b.Agreed
+					if price == 0 {
+						price = b.Asked
+					}
+					if price == 0 {
+						price = b.Offer
+					}
+					t.Buyers = append(t.Buyers, taskBuyer{Key: b.Key, Name: b.Name, Phone: b.Phone, State: b.State, Price: price, Muted: b.Muted})
+				}
+				running[v.Meal] = t
+				tasks = append(tasks, extraTaskRec{slot: v.Meal, extra: v.Extra, mess: v.Mess, task: t})
+			}
+			scs, serr := srv.SellSchedules(ctx)
+			if serr != nil {
+				jsonError(w, serr.Error(), http.StatusInternalServerError)
+				return
+			}
+			for _, sc := range scs {
+				if sc.Date != date || store.BaseMeal(sc.Meal) != meal || (sc.State != store.ScheduleWaiting && sc.State != store.ScheduleStarting) {
+					continue
+				}
+				if sc.Extra == "" && !store.IsExtraSlot(sc.Meal) {
+					continue
+				}
+				cs := &cellSchedule{ID: sc.ID, RuleID: sc.RuleID, Overridden: sc.Overridden, Revision: sc.Revision, State: sc.State, Detail: sc.Detail, RetryAt: unix(sc.RetryAt), At: srv.ScheduledAt(sc).Unix(), Min: float64(sc.MinPaise) / 100, Max: float64(sc.MaxPaise) / 100, Autopilot: sc.Autopilot}
+				scheds = append(scheds, extraSchedRec{slot: sc.Meal, extra: sc.Extra, sched: cs})
+			}
+			ds, derr := srv.Deliveries(ctx)
+			if derr != nil {
+				jsonError(w, derr.Error(), http.StatusInternalServerError)
+				return
+			}
+			for _, d := range ds {
+				if d.Date != date || store.BaseMeal(d.Meal) != meal || (!store.IsExtraSlot(d.Meal) && d.Extra == "") {
+					continue
+				}
+				var state string
+				switch {
+				case d.State == "sent":
+					state = "sold"
+				case d.State == "sending":
+					state = "sending"
+				case d.State == "handed_off":
+					state = "handoff"
+				case d.State == "armed" && !mealEnd.IsZero() && !now.Before(mealEnd):
+					state = "lapsed"
+				case d.State == "armed":
+					state = "armed"
+				default:
+					continue
+				}
+				amount, _ := strconv.ParseFloat(d.Amount, 64)
+				buyer := firstStr(d.BuyerName, phone(d.Peer), phone(d.PeerAlt), d.Peer)
+				var sentAt time.Time
+				if d.State == "sent" {
+					sentAt = d.SentAt
+				}
+				delivs = append(delivs, extraDelivRec{slot: d.Meal, extra: firstStr(d.Extra, "Extra"), mess: d.Mess, state: state, amount: amount, buyer: buyer, task: running[d.Meal], sentAt: sentAt})
+			}
+		}
+		resp.Extras = buildCellExtras(rows, delivs, tasks, scheds, "", loc)
+		writeJSON(w, r, resp)
+	}
 }
 
 // friendMeals fills out.Friends from the friends' meals saved since from,

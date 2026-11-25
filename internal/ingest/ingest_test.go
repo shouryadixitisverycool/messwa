@@ -328,3 +328,23 @@ func TestMarket(t *testing.T) {
 		t.Errorf("posts after until leaked in: %+v", posts)
 	}
 }
+
+func TestExtraOnlyListingExcludedFromMealPrices(t *testing.T) {
+	in, st, cfg := setup(t)
+	ctx := context.Background()
+	ts := at(cfg, "18:00")
+	if err := in.Post(ctx, GroupPost{Chat: "g1@g.us", ID: "m1", Sender: "s1@s.whatsapp.net", Text: "sell kadamba dinner egg (extra only) x2 15", TS: ts}); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.Post(ctx, GroupPost{Chat: "g1@g.us", ID: "m2", Sender: "s2@s.whatsapp.net", Text: "sell kadamba non-veg dinner 65", TS: ts}); err != nil {
+		t.Fatal(err)
+	}
+
+	prices, err := st.Prices(ctx, "2026-01-01", "2026-12-31")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prices) != 1 || prices[0].Diet != "nonveg" || len(prices[0].Prices) != 1 || prices[0].Prices[0] != 65 {
+		t.Fatalf("extra-only listing polluted meal prices: %+v", prices)
+	}
+}

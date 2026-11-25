@@ -447,12 +447,14 @@ type negotiation struct {
 func newNegotiation(ctx context.Context, m *sellManager, t store.SellTask, s *sale, gate *taskGate, join *offerQueue) *negotiation {
 	var median float64
 	var have bool
-	if day, err := time.ParseInLocation("2006-01-02", t.Date, m.cfg.Location()); err == nil {
-		from := day.Add(-market.Window).Format("2006-01-02")
-		if ps, err := m.prices(ctx, from, t.Date); err != nil {
-			m.log.Warn("could not read market prices; negotiating toward max_price", "task", t.ID, "err", err)
-		} else {
-			median, have = market.MedianAsk(ps, t.Date, baseMeal(t.Meal), s.mess, s.diet)
+	if t.Extra == "" {
+		if day, err := time.ParseInLocation("2006-01-02", t.Date, m.cfg.Location()); err == nil {
+			from := day.Add(-market.Window).Format("2006-01-02")
+			if ps, err := m.prices(ctx, from, t.Date); err != nil {
+				m.log.Warn("could not read market prices; negotiating toward max_price", "task", t.ID, "err", err)
+			} else {
+				median, have = market.MedianAsk(ps, t.Date, baseMeal(t.Meal), s.mess, s.diet)
+			}
 		}
 	}
 	n := &negotiation{
@@ -1024,15 +1026,23 @@ func (n *negotiation) payment(peer types.JID, e *events.Message) {
 	d := n.s.reservation(peer, amount)
 	msgID := n.m.conn.GenerateMessageID()
 	paid := store.Payment{ID: e.Info.ID, At: e.Info.Timestamp, BuyerName: e.Info.PushName}
-	claimed, err := n.m.st.ClaimTaskSale(ctx, n.t.ID, d, paid, msgID)
+	claim := func() (bool, error) { return n.m.st.ClaimTaskSale(ctx, n.t.ID, d, paid, msgID) }
+	var claimed bool
+	if n.s.claimGuard != nil {
+		claimed, err = n.s.claimGuard(ctx, claim)
+	} else {
+		claimed, err = claim()
+	}
 	if err != nil || !claimed {
-		n.log.Warn("payment arrived while the meal was reserved for someone else", "buyer", peer, "amount", amount, "err", err)
-		if rerr := n.m.st.RefundSellTaskBuyer(ctx, n.t.ID, peer.String(), amount,
-			fmt.Sprintf("paid INR %s while the meal was reserved for someone else; refund them", amount)); rerr != nil {
+		reason := fmt.Sprintf("paid INR %s while the meal was reserved for someone else; refund them", amount)
+		if err != nil {
+			reason = fmt.Sprintf("paid INR %s but could not honour the sale (%v); refund them", amount, err)
+		}
+		n.log.Warn("payment outside a turn not honoured", "buyer", peer, "amount", amount, "err", err)
+		if rerr := n.m.st.RefundSellTaskBuyer(ctx, n.t.ID, peer.String(), amount, reason); rerr != nil {
 			n.log.Error("could not record the payment to refund", "err", rerr)
 		}
-		n.m.event(ctx, store.SellEvent{TaskID: n.t.ID, Peer: peer.String(), Kind: store.EventParked, N: paise(amount),
-			Text: fmt.Sprintf("paid INR %s while the meal was reserved for someone else; refund them", amount)})
+		n.m.event(ctx, store.SellEvent{TaskID: n.t.ID, Peer: peer.String(), Kind: store.EventParked, N: paise(amount), Text: reason})
 		n.mu.Lock()
 		ss.state = sessionEnded
 		n.wakeLocked()

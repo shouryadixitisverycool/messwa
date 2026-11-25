@@ -143,3 +143,42 @@ func (p proxyPortal) ExtraRegistrations(ctx context.Context, date, meal string) 
 	}
 	return ep.ExtraRegistrations(ctx, date, baseMeal(meal))
 }
+
+// OwnExtraRegistrations always reads the seller's real portal account, never
+// a legacy proxy-meal.json file, so extra inventory verification matches the
+// account whose QR will be delivered.
+func (p proxyPortal) OwnExtraRegistrations(ctx context.Context, date, meal string) ([]portal.ExtraRegistration, error) {
+	r, err := p.real(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ep, ok := r.(extrasPortal)
+	if !ok {
+		return nil, errors.New("portal does not support extra verification")
+	}
+	return ep.ExtraRegistrations(ctx, date, baseMeal(meal))
+}
+
+func (p proxyPortal) RequireExtra(ctx context.Context, date, meal, extraName string, need int) (portal.ExtraRegistration, int, error) {
+	r, err := p.real(ctx)
+	if err != nil {
+		return portal.ExtraRegistration{}, 0, err
+	}
+	ep, ok := r.(extraSalePortal)
+	if !ok {
+		return portal.ExtraRegistration{}, 0, errors.New("portal does not support extra verification")
+	}
+	return ep.RequireExtra(ctx, date, baseMeal(meal), extraName, need)
+}
+
+func (p proxyPortal) QRForExtra(ctx context.Context, date, meal, extraName string, need int, accountHash string) (portal.CurrentQR, int, error) {
+	r, err := p.real(ctx)
+	if err != nil {
+		return portal.CurrentQR{}, 0, err
+	}
+	ep, ok := r.(extraSalePortal)
+	if !ok {
+		return portal.CurrentQR{}, 0, errors.New("portal does not support extra QR verification")
+	}
+	return ep.QRForExtra(ctx, date, baseMeal(meal), extraName, need, accountHash)
+}

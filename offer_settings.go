@@ -10,6 +10,7 @@ import (
 	"messwa/internal/config"
 	"messwa/internal/portal"
 	"messwa/internal/repost"
+	"messwa/internal/store"
 )
 
 // sellSettings is the [sell] section after one run's flags are applied.
@@ -222,21 +223,27 @@ type offerDetails struct {
 	// Diet is "veg", "nonveg", "egg" or empty.
 	Diet string
 	Meal string
+	// Extra is non-empty when offering a registered extra separately (e.g. "Egg").
+	Extra string
 	// Price is the asking price as posted, e.g. "60".
 	Price     string
 	ShowPrice bool
 	// Day labels a meal that isn't today's, "tmrw" or "5 nov". Empty for today.
 	Day    string
 	Extras []string
-	// Count is how many meals the post offers; above 1 it says "x2".
+	// Count is how many meals or extras the post offers; above 1 it says "x2".
 	Count int
 }
 
 // offerText builds the group post, e.g.
-// "sell kadamba non-veg lunch 60 (tmrw) + extras: Chicken 65, Lassi", or
-// "sell kadamba non-veg dinner x2 55" for two.
+// "sell kadamba non-veg lunch 60 (tmrw) + extras: Chicken 65, Lassi",
+// "sell kadamba non-veg dinner x2 55" for two, or
+// "sell kadamba dinner egg (extra only) x2 15" for two separately sold eggs.
 func offerText(o offerDetails) string {
-	parts := []string{"sell", portalMealLabel(o.Mess, o.Diet, o.Meal)}
+	parts := []string{"sell", portalItemLabel(o.Mess, o.Diet, o.Meal, o.Extra)}
+	if o.Extra != "" {
+		parts = append(parts, "(extra only)")
+	}
 	if o.Count > 1 {
 		parts = append(parts, fmt.Sprintf("x%d", o.Count))
 	}
@@ -247,7 +254,7 @@ func offerText(o offerDetails) string {
 		parts = append(parts, "("+o.Day+")")
 	}
 	text := strings.Join(strings.Fields(strings.Join(parts, " ")), " ")
-	if len(o.Extras) > 0 {
+	if o.Extra == "" && len(o.Extras) > 0 {
 		text += " + extras: " + strings.Join(o.Extras, ", ")
 	}
 	return text
@@ -256,20 +263,41 @@ func offerText(o offerDetails) string {
 // offerExtras picks the extra names to mention for a meal at mess: the ones
 // not yet availed and registered at that mess, once each, in portal order.
 func offerExtras(rows []portal.ExtraRegistration, mess string) []string {
-	var names []string
-	seen := map[string]bool{}
+	return offerExtrasRemaining(rows, mess, nil, nil)
+}
+
+// offerExtrasRemaining is offerExtras minus any extras already allocated to
+// separate extra slots (by lowercase extra name), so a meal post never
+// promises eggs that are being sold separately and never double-counts eggs
+// already scanned by separate buyers.
+func offerExtrasRemaining(rows []portal.ExtraRegistration, mess string, allocated map[string]store.ExtraSlotUsage, loc *time.Location) []string {
+	var matching []portal.ExtraRegistration
 	for _, r := range rows {
-		if r.Availed() {
-			continue
-		}
 		if extraMess, _ := (portal.Registration{Mess: r.Mess}).MessDiet(); extraMess != "" && mess != "" && extraMess != mess {
 			continue
 		}
-		name := strings.Join(strings.Fields(r.Name), " ")
-		if key := strings.ToLower(name); name != "" && !seen[key] {
-			seen[key] = true
-			names = append(names, name)
+		matching = append(matching, r)
+	}
+	var names []string
+	seen := map[string]bool{}
+	for _, r := range matching {
+		if r.Availed() {
+			continue
 		}
+		name := portal.NormalizeExtraName(r.Name)
+		key := strings.ToLower(name)
+		if name == "" || seen[key] {
+			continue
+		}
+		if allocated != nil {
+			u := allocated[key]
+			_, _, _, avail := portal.AvailableExtras(matching, name, u.SoldSentAt, u.Armed+u.Active+u.Scheduled, loc)
+			if avail <= 0 {
+				continue
+			}
+		}
+		seen[key] = true
+		names = append(names, name)
 	}
 	return names
 }

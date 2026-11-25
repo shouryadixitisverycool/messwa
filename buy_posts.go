@@ -8,6 +8,7 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/proto"
 
+	"messwa/internal/classify"
 	"messwa/internal/config"
 	"messwa/internal/store"
 )
@@ -95,7 +96,7 @@ func (m *sellManager) sweepBuyPosts(ctx context.Context, t store.SellTask, s *sa
 			return sent
 		}
 		l := ls[i]
-		if !buyPostMatches(l, t.Date, s.mess, s.diet) {
+		if !buyPostMatchesForExtra(l, t.Date, s.mess, s.diet, s.extra) {
 			continue
 		}
 		// Leave room for the buyers' replies, as reposts do.
@@ -116,12 +117,31 @@ func (m *sellManager) sweepBuyPosts(ctx context.Context, t store.SellTask, s *sa
 // at mess with diet. The post must name mess; one that names no diet takes
 // any.
 func buyPostMatches(l store.Listing, date, mess, diet string) bool {
+	return buyPostMatchesForExtra(l, date, mess, diet, "")
+}
+
+// buyPostMatchesForExtra matches buy posts for a meal or a separately sold
+// extra. An extra task only matches buy posts that explicitly name that extra,
+// never a generic meal buy post.
+func buyPostMatchesForExtra(l store.Listing, date, mess, diet, extra string) bool {
 	switch {
 	case l.MealDate != date, l.Deleted, l.SoldText, l.SoldReact, l.Closed:
 		return false
 	case mess == "" || l.Mess != mess:
 		return false
-	case l.Diet != "" && diet != "" && l.Diet != diet:
+	}
+	if extra != "" {
+		if l.Diet != "" && l.Diet != "egg" && l.Diet != "extra" {
+			return false
+		}
+		t := classify.Prepare(l.Text)
+		kws := extraKeywords(extra)
+		return t.Has(kws...) && !extraNegated(t, kws)
+	}
+	if l.Diet == "extra" {
+		return false
+	}
+	if l.Diet != "" && diet != "" && l.Diet != diet {
 		return false
 	}
 	return true

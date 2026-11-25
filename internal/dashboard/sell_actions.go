@@ -28,6 +28,19 @@ type startedResp struct {
 	At   int64  `json:"at,omitempty"`
 }
 
+// extraStartedResp answers a sell-extras action with the created tasks or
+// schedules and the portal counts verified at creation time.
+type extraStartedResp struct {
+	IDs               []int64  `json:"ids"`
+	Slots             []string `json:"slots"`
+	At                int64    `json:"at,omitempty"`
+	Extra             string   `json:"extra"`
+	Count             int      `json:"count"`
+	VerifiedTotal     int      `json:"verified_total"`
+	VerifiedUnavailed int      `json:"verified_unavailed"`
+	VerifiedAvailable int      `json:"verified_available"`
+}
+
 // sellActionRoutes shares the task operations with MCP: starting, repricing
 // and stopping a task from the sales ledger, selling a friend's meal, and
 // the MY SALE box's actions. Session middleware applies the same origin and
@@ -66,8 +79,11 @@ func sellActionRoutes(mux *http.ServeMux, cfg *config.Config, srv *mcpserver.Ser
 			// start, prices: the meal and the price range in rupees.
 			Date string `json:"date"`
 			Meal string `json:"meal"`
-			Min  int    `json:"min"`
-			Max  int    `json:"max"`
+			// sell-extras: which registered extra item (e.g. "Egg") and how many to sell.
+			Extra string `json:"extra"`
+			Count int    `json:"count"`
+			Min   int    `json:"min"`
+			Max   int    `json:"max"`
 			// start: Now starts the task straight away even when the
 			// meal hasn't begun, instead of scheduling it. Autopilot
 			// starts it on autopilot; autopilot: turns it on or off for
@@ -112,6 +128,36 @@ func sellActionRoutes(mux *http.ServeMux, cfg *config.Config, srv *mcpserver.Ser
 				return
 			}
 			writeJSON(w, r, startedResp{ID: id, At: unix(at)})
+			return
+		case "sell-extras":
+			if !picksGroups(cfg.Live()) {
+				jsonError(w, "pick the groups to post in first, under Settings, Offer", http.StatusBadRequest)
+				return
+			}
+			es, err := srv.ExtraSeller()
+			if err != nil {
+				jsonError(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			var at time.Time
+			if in.At != 0 {
+				at = time.Unix(in.At, 0)
+			}
+			res, err := es.StartExtras(r.Context(), accounts.UserFrom(r.Context()).ID, in.Date, in.Meal, in.Extra, in.Count, in.Min, in.Max, at, in.Now, in.Autopilot)
+			if err != nil {
+				jsonError(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, r, extraStartedResp{
+				IDs:               res.IDs,
+				Slots:             res.Slots,
+				At:                unix(res.At),
+				Extra:             res.Extra,
+				Count:             res.Count,
+				VerifiedTotal:     res.VerifiedTotal,
+				VerifiedUnavailed: res.VerifiedUnavailed,
+				VerifiedAvailable: res.VerifiedAvailable,
+			})
 			return
 		case "start":
 			if !picksGroups(cfg.Live()) {

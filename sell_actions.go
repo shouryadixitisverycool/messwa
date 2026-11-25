@@ -52,6 +52,17 @@ type manualSale struct {
 	qrID string
 	// recorded gets the ledger write's result, once.
 	recorded chan error
+	// release frees the extra reserved for this sale. The task calls it
+	// once the sale is in the ledger (or failed to get there), so a
+	// cancelled MarkSold request can't free the extra early. Idempotent;
+	// nil when nothing was reserved.
+	release func()
+}
+
+func (ms *manualSale) releaseExtra() {
+	if ms.release != nil {
+		ms.release()
+	}
 }
 
 // manualSoldError ends a task you sold by hand; detail is for the status.
@@ -148,7 +159,18 @@ func (m *sellManager) MarkSold(ctx context.Context, id int64, who, name string, 
 		if ms.to, err = types.ParseJID(peer); err != nil {
 			return err
 		}
-		if ms.qr, err = m.manualQR(ctx, rt.task); err != nil {
+		m.mu.Lock()
+		task := rt.task
+		m.mu.Unlock()
+		if task.Extra != "" {
+			release, rerr := m.reserveManualExtra(ctx, task.UserID, task.Date, task.Meal, task.Extra)
+			if rerr != nil {
+				return fmt.Errorf("could not get the meal QR, nothing changed: %w", rerr)
+			}
+			ms.release = release
+		}
+		if ms.qr, err = m.manualQR(ctx, task); err != nil {
+			ms.releaseExtra()
 			return fmt.Errorf("could not get the meal QR, nothing changed: %w", err)
 		}
 		ms.qrID = m.conn.GenerateMessageID()
@@ -156,6 +178,7 @@ func (m *sellManager) MarkSold(ctx context.Context, id int64, who, name string, 
 	m.mu.Lock()
 	if rt.manual != nil {
 		m.mu.Unlock()
+		ms.releaseExtra()
 		return errors.New("a manual sale for this task is already being recorded")
 	}
 	rt.manual = ms
@@ -172,6 +195,7 @@ func (m *sellManager) MarkSold(ctx context.Context, id int64, who, name string, 
 		case err := <-ms.recorded:
 			return err
 		default:
+			ms.releaseExtra()
 			return errors.New("the task ended before the sale could be recorded; check sell_task_status")
 		}
 	case <-ctx.Done():
@@ -179,18 +203,19 @@ func (m *sellManager) MarkSold(ctx context.Context, id int64, who, name string, 
 	}
 }
 
-// manualQR is task t's meal QR from the portal, uploaded and ready to send.
+// manualQR is task t's meal (or extra) QR from the portal, uploaded and ready to send.
 func (m *sellManager) manualQR(ctx context.Context, t store.SellTask) (*waE2E.Message, error) {
 	p, err := m.portalFor(ctx, t.UserID)
 	if err != nil {
 		return nil, err
 	}
 	s := m.newSale(t.Date, t.Meal, t.EndsAt)
+	s.extra = t.Extra
 	s.accountHash = t.AccountHash
 	if err := s.usePortal(ctx, p, m.cfg.VegOnly); err != nil {
 		return nil, err
 	}
-	return s.prepareQR(ctx, store.Delivery{Date: t.Date, Meal: t.Meal, Mess: s.mess}, false)
+	return s.prepareQR(ctx, store.Delivery{Date: t.Date, Meal: t.Meal, Mess: s.mess, Extra: t.Extra}, false)
 }
 
 // runningActive is task id while it runs in this process.
@@ -224,6 +249,9 @@ func (m *sellManager) finishManualSale(ctx context.Context, t store.SellTask, ga
 	m.mu.Unlock()
 	notifyCtx := context.WithoutCancel(ctx)
 	err := m.st.RecordTaskManualSale(notifyCtx, t.ID, store.TaskManualSale{Peer: ms.peer, BuyerName: ms.name, Amount: ms.amount, At: ms.at, QRMessageID: ms.qrID})
+	// Recorded, the sale counts as sold in the store, so the reservation
+	// can go; not recorded, nothing is sold.
+	ms.releaseExtra()
 	if err != nil {
 		ms.recorded <- err
 		m.log.Warn("could not record your sale", "task", t.ID, "err", err)
@@ -252,15 +280,19 @@ func (m *sellManager) finishManualSale(ctx context.Context, t store.SellTask, ga
 	if err != nil {
 		m.log.Warn("could not list buyers to tell it sold", "task", t.ID, "err", err)
 	}
+	// In a pool, buyers still in play move to the slots still selling
+	// first, as after a bot sale; only the rest hear it sold.
+	moved := m.passOn(notifyCtx, t)
 	var waiting []types.JID
 	for _, b := range buyers {
-		if peer, err := types.ParseJID(b.Peer); err == nil && b.Peer != ms.peer {
+		if peer, err := types.ParseJID(b.Peer); err == nil && b.Peer != ms.peer && !moved[b.Peer] {
 			waiting = append(waiting, peer)
 		}
 	}
 	// The gate is closed to the task's own sends; these go through
 	// sendSoldNotice, which only lets out the "sorry sold" claimed for them.
 	s := m.newSale(t.Date, t.Meal, t.EndsAt)
+	s.extra = t.Extra
 	s.send, s.event = gate.sendSoldNotice, m.saleEvents(t.ID)
 	s.tellSold(notifyCtx, &taskJournal{st: m.st, t: t}, waiting)
 	return manualSoldError{detail: detail}

@@ -28,9 +28,13 @@ const EventPooled = "pooled"
 // price now. Peer: the group; Text: the new text.
 const EventEdited = "edited"
 
-// pooledCond holds for a task alias x that can pool.
+// pooledCond holds for a task alias x that can pool. Negotiating tasks pool
+// across meals and extras; fixed-price extra tasks also pool with other
+// fixed-price tasks for the same extra at the same price so selling 3 eggs at
+// a fixed ₹15 posts one "x3 15" offer instead of three identical posts.
 func pooledCond(x string) string {
-	return x + `.max_paise>` + x + `.min_paise AND ` + x + `.handoff IN ('','never') AND ` + x + `.mess!='' AND ` + x + `.autopilot=0`
+	return `(` + x + `.max_paise>` + x + `.min_paise OR (` + x + `.extra!='' AND ` + x + `.max_paise=` + x + `.min_paise))` +
+		` AND ` + x + `.handoff IN ('','never') AND ` + x + `.mess!='' AND ` + x + `.autopilot=0`
 }
 
 // baseMealOf is the configured meal behind alias x's slot name.
@@ -39,9 +43,13 @@ func baseMealOf(x string) string {
 }
 
 // samePool holds when task p is in task t's pool. A task that can't pool
-// is in a pool of its own.
+// is in a pool of its own. Regular meals (no extra) never pool with extra
+// sales, and fixed-price extra tasks pool together across slots
+// for the same extra on the same meal (never with negotiating tasks), so
+// repricing keeps shared posts intact.
 var samePool = `(p.id=t.id OR (` + pooledCond("t") + ` AND ` + pooledCond("p") + ` AND p.date=t.date AND p.mess=t.mess
- AND p.diet=t.diet AND ` + baseMealOf("p") + `=` + baseMealOf("t") + `))`
+ AND p.diet=t.diet AND lower(p.extra)=lower(t.extra) AND ` + baseMealOf("p") + `=` + baseMealOf("t") + `
+ AND ((t.max_paise>t.min_paise AND p.max_paise>p.min_paise) OR (t.max_paise=t.min_paise AND p.max_paise=p.min_paise))))`
 
 // poolFloor is the lowest floor among the active tasks in task ?'s pool,
 // or the task's own floor once it has ended.

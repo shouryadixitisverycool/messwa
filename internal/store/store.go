@@ -145,6 +145,8 @@ func Open(path string) (*Store, error) {
 		{"sell_schedules", "attempts INTEGER NOT NULL DEFAULT 0"},
 		{"sell_schedules", "retry_at INTEGER NOT NULL DEFAULT 0"},
 		{"sell_tasks", "autopilot INTEGER NOT NULL DEFAULT 0"},
+		{"sell_tasks", "extra TEXT NOT NULL DEFAULT ''"},
+		{"sell_schedules", "extra TEXT NOT NULL DEFAULT ''"},
 		{"sell_task_offers", "error TEXT NOT NULL DEFAULT ''"},
 		{"sell_task_offers", "revoked_at INTEGER NOT NULL DEFAULT 0"},
 		{"sell_task_offers", "revoke_error TEXT NOT NULL DEFAULT ''"},

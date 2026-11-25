@@ -229,12 +229,12 @@ func (q *offerQueue) setPriority(peer types.JID, p int64) {
 }
 
 // restore puts back a buyer who was queued before a restart, without
-// recording them again.
+// recording them again. Idempotent when peer is already queued.
 func (q *offerQueue) restore(peer types.JID, waiting bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.seen[peer] = true
-	if waiting {
+	if waiting && !slices.Contains(q.buyers, peer) {
 		q.buyers = append(q.buyers, peer)
 		select {
 		case q.ready <- struct{}{}:

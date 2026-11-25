@@ -64,10 +64,33 @@ func (m *sellManager) PlanSchedule(ctx context.Context, userID, id, revision int
 		return 0, time.Time{}, errors.New("posting time is already due; use Start now or choose a later time")
 	}
 	if id == 0 && ((!custom && !now.Before(slot.Start)) || !now.Before(at)) {
-		id, err := m.start(ctx, userID, date, meal, minRupees, maxRupees, "", autopilot)
+		extra := m.waitingExtra(ctx, date, meal)
+		if store.IsExtraSlot(meal) && extra == "" {
+			return 0, time.Time{}, errors.New("scheduled extra not found or already started")
+		}
+		id, err := m.startWithExtra(ctx, userID, date, meal, extra, minRupees, maxRupees, "", autopilot)
 		return id, time.Time{}, err
 	}
 	return m.schedule(ctx, userID, id, revision, slot, date, meal, minRupees, maxRupees, autopilot, at, false)
+}
+
+// waitingExtra returns the extra name of any waiting or starting schedule for
+// (date, meal), so starting or editing a scheduled extra slot keeps its extra
+// identity even across a fire race.
+func (m *sellManager) waitingExtra(ctx context.Context, date, meal string) string {
+	if !store.IsExtraSlot(meal) {
+		return ""
+	}
+	scs, err := m.st.SellSchedules(ctx, time.Now().Add(-24*time.Hour))
+	if err != nil {
+		return ""
+	}
+	for _, sc := range scs {
+		if sc.Date == date && sc.Meal == meal && (sc.State == store.ScheduleWaiting || sc.State == store.ScheduleStarting) && sc.Extra != "" {
+			return sc.Extra
+		}
+	}
+	return ""
 }
 
 // schedule saves a waiting schedule that starts the meal's task at at, or
@@ -86,7 +109,18 @@ func (m *sellManager) schedule(ctx context.Context, userID, id, revision int64, 
 	if err != nil {
 		return 0, time.Time{}, err
 	}
-	if err := m.newSale(date, meal, slot.End).usePortal(ctx, p, m.cfg.VegOnly); err != nil {
+	extra := m.waitingExtra(ctx, date, meal)
+	if id > 0 {
+		if existing, e := m.st.GetSellSchedule(ctx, id); e == nil && existing != nil && existing.Extra != "" {
+			extra = existing.Extra
+		}
+	}
+	if store.IsExtraSlot(meal) && extra == "" {
+		return 0, time.Time{}, errors.New("scheduled extra not found or already started")
+	}
+	s := m.newSale(date, meal, slot.End)
+	s.extra = extra
+	if err := s.usePortal(ctx, p, m.cfg.VegOnly); err != nil {
 		return 0, time.Time{}, err
 	}
 	if replace {
@@ -96,7 +130,7 @@ func (m *sellManager) schedule(ctx context.Context, userID, id, revision int64, 
 			m.disarm(old)
 		}
 	}
-	sc := store.SellSchedule{ID: id, Revision: revision, Date: date, Meal: meal, MinPaise: int64(minRupees) * 100, MaxPaise: int64(maxRupees) * 100,
+	sc := store.SellSchedule{ID: id, Revision: revision, Date: date, Meal: meal, Extra: extra, MinPaise: int64(minRupees) * 100, MaxPaise: int64(maxRupees) * 100,
 		UserID: userID, StartsAt: at, EndsAt: slot.End, CreatedAt: now, Autopilot: autopilot}
 	if id > 0 {
 		old, e := m.st.GetSellSchedule(ctx, id)
@@ -119,6 +153,30 @@ func (m *sellManager) schedule(ctx context.Context, userID, id, revision int64, 
 	sc.State = store.ScheduleWaiting
 	m.arm(sc)
 	m.log.Info("sell task scheduled", "schedule", sc.ID, "date", date, "meal", meal, "at", at, "min", minRupees, "max", maxRupees)
+	m.changed()
+	return sc.ID, at, nil
+}
+
+// scheduleExtra saves a waiting schedule for one separately sold extra slot.
+func (m *sellManager) scheduleExtra(ctx context.Context, userID int64, slot meals.Slot, date, mealSlot, extra string, minRupees, maxRupees int, autopilot bool, at time.Time) (int64, time.Time, error) {
+	now := time.Now()
+	p, err := m.portalFor(ctx, userID)
+	if err != nil {
+		return 0, time.Time{}, err
+	}
+	s := m.newSale(date, mealSlot, slot.End)
+	s.extra = extra
+	if err := s.usePortal(ctx, p, m.cfg.VegOnly); err != nil {
+		return 0, time.Time{}, err
+	}
+	sc := store.SellSchedule{Date: date, Meal: mealSlot, Extra: extra, MinPaise: int64(minRupees) * 100, MaxPaise: int64(maxRupees) * 100,
+		UserID: userID, StartsAt: at, EndsAt: slot.End, CreatedAt: now, Autopilot: autopilot}
+	if sc.ID, err = m.st.CreateSellSchedule(ctx, sc); err != nil {
+		return 0, time.Time{}, err
+	}
+	sc.State = store.ScheduleWaiting
+	m.arm(sc)
+	m.log.Info("extra sell task scheduled", "schedule", sc.ID, "date", date, "meal", mealSlot, "extra", extra, "at", at, "min", minRupees, "max", maxRupees)
 	m.changed()
 	return sc.ID, at, nil
 }
@@ -192,7 +250,11 @@ func (m *sellManager) StartNow(ctx context.Context, userID int64, date, meal str
 		}
 		return m.schedule(ctx, userID, 0, 0, slot, date, meal, minRupees, maxRupees, autopilot, opens, true)
 	}
-	id, err := m.start(ctx, userID, date, meal, minRupees, maxRupees, "", autopilot)
+	extra := m.waitingExtra(ctx, date, meal)
+	if store.IsExtraSlot(meal) && extra == "" {
+		return 0, time.Time{}, errors.New("scheduled extra not found or already started")
+	}
+	id, err := m.startWithExtra(ctx, userID, date, meal, extra, minRupees, maxRupees, "", autopilot)
 	return id, time.Time{}, err
 }
 
@@ -321,7 +383,7 @@ func (m *sellManager) fire(id int64) {
 	}
 	attemptCtx, cancel := context.WithTimeout(m.base, 30*time.Second)
 	defer cancel()
-	task, err := m.start(attemptCtx, sc.UserID, sc.Date, sc.Meal, int(sc.MinPaise/100), int(sc.MaxPaise/100), sc.Handoff, sc.Autopilot)
+	task, err := m.startWithExtra(attemptCtx, sc.UserID, sc.Date, sc.Meal, sc.Extra, int(sc.MinPaise/100), int(sc.MaxPaise/100), sc.Handoff, sc.Autopilot)
 	if err != nil {
 		// Starting manually can win while this attempt is checking the portal.
 		if latest, e := m.st.GetSellSchedule(ctx, id); e == nil && latest != nil && latest.State == store.ScheduleStarted && latest.TaskID != 0 {

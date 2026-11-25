@@ -78,3 +78,75 @@ func (c *Client) QRForMeal(ctx context.Context, date, meal, accountHash string) 
 	image.Registration = reg
 	return image, nil
 }
+
+// RequireExtra checks that the account has at least need unavailed
+// registrations of extraName (case-insensitive) for date and meal. Unlike
+// RequireRegistration, it does not fail when the main meal itself was already
+// availed or cancelled, because extras are scanned independently. It returns
+// a representative unavailed row and the total unavailed count for extraName.
+func (c *Client) RequireExtra(ctx context.Context, date, meal, extraName string, need int) (ExtraRegistration, int, error) {
+	want := NormalizeExtraName(extraName)
+	if want == "" {
+		return ExtraRegistration{}, 0, errors.New("extra name must not be empty")
+	}
+	if need < 1 {
+		need = 1
+	}
+	rows, err := c.ExtraRegistrations(ctx, date, meal)
+	if err != nil {
+		return ExtraRegistration{}, 0, err
+	}
+	var first ExtraRegistration
+	total, unavailed := 0, 0
+	for _, r := range rows {
+		if !strings.EqualFold(NormalizeExtraName(r.Name), want) {
+			continue
+		}
+		total++
+		if r.Availed() {
+			continue
+		}
+		if unavailed == 0 {
+			first = r
+			first.Name = NormalizeExtraName(r.Name)
+		}
+		unavailed++
+	}
+	if total == 0 {
+		return ExtraRegistration{}, 0, fmt.Errorf("no %s registered for %s %s on the mess portal", want, date, meal)
+	}
+	if unavailed < need {
+		return ExtraRegistration{}, unavailed, fmt.Errorf("only %d unavailed %s registered on the mess portal (need %d)", unavailed, want, need)
+	}
+	if strings.TrimSpace(first.Mess) == "" {
+		if regs, err := c.Registrations(ctx, date, date); err == nil {
+			for _, r := range regs {
+				if r.Meal == meal && !r.Cancelled() && r.Mess != "" {
+					first.Mess = r.Mess
+					break
+				}
+			}
+		}
+	}
+	return first, unavailed, nil
+}
+
+// QRForExtra verifies at least need unavailed extra registrations and fetches
+// the account's current QR. Registration.Mess carries the mess name without a
+// diet so extra sales stay distinct from veg/non-veg meal sales.
+func (c *Client) QRForExtra(ctx context.Context, date, meal, extraName string, need int, accountHash string) (CurrentQR, int, error) {
+	row, unavailed, err := c.RequireExtra(ctx, date, meal, extraName, need)
+	if err != nil {
+		return CurrentQR{}, unavailed, err
+	}
+	image, err := c.QR(ctx)
+	if err != nil {
+		return CurrentQR{}, unavailed, err
+	}
+	if accountHash != "" && image.AccountHash != accountHash {
+		return CurrentQR{}, unavailed, errors.New("portal account changed since this delivery was armed")
+	}
+	mess, _ := (Registration{Mess: row.Mess}).MessDiet()
+	image.Registration = Registration{Date: date, Meal: meal, Mess: mess, Category: "extra"}
+	return image, unavailed, nil
+}

@@ -59,7 +59,7 @@ type ServingPrices struct {
 
 func (s *Store) livePrices(ctx context.Context, from, to string) (map[[4]string][]int, error) {
 	rows, err := s.boardDB().QueryContext(ctx, `SELECT meal_date, meal, mess, diet, price FROM listings
-		WHERE kind='sell' AND price > 0 AND meal != '' AND mess != '' AND meal_date >= ? AND meal_date <= ?
+		WHERE kind='sell' AND price > 0 AND meal != '' AND mess != '' AND diet != 'extra' AND meal_date >= ? AND meal_date <= ?
 		ORDER BY meal_date, meal, mess, price`, from, to)
 	if err != nil {
 		return nil, err

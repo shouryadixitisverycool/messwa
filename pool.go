@@ -6,6 +6,7 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"go.mau.fi/whatsmeow/proto/waE2E"
@@ -46,9 +47,14 @@ import (
 // allows 20 minutes; this leaves room for a slow send.
 const postEditWindow = 15 * time.Minute
 
-// pooled reports whether t can share a pool with other tasks.
+// pooled reports whether t can share a pool with other tasks. Negotiating
+// tasks pool across meals and extras; fixed-price extra tasks also pool at the
+// same price so selling multiple eggs at a flat price shares one group post.
 func pooled(t store.SellTask) bool {
-	return negotiates(t) && (t.Handoff == "" || t.Handoff == string(config.HandoffNever)) && t.Mess != "" && !t.Autopilot
+	if (t.Handoff != "" && t.Handoff != string(config.HandoffNever)) || t.Mess == "" || t.Autopilot {
+		return false
+	}
+	return negotiates(t) || (t.Extra != "" && t.MaxPaise == t.MinPaise)
 }
 
 // samePoolTasks reports whether a and b belong to the same pool.
@@ -56,9 +62,15 @@ func samePoolTasks(a, b store.SellTask) bool {
 	if a.ID == b.ID {
 		return true
 	}
-	return pooled(a) && pooled(b) &&
-		a.Date == b.Date && a.Mess == b.Mess && a.Diet == b.Diet &&
-		baseMeal(a.Meal) == baseMeal(b.Meal)
+	if !pooled(a) || !pooled(b) ||
+		a.Date != b.Date || a.Mess != b.Mess || a.Diet != b.Diet ||
+		!strings.EqualFold(a.Extra, b.Extra) || baseMeal(a.Meal) != baseMeal(b.Meal) {
+		return false
+	}
+	if negotiates(a) && negotiates(b) {
+		return true
+	}
+	return !negotiates(a) && !negotiates(b)
 }
 
 // notifyReserved wakes goroutines waiting on waitUnreserved.
@@ -73,6 +85,9 @@ func (m *sellManager) notifyReserved() {
 func (m *sellManager) poolTasks(t store.SellTask) []*runningTask {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if cur := m.running[t.ID]; cur != nil {
+		t = cur.task
+	}
 	var out []*runningTask
 	for _, rt := range m.running {
 		if rt.gate.active.Load() && samePoolTasks(t, rt.task) {
@@ -361,8 +376,18 @@ func (m *sellManager) passOn(ctx context.Context, t store.SellTask) map[string]b
 	for _, b := range buyers {
 		to := mates[0].ID
 		switch b.State {
-		case store.BuyerQueued, store.BuyerNegotiating, store.BuyerTimedOut:
+		case store.BuyerQueued:
+		case store.BuyerNegotiating, store.BuyerTimedOut:
+			// Fixed-price tasks never negotiate or revive timed-out buyers;
+			// passing a timed_out row into a fixed-price queue would fail the
+			// queued -> offered transition.
+			if !negotiates(t) {
+				continue
+			}
 		case store.BuyerAgreed:
+			if !negotiates(t) {
+				continue
+			}
 			id, ok := m.sellerFor(ctx, t, paise(b.Agreed), t.ID)
 			if !ok {
 				continue
@@ -403,6 +428,11 @@ func (m *sellManager) adoptPassed(ctx context.Context, to int64, peer string) {
 	}
 	n := rt.neg.Load()
 	if n == nil {
+		if q := rt.queue.Load(); q != nil {
+			if jid, err := types.ParseJID(peer); err == nil {
+				q.restore(jid, true)
+			}
+		}
 		return
 	}
 	buyers, err := m.st.SellTaskBuyers(ctx, to)

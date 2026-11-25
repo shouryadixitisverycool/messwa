@@ -50,14 +50,18 @@ var declineWords = []string{"not interested", "no thanks", "dont want", "don t w
 type offerTopic struct {
 	// mess is empty when the offer doesn't say, e.g. a hand-written
 	// -offer-text that names no mess.
-	mess, meal    string
-	messes, meals []classify.Named
+	mess, diet, meal, extra string
+	messes, meals           []classify.Named
 }
 
 // newOfferTopic describes an offer of meal at mess. With mess unknown it
 // takes the first mess the offer text names.
 func newOfferTopic(cfg *config.Config, mess, meal, offer string) offerTopic {
-	t := offerTopic{mess: mess, meal: meal}
+	return newOfferTopicForExtra(cfg, mess, "", meal, "", offer)
+}
+
+func newOfferTopicForExtra(cfg *config.Config, mess, diet, meal, extra, offer string) offerTopic {
+	t := offerTopic{mess: mess, diet: diet, meal: meal, extra: strings.ToLower(strings.TrimSpace(extra))}
 	for _, m := range cfg.Meals {
 		t.meals = append(t.meals, classify.Named{Name: m.Name, Aliases: m.Keywords, Fuzzy: true})
 	}
@@ -72,10 +76,86 @@ func newOfferTopic(cfg *config.Config, mess, meal, offer string) offerTopic {
 	return t
 }
 
+// extraSkipWords are generic size/portion modifiers that shouldn't match on
+// their own in a DM or buy post (e.g. "Omelette Full" should match "omelette",
+// not "full").
+var extraSkipWords = map[string]bool{
+	"full": true, "half": true, "plate": true, "piece": true, "pieces": true, "pcs": true, "extra": true, "extras": true, "special": true, "with": true, "and": true,
+}
+
+// extraKeywords returns words/phrases that identify a separately sold extra in
+// a DM or buy post (e.g. "Egg" -> ["egg", "eggs"], "Omelette Full" ->
+// ["omelette full", "omelette", "omelettes", "omlette", "egg", "eggs"]).
+func extraKeywords(extra string) []string {
+	norm := classify.Normalize(extra)
+	if norm == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(w string) {
+		if w != "" && !seen[w] {
+			seen[w] = true
+			out = append(out, w)
+		}
+	}
+	add(norm)
+	if !strings.Contains(norm, " ") && !strings.HasSuffix(norm, "s") {
+		add(norm + "s")
+	}
+	words := strings.Fields(norm)
+	isEggItem := false
+	for _, w := range words {
+		if w == "egg" || w == "eggs" || w == "omelette" || w == "omlette" || w == "omelet" {
+			isEggItem = true
+		}
+		if len(w) < 3 || extraSkipWords[w] {
+			continue
+		}
+		add(w)
+		if !strings.HasSuffix(w, "s") {
+			add(w + "s")
+		}
+	}
+	if isEggItem {
+		for _, alias := range []string{"egg", "eggs", "omelette", "omelettes", "omlette", "omelet"} {
+			add(alias)
+		}
+	}
+	return out
+}
+
+// extraNegated reports whether text explicitly excludes any of keywords, e.g.
+// "buy kadamba dinner no eggs" or "without egg".
+func extraNegated(t classify.Text, keywords []string) bool {
+	for _, kw := range keywords {
+		if t.Has("no "+kw, "without "+kw, "wo "+kw, "w o "+kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// isExtraOnlyText reports whether text explicitly asks for ONLY an extra item
+// (not the full meal), e.g. "Can I buy only the egg for Kadamba dinner?".
+func isExtraOnlyText(t classify.Text) bool {
+	return t.Has(
+		"extra only", "extras only",
+		"only egg", "only eggs", "only the egg", "only the eggs",
+		"egg only", "eggs only",
+		"just egg", "just eggs", "just the egg", "just the eggs",
+		"only omelette", "only omelettes", "only the omelette", "only the omelettes",
+		"omelette only", "just omelette", "just the omelette",
+	)
+}
+
 // asksAbout reports whether text asks about this offer. A DM that names
-// only other messes or other meals is about something else. Otherwise it
-// counts when it names the offer's mess, or asks a buying question (price,
-// availability) and either names the meal or is at most shortAsk words.
+// only other messes or other meals is about something else. For a separately
+// sold extra, the DM must explicitly mention that extra (without negating it
+// or asking for a different meal diet) and show buying intent so casual chats
+// mentioning "egg" don't trigger quotes. Conversely, a regular veg/nonveg meal
+// ignores bare egg asks that don't name the meal (e.g. "egg available?"), while
+// still accepting meal asks like "egg dinner available?".
 func (o offerTopic) asksAbout(text string) bool {
 	t := classify.Prepare(text)
 	if t.Has(declineWords...) {
@@ -85,14 +165,32 @@ func (o offerTopic) asksAbout(text string) bool {
 	if mealOther && !mealOurs {
 		return false
 	}
+	if o.extra == "" && (isExtraOnlyText(t) || (o.diet != "" && o.diet != "egg" && !mealOurs && classify.Diet(t) == "egg")) {
+		return false
+	}
+	var messOurs bool
 	if o.mess != "" {
-		messOurs, messOther := splitHits(classify.Pick(t, o.messes), o.mess)
+		var messOther bool
+		messOurs, messOther = splitHits(classify.Pick(t, o.messes), o.mess)
 		if messOther && !messOurs {
 			return false
 		}
-		if messOurs {
+	}
+	if o.extra != "" {
+		kws := extraKeywords(o.extra)
+		if !t.Has(kws...) || extraNegated(t, kws) {
+			return false
+		}
+		if d := classify.Diet(t); d != "" && d != "egg" {
+			return false
+		}
+		if t.Has(askWords...) && (messOurs || mealOurs || t.Words() <= shortAsk) {
 			return true
 		}
+		return (messOurs && t.Words() <= 3) || t.Words() <= 2
+	}
+	if messOurs {
+		return true
 	}
 	return t.Has(askWords...) && (mealOurs || t.Words() <= shortAsk)
 }
@@ -122,8 +220,12 @@ type plainDMs struct {
 // newPlainDMs judges plain DMs against an offer of meal at mess, using st
 // for when you last messaged each sender.
 func newPlainDMs(cfg *config.Config, st *store.Store, log *slog.Logger, mess, meal, offer string) *plainDMs {
+	return newPlainDMsForExtra(cfg, st, log, mess, "", meal, "", offer)
+}
+
+func newPlainDMsForExtra(cfg *config.Config, st *store.Store, log *slog.Logger, mess, diet, meal, extra, offer string) *plainDMs {
 	return &plainDMs{
-		topic: newOfferTopic(cfg, mess, meal, offer),
+		topic: newOfferTopicForExtra(cfg, mess, diet, meal, extra, offer),
 		lastSent: func(ctx context.Context, ids ...types.JID) (time.Time, error) {
 			s := make([]string, len(ids))
 			for i, id := range ids {

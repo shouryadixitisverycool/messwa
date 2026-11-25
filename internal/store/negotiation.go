@@ -339,9 +339,9 @@ func (s *Store) ClaimTaskSale(ctx context.Context, taskID int64, d Delivery, p P
 	if !p.At.IsZero() {
 		paidAt = p.At.Unix()
 	}
-	r, err := tx.ExecContext(ctx, `INSERT INTO qr_deliveries(date,meal,peer,amount,image_hash,armed_at,state,payment_id,message_id,paid_at,buyer_name,mess,diet,task_id)
- VALUES(?,?,?,?,?,?,'sending',?,?,?,?,?,?,?) ON CONFLICT(date,meal) DO NOTHING`,
-		d.Date, d.Meal, d.Peer, d.Amount, d.ImageHash, d.ArmedAt.Unix(), p.ID, messageID, paidAt, p.BuyerName, d.Mess, d.Diet, taskID)
+	r, err := tx.ExecContext(ctx, `INSERT INTO qr_deliveries(date,meal,peer,amount,image_hash,armed_at,state,payment_id,message_id,paid_at,buyer_name,mess,diet,extra,task_id)
+ VALUES(?,?,?,?,?,?,'sending',?,?,?,?,?,?,?,?) ON CONFLICT(date,meal) DO NOTHING`,
+		d.Date, d.Meal, d.Peer, d.Amount, d.ImageHash, d.ArmedAt.Unix(), p.ID, messageID, paidAt, p.BuyerName, d.Mess, d.Diet, d.Extra, taskID)
 	if err != nil {
 		return false, err
 	}
@@ -433,7 +433,7 @@ func (s *Store) ToldSoldLate(ctx context.Context, id int64, peer string) (bool, 
 }
 
 // sellTaskColsT is sellTaskCols for a query that names sell_tasks t.
-const sellTaskColsT = `t.id,t.date,t.meal,t.min_paise,t.max_paise,t.user_id,t.account_hash,t.mess,t.diet,t.handoff,t.state,t.detail,t.created_at,t.ends_at,coalesce(t.ended_at,0),t.target_paise,t.autopilot`
+const sellTaskColsT = `t.id,t.date,t.meal,t.min_paise,t.max_paise,t.user_id,t.account_hash,t.mess,t.diet,t.handoff,t.state,t.detail,t.created_at,t.ends_at,coalesce(t.ended_at,0),t.target_paise,t.autopilot,t.extra`
 
 // prefixScan scans extra leading columns before a sell task's.
 type prefixScan struct {
