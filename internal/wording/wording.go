@@ -41,6 +41,8 @@ var Vars = []Var{
 	{"left", "25 min", "Time left until the sale stops", false},
 	{"was", "40", "The price the bot asked before this one", true},
 	{"wait", "2 min", "How long a buyer has to pay before the next one gets a turn", false},
+	{"paid", "3", "What the buyer's payment screenshots add up to so far", false},
+	{"short", "32", "How much more the buyer still has to pay", false},
 }
 
 // common are the variables every slot can use.
@@ -178,9 +180,17 @@ var Slots = []Slot{
 		Default: [][]string{v("send to my number then"), v("just send it to my number"), v("pay to my number then"),
 			v("upi to this number works"), v("send it to this number on gpay/upi")}},
 	{ID: "ask_screenshot", Group: "Paying", Name: "Paid, no screenshot",
-		When: "Screenshots count as payment and the paying buyer says they paid but sent no screenshot. Said once; their next image gets the QR.",
+		When: "Screenshots count as payment and the paying buyer says they paid but sent no screenshot. Said once; their next payment screenshot gets the QR.",
 		Default: [][]string{v("can u send payment screenshot"), v("send the payment screenshot pls"), v("can you send a screenshot of the payment"),
 			v("pls send the screenshot")}},
+	{ID: "pay_short", Group: "Paying", Name: "Paid too little",
+		When: "The bot reads payment screenshots, and the buyer's add up to less than the price. The meal QR waits for the rest.",
+		Uses: []string{"paid", "price"}, Required: []string{"short"},
+		Default: [][]string{v("got {paid}, {short} more pls"), v("only {paid} came through, send {short} more"), v("thats {paid}, need {short} more pls")}},
+	{ID: "pay_unclear", Group: "Paying", Name: "Not a payment screenshot",
+		When: "The bot reads payment screenshots, and the buyer's image doesn't show a finished payment to you: another picture, a pending or failed payment, someone else's name, or too blurry to read. Said at most twice.",
+		Default: [][]string{v("cant see a payment to me in that, can u send the payment screenshot"), v("that doesnt look like the payment screenshot, can u send it"),
+			v("cant see the payment in that, send the screenshot from your upi app pls")}},
 
 	{ID: "queued", Group: "Queue", Name: "Someone's paying",
 		When: "The buyer agreed but another buyer holds the turn.",

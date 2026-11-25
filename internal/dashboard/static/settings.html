@@ -158,11 +158,12 @@
           </div>
         </div>
       </div>
+      <div class="row upi-row"><div class="lbl">Your banking name<small>When the bot reads screenshots, it sends the meal QR only for payments to this name. Empty checks just the amount.</small></div><div class="upi-ctl"><input class="upi-in" type="text" data-key="sell.payee_name" placeholder="Name your UPI app shows" autocomplete="off" spellcheck="false" aria-label="Your banking name"></div></div>
     </div>
     <div class="box list risk">
       <div class="h">Skips payment checks</div>
       <p class="s-hint">The bot sends the meal QR without seeing the money. Check your UPI app after each sale.</p>
-      <div class="row"><div class="lbl">Screenshot counts as paid<small>Any image from the buyer gets the meal QR</small></div><button class="tg danger" type="button" data-key="sell.accept_payment_images" aria-label="Screenshot counts as paid"></button></div>
+      <div class="row"><div class="lbl">Screenshot counts as paid<small>With a Gemini key on the server, the bot reads the amount first. Without one, any image gets the meal QR</small></div><button class="tg danger" type="button" data-key="sell.accept_payment_images" aria-label="Screenshot counts as paid"></button></div>
       <div class="row"><div class="lbl">Blank WhatsApp Pay counts as paid<small>Trusts a WhatsApp payment notice that shows no amount</small></div><button class="tg danger" type="button" data-key="sell.accept_unreadable_payments" aria-label="Blank WhatsApp Pay counts as paid"></button></div>
     </div>
   </section>

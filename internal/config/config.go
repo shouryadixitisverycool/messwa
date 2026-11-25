@@ -251,6 +251,9 @@ func (c *Config) validateSell() error {
 	if _, err := ParseUPI(s.UPI); err != nil {
 		return fmt.Errorf("sell.upi: %w", err)
 	}
+	if _, err := ParsePayeeName(s.PayeeName); err != nil {
+		return fmt.Errorf("sell.payee_name: %w", err)
+	}
 	return ValidateRepost(s.RepostMessages, s.RepostListings, s.MaxReposts, "sell.")
 }
 

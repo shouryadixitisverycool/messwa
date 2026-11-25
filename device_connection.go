@@ -65,3 +65,7 @@ func (a accountConn) DownloadConversationMedia(ctx context.Context, msg *waE2E.M
 	err = a.Do(func(c *wa.Client) error { var e error; data, e = c.WA.DownloadAny(ctx, msg); return e })
 	return
 }
+func (a accountConn) Download(ctx context.Context, msg whatsmeow.DownloadableMessage) (out []byte, err error) {
+	err = a.Do(func(c *wa.Client) error { var e error; out, e = c.WA.Download(ctx, msg); return e })
+	return
+}

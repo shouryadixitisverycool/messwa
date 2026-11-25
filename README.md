@@ -162,7 +162,7 @@ Everyone edits their own selling settings on the OFFER, REPOST, BUYERS and MESSA
 | YOU | messaging app (this browser only), `hide_snacks` |
 | OFFER | `[mcp] sell_tasks`, `[sell] groups` or `group_count`, `post_gap`, `show_price`, `mention_extras`, `[sales] monthly_fee`, `[sell] list_at`, `nudge`, with a preview of the group post |
 | REPOST | `[sell] repost`, `repost_messages`, `repost_listings`, `max_reposts` |
-| BUYERS | `[sell] buyers`, `handoff`, `accept_plain_dms`, `message_buy_posts`, `accept_payment_images`, `upi`, `accept_unreadable_payments`, `[dms] retention` |
+| BUYERS | `[sell] buyers`, `handoff`, `accept_plain_dms`, `message_buy_posts`, `accept_payment_images`, `upi`, `payee_name`, `accept_unreadable_payments`, `[dms] retention` |
 | MESSAGES | `[sell] own_wording`, `messages`: every DM the bot sends a buyer, see [Bot wording](#bot-wording) |
 | MARKET | `[sold]` emojis, closed emojis, words and `admins_count`, `[dedupe] window` |
 | CALENDAR | meal times, `[[seasons]]`, each mess's `veg_only` |
@@ -503,6 +503,7 @@ isn't today's.
 | `smart_haggle` | none | `false` | Sell tasks only: hold out for the meal's usual price and only come down toward `min_price` near the meal's end, see [Prices](#sell-tasks) |
 | `accept_payment_images` | `-accept-payment-images` | `false` | Count an image from the paying buyer as their payment, unverified, see below |
 | `upi` | none | `""` | Your UPI ID. With `accept_payment_images` on, the pay message comes with a UPI QR for the exact price, see below |
+| `payee_name` | none | `""` | Your banking name. With `GEMINI_API_KEY` set, a read screenshot must show it (or `upi`), see below |
 | `accept_unreadable_payments` | `-assume-unreadable-payment` | `true` | Count a WhatsApp Pay message whose amount stays unreadable after recovery as the agreed price, unverified, see [One-meal QR delivery](#one-meal-qr-delivery) |
 
 With `groups` or `group_count` set, `deliver-qr` without `-peer` posts to
@@ -673,6 +674,36 @@ your UPI app after every such sale and can live with losing a meal now and
 then. Images from other buyers, images sent before the prompt and anything
 after the window never count, and every image the buyer sends during their
 turn that doesn't count is logged with the reason.
+
+**Reading the screenshot.** With `GEMINI_API_KEY` set in the environment
+(`.env` for Docker), the bot reads each screenshot with Google's Gemini
+before it counts: the amount, whether the payment finished, who was paid
+and the UTR. A free AI Studio key is enough. Then:
+
+- a screenshot of a finished payment for the agreed price gets the QR;
+- one for less gets `got 3, 32 more pls`, and the screenshots add up, so
+  the ₹32 top-up gets the QR. A buyer who has paid part keeps the turn
+  until they pay the rest or the meal ends. A screenshot sent twice counts
+  once (by UTR, the app's transaction ID, or the image itself);
+- anything else gets `cant see a payment to me in that, can u send the
+  payment screenshot`, at most twice: a photo, a chat, a pending or failed
+  payment, or a payment to someone else's name;
+- if Gemini can't be reached, `accept_unreadable_payments` decides, as for
+  WhatsApp Pay: on, the image counts as the agreed price; off (and always
+  on autopilot), no QR goes out, and the log and the buyer's events say the
+  screenshot couldn't be read, so check their chat.
+
+Set `payee_name` (BUYERS tab: Your banking name) to the name UPI apps
+print under "Paid to" or "Banking name". A screenshot passes when it shows
+that name, or your `upi` itself, so payments to your other UPI IDs count.
+Left empty, only the amount is checked. Reading usually takes a few
+seconds; on the free tier, a busy model can make it 20 to 40. Screenshots
+go to Google, and the free tier may use them to improve its models. Without
+`GEMINI_API_KEY` nothing is read, as described above. Even read, an edited
+screenshot gets through, so keep checking your UPI app.
+
+`messwa read-payment [-upi ID] IMAGE...` reads screenshots without a sale,
+and `-serve` gives a page to upload them.
 
 With `-peer`, the setting and the flag apply too. There's no prompt unless
 you pass `-offer-text`, so any image from the buyer after arming counts:

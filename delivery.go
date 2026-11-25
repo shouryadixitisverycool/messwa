@@ -129,10 +129,13 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 		log: log, loc: cfg.Location(), date: *date, meal: *meal, end: slot.End, cfg: cfg,
 		image: data, testImage: *qr == "", imageHash: fmt.Sprintf("%x", sha256.Sum256(data)),
 		diagnostics: *diagnostics, assumeUnreadable: sell.AcceptUnreadablePayments, acceptImages: sell.AcceptPaymentImages,
-		upi: sell.UPI,
+		upi: sell.UPI, reader: screenshotReader(), payeeName: sell.PayeeName,
 	}
-	if s.acceptImages {
-		fmt.Fprintln(os.Stderr, "accept_payment_images is on: an image the buyer sends after the payment prompt counts as payment. Nothing verifies it; check your UPI app before trusting the sale.")
+	switch {
+	case s.acceptImages && s.reader != nil:
+		fmt.Fprintln(os.Stderr, "accept_payment_images is on with GEMINI_API_KEY: the bot reads each payment screenshot and sends the meal QR once they add up to the price. A screenshot can be faked; check your UPI app.")
+	case s.acceptImages:
+		fmt.Fprintln(os.Stderr, "accept_payment_images is on: an image the buyer sends after the payment prompt counts as payment. Nothing verifies it; check your UPI app before trusting the sale. Set GEMINI_API_KEY to have the bot read the amount.")
 	}
 	if s.assumeUnreadable {
 		fmt.Fprintln(os.Stderr, "accept_unreadable_payments is on: a WhatsApp Pay message with no readable amount counts as payment of the agreed price. Check your UPI app before trusting the sale.")

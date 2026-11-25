@@ -617,6 +617,11 @@ const upi = document.querySelector('[data-key="sell.upi"]');
 upi.addEventListener('input', () => set('sell.upi', upi.value.trim()));
 paint(() => { if (document.activeElement !== upi) upi.value = draft['sell.upi'] || ''; });
 
+// Your banking name, which a read payment screenshot must show.
+const payee = document.querySelector('[data-key="sell.payee_name"]');
+payee.addEventListener('input', () => set('sell.payee_name', payee.value.trim()));
+paint(() => { if (document.activeElement !== payee) payee.value = draft['sell.payee_name'] || ''; });
+
 // The test QR under the UPI field: the QR a buyer would get for the test
 // amount, redrawn as you type, so you can scan it with your own UPI app
 // and check it opens a payment to you. Nothing here is saved. The checks

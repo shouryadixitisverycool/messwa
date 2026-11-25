@@ -1,0 +1,238 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"slices"
+	"sync"
+	"testing"
+	"testing/synctest"
+	"time"
+
+	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
+	"google.golang.org/protobuf/proto"
+
+	"messwa/internal/payshot"
+	"messwa/internal/store"
+)
+
+// fakeReader answers each screenshot by its bytes, which the tests set to
+// the image's ID.
+type fakeReader struct {
+	mu    sync.Mutex
+	shots map[string]payshot.Receipt
+	errs  map[string]error
+}
+
+func (r *fakeReader) Read(_ context.Context, img []byte, _ string) (payshot.Receipt, string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.errs[string(img)]; err != nil {
+		return payshot.Receipt{}, "", err
+	}
+	rc, ok := r.shots[string(img)]
+	if !ok {
+		return payshot.Receipt{Status: "unknown"}, "fake", nil
+	}
+	return rc, "fake", nil
+}
+
+// paidShot is a PhonePe-style receipt for rupees to name, with utr.
+func paidShot(rupees int64, name, utr string) payshot.Receipt {
+	return payshot.Receipt{IsReceipt: true, Status: "success", AmountPaise: rupees * 100, PayeeName: name, UTR: utr}
+}
+
+// screenshotFixture is a sell task at ₹35 with screenshots counting and a
+// reader that knows the receipts in shots.
+func screenshotFixture(t *testing.T, shots map[string]payshot.Receipt, errs map[string]error) (*sellFixture, *fakeReader) {
+	f := newSellFixture(t, filepath.Join(t.TempDir(), "data.db"))
+	f.cfg.Sell.AcceptPaymentImages = true
+	f.cfg.Sell.PayeeName = "Shourya Dixit"
+	f.conn.media = map[string][]byte{}
+	r := &fakeReader{shots: shots, errs: errs}
+	old := screenshotReader
+	screenshotReader = func() receiptReader { return r }
+	t.Cleanup(func() { screenshotReader = old })
+	return f, r
+}
+
+// shot sends buyer's image id, whose bytes the fake reader looks up.
+func (f *sellFixture) shot(buyer types.JID, id string) {
+	f.conn.mu.Lock()
+	f.conn.media[id] = []byte(id)
+	f.conn.mu.Unlock()
+	f.conn.emit(&events.Message{
+		Info: types.MessageInfo{MessageSource: types.MessageSource{Chat: buyer}, ID: id, Timestamp: time.Now()},
+		Message: &waE2E.Message{ImageMessage: &waE2E.ImageMessage{Mimetype: proto.String("image/jpeg"),
+			DirectPath: proto.String(id), FileSHA256: []byte(id)}},
+	})
+	synctest.Wait()
+}
+
+// startPaying starts the task and gives buyer the payment turn.
+func (f *sellFixture) startPaying(ctx context.Context, buyer types.JID) int64 {
+	f.t.Helper()
+	m := f.manager(ctx)
+	id, err := m.Start(ctx, 0, f.date, "lunch", 35, 35, "")
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	synctest.Wait()
+	f.conn.emit(f.reply(buyer, "interested"))
+	synctest.Wait()
+	time.Sleep(time.Second)
+	return id
+}
+
+var screenshotPrompt = []string{"ok 35", "pay using whatsapp pay pls", "ill send the qr right after"}
+
+// TestScreenshotShortThenTopUp is the 24 Nov case: the buyer paid ₹3 of
+// ₹35, then ₹32. The ₹3 screenshot gets "32 more", not the meal QR; the
+// screenshots add up, so the ₹32 one sells the meal at ₹35.
+func TestScreenshotShortThenTopUp(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f, _ := screenshotFixture(t, map[string]payshot.Receipt{
+			"rs3":  paidShot(3, "Shourya Dixit", "277298581603"),
+			"rs32": paidShot(32, "SHOURYA DIXIT", "755527205655"),
+		}, nil)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		id := f.startPaying(ctx, buyerA)
+		f.shot(buyerA, "rs3")
+		want := append(slices.Clone(screenshotPrompt), "got 3, 32 more pls")
+		if got := texts(sentTo(f.conn.messages(), buyerA)); !slices.Equal(got, want) {
+			t.Fatalf("after ₹3, A got %q, want %q", got, want)
+		}
+		// The ₹3 screenshot sent again doesn't count twice.
+		f.shot(buyerA, "rs3")
+		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != len(want) {
+			t.Fatalf("a resent screenshot got %q", got[len(want):])
+		}
+		f.shot(buyerA, "rs32")
+		if got := texts(sentTo(f.conn.messages(), buyerA)); got[len(got)-1] != "[QR]" {
+			t.Fatalf("after ₹32 more, A got %q, want the meal QR", got)
+		}
+		if task := f.task(id); task.State != store.TaskSold {
+			t.Fatalf("task is %s", task.State)
+		}
+		ds, err := f.st.Deliveries(ctx)
+		if err != nil || len(ds) != 1 || ds[0].PaymentKind != store.PaidByImage || ds[0].Amount != "35.00" {
+			t.Fatalf("ledger = %+v, %v", ds, err)
+		}
+	})
+}
+
+// TestScreenshotPartialPayerKeepsTurn keeps a buyer who paid part of the
+// price on their turn past the usual two minutes, so the meal doesn't go
+// to the next buyer while their money is in.
+func TestScreenshotPartialPayerKeepsTurn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f, _ := screenshotFixture(t, map[string]payshot.Receipt{"rs3": paidShot(3, "Shourya Dixit", "1")}, nil)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		f.startPaying(ctx, buyerA)
+		f.conn.emit(f.reply(buyerB, "me too"))
+		synctest.Wait()
+		f.shot(buyerA, "rs3")
+		time.Sleep(10 * time.Minute)
+		synctest.Wait()
+		for _, m := range texts(sentTo(f.conn.messages(), buyerB)) {
+			if m == "ok 35" {
+				t.Fatalf("B was asked to pay while A had paid part: %q", texts(sentTo(f.conn.messages(), buyerB)))
+			}
+		}
+		cancel()
+		synctest.Wait()
+	})
+}
+
+// TestScreenshotNotAPayment answers a photo, a failed payment and a
+// payment to someone else with "cant see a payment", at most twice, and
+// sends no meal QR.
+func TestScreenshotNotAPayment(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		failed := paidShot(35, "Shourya Dixit", "2")
+		failed.Status = "failed"
+		f, _ := screenshotFixture(t, map[string]payshot.Receipt{
+			"selfie":    {Status: "unknown"},
+			"failed":    failed,
+			"elsewhere": paidShot(35, "Someone Else", "3"),
+		}, nil)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		id := f.startPaying(ctx, buyerA)
+		f.shot(buyerA, "selfie")
+		f.shot(buyerA, "failed")
+		f.shot(buyerA, "elsewhere")
+		unclear := "cant see a payment to me in that, can u send the payment screenshot"
+		want := append(slices.Clone(screenshotPrompt), unclear, unclear)
+		if got := texts(sentTo(f.conn.messages(), buyerA)); !slices.Equal(got, want) {
+			t.Fatalf("A got %q, want %q", got, want)
+		}
+		if task := f.task(id); task.State != store.TaskActive {
+			t.Fatalf("task is %s", task.State)
+		}
+		cancel()
+		synctest.Wait()
+	})
+}
+
+// TestScreenshotNameOrOtherUPI takes a payment to the seller's banking
+// name at another of their UPI IDs: the name decides.
+func TestScreenshotNameOrOtherUPI(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		other := paidShot(35, "SHOURYA DIXIT", "4")
+		other.PayeeUPI = "••••cool@okhdfcbank"
+		f, _ := screenshotFixture(t, map[string]payshot.Receipt{"other": other}, nil)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		f.startPaying(ctx, buyerA)
+		f.shot(buyerA, "other")
+		if got := texts(sentTo(f.conn.messages(), buyerA)); got[len(got)-1] != "[QR]" {
+			t.Fatalf("A got %q, want the meal QR", got)
+		}
+	})
+}
+
+// TestScreenshotUnreadable follows accept_unreadable_payments when the
+// reader fails: off keeps the QR, on sends it for the agreed price.
+func TestScreenshotUnreadable(t *testing.T) {
+	for _, assume := range []bool{false, true} {
+		synctest.Test(t, func(t *testing.T) {
+			f, _ := screenshotFixture(t, nil, map[string]error{"blur": errors.New("503 overloaded")})
+			f.cfg.Sell.AcceptUnreadablePayments = assume
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			f.startPaying(ctx, buyerA)
+			f.shot(buyerA, "blur")
+			got := texts(sentTo(f.conn.messages(), buyerA))
+			if sent := got[len(got)-1] == "[QR]"; sent != assume {
+				t.Fatalf("accept_unreadable_payments=%v: A got %q", assume, got)
+			}
+			cancel()
+			synctest.Wait()
+		})
+	}
+}
+
+func TestCoveredPrice(t *testing.T) {
+	for _, c := range []struct {
+		paid   int64
+		others []string
+		want   string
+		ok     bool
+	}{
+		{3500, nil, "35.00", true},
+		{3600, nil, "35.00", true},
+		{300, nil, "", false},
+		{3000, []string{"30.00", "40.00"}, "30.00", true},
+		{4000, []string{"30.00", "40.00"}, "40.00", true},
+	} {
+		if got, ok := coveredPrice(c.paid, "35.00", c.others); got != c.want || ok != c.ok {
+			t.Errorf("coveredPrice(%d, %v) = %q, %v; want %q, %v", c.paid, c.others, got, ok, c.want, c.ok)
+		}
+	}
+}

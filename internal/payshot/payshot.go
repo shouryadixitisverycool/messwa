@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // DefaultModels are tried in order. On the free tier the newest Flash
@@ -73,7 +74,7 @@ Rules:
 - amount: the amount that was PAID in this transaction, digits and decimal point only, no ₹ sign or commas (e.g. "3", "35", "32.50"). Not a balance, not a date, not an ID. If several amounts are shown for the same payment (e.g. "Paid to" and "Debited from"), they are the same payment; give it once. Empty if unreadable.
 - status: "success" for a completed payment, "pending" or "failed" if the screen says so, "unknown" if it doesn't say.
 - payee_name / payee_upi: who RECEIVED the money, exactly as shown, keeping masking characters like •••••• or XXXXXX.
-- utr: the 12-digit UPI reference / UTR / UPI Ref No, digits only. Empty if not shown.
+- utr: the 12-digit UPI reference / UTR / UPI Ref No / RRN, digits only. BHIM labels it "Transaction ID": an all-digit 12-digit transaction ID is the UTR. Empty if not shown.
 - transaction_id: the app's own transaction ID if shown.
 - paid_at: the date and time of the payment exactly as printed.
 - app: the payment app (PhonePe, Google Pay, Paytm, BHIM, ...).
@@ -264,4 +265,37 @@ func PayeeMatches(shown, upi string) bool {
 	}
 	visible := strings.TrimLeftFunc(sName, func(r rune) bool { return r == '•' || r == '*' || r == 'x' || r == '.' || r == '·' })
 	return len(visible) >= 4 && strings.HasSuffix(uName, visible)
+}
+
+// NameMatches reports whether shown, a payee name as a payment app prints
+// it, names want. Case, spacing, punctuation and word order don't matter;
+// every word of want must be there.
+func NameMatches(shown, want string) bool {
+	have := map[string]bool{}
+	for _, w := range nameWords(shown) {
+		have[w] = true
+	}
+	words := nameWords(want)
+	for _, w := range words {
+		if !have[w] {
+			return false
+		}
+	}
+	return len(words) > 0
+}
+
+func nameWords(s string) []string {
+	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+}
+
+// PaidTo reports whether rc paid you. The banking name decides: apps
+// print it on every receipt, while the UPI ID may be another of yours,
+// masked, or missing. A receipt that shows upi itself also counts. With no
+// name set it's true: the UPI ID alone would turn away real payments made
+// to your other IDs, so only the amount is checked.
+func PaidTo(rc Receipt, upi, name string) bool {
+	if name == "" {
+		return true
+	}
+	return NameMatches(rc.PayeeName, name) || (upi != "" && PayeeMatches(rc.PayeeUPI, upi))
 }

@@ -104,3 +104,42 @@ func TestReadRejectsBadAmount(t *testing.T) {
 		t.Fatal("an unparseable amount should be an error, not ₹0")
 	}
 }
+
+func TestNameMatches(t *testing.T) {
+	for shown, want := range map[string]bool{
+		"SHOURYA DIXIT":   true,
+		"Shourya Dixit":   true,
+		"Dixit, Shourya":  true,
+		"SHOURYA DIXIT S": true,
+		"Shourya":         false,
+		"Shourya Dikshit": false,
+		"":                false,
+	} {
+		if got := NameMatches(shown, "Shourya Dixit"); got != want {
+			t.Errorf("NameMatches(%q) = %v, want %v", shown, got, want)
+		}
+	}
+}
+
+// TestPaidTo covers the eval set's payees: the name decides, the UPI ID
+// alone also passes, and no name set skips the check.
+func TestPaidTo(t *testing.T) {
+	const upi, name = "9599119322@upi", "Shourya Dixit"
+	for _, c := range []struct {
+		rc        Receipt
+		name      string
+		want      bool
+		situation string
+	}{
+		{Receipt{PayeeName: "SHOURYA DIXIT", PayeeUPI: "shouryadixitisverycool@okhdfcbank"}, name, true, "other UPI ID, right name"},
+		{Receipt{PayeeName: "SHOURYA DIXIT"}, name, true, "name only"},
+		{Receipt{PayeeName: "SHOURYA DIXIT", PayeeUPI: "959919322@upi"}, name, true, "misread UPI ID, right name"},
+		{Receipt{PayeeUPI: "XXXXXX9322@upi"}, name, true, "your UPI ID, no name"},
+		{Receipt{PayeeName: "Someone Else", PayeeUPI: "someone@ybl"}, name, false, "someone else"},
+		{Receipt{PayeeName: "Someone Else"}, "", true, "no name set"},
+	} {
+		if got := PaidTo(c.rc, upi, c.name); got != c.want {
+			t.Errorf("%s: PaidTo = %v, want %v", c.situation, got, c.want)
+		}
+	}
+}
