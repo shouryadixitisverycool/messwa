@@ -248,6 +248,7 @@ func contains(ss []string, s string) bool {
 var (
 	atPrice     = regexp.MustCompile(`@\s*(\d{1,4})`)
 	rupeePrice  = regexp.MustCompile(`(?:rs\.?|₹|inr)\s*(\d{1,4})|(\d{1,4})\s*(?:rs\b|/-|₹|rupees)`)
+	clockTime   = regexp.MustCompile(`\b\d{1,2}:\d{2}\b`)
 	quantityPat = regexp.MustCompile(`\bx\s?([2-9])\b|\b([2-9])\s?x\b`)
 )
 
@@ -263,7 +264,12 @@ func Price(t Text) (int, bool) {
 			}
 		}
 	}
-	for _, tok := range t.tokens {
+	// A clock time like "12:30" is not a lone price.
+	tokens := t.tokens
+	if clockTime.MatchString(t.raw) {
+		tokens = strings.Fields(Normalize(clockTime.ReplaceAllString(t.raw, " ")))
+	}
+	for _, tok := range tokens {
 		if v, err := strconv.Atoi(tok); err == nil && v >= 5 && v <= 1000 {
 			return v, true
 		}

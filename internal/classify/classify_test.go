@@ -111,6 +111,12 @@ func TestQuantityAndNoise(t *testing.T) {
 	if _, ok := Price(Prepare("Sell yukthar dinner x3")); ok {
 		t.Error("x3 is a quantity, not a price")
 	}
+	if p, ok := Price(Prepare("WTB Bakul lunch at 12:30")); ok {
+		t.Errorf("12:30 is a time, not a price %d", p)
+	}
+	if p, ok := Price(Prepare("sell bakul lunch 12:30 40")); !ok || p != 40 {
+		t.Errorf("price after a time = %d, %v", p, ok)
+	}
 	if Prepare("bfast").Has("bf") {
 		t.Error("Has must match whole words")
 	}
