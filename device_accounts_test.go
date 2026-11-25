@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"messwa/internal/accounts"
@@ -143,6 +144,46 @@ func TestDeviceAccountUnlinkRewiresAllConsumers(t *testing.T) {
 			return nil
 		}); err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+// The main account shares cfg's database. After a restart its saved
+// settings must stay saved values, not become the defaults the settings
+// page compares against, or the next save on that page deletes them.
+func TestAccountConfigKeepsMainAccountSavedSettingsOutOfDefaults(t *testing.T) {
+	ctx := t.Context()
+	cfg := config.Default()
+	cfg.StateDir = t.TempDir()
+	st, err := store.Open(cfg.DataDB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	admin, err := st.AddUser(ctx, "admin", "admin", "hash", "active", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := config.Settings{"sell.upi": []byte(`"me@okaxis"`), "sell.smart_haggle": []byte(`true`)}
+	if err := st.SaveSettings(ctx, saved, admin); err != nil {
+		t.Fatal(err)
+	}
+	// What run does at start (applySavedSettings), then what
+	// deviceAccounts.server does for the account.
+	cfg.ApplySaved(saved)
+	a, err := accountConfig(ctx, cfg, st, admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.ApplySaved(saved)
+
+	file, live := a.File().Values(), a.Live().Values()
+	for k, want := range map[string]any{"sell.upi": "me@okaxis", "sell.smart_haggle": true} {
+		if fmt.Sprint(file[k]) == fmt.Sprint(want) {
+			t.Errorf("%s: saved value %v became the default", k, want)
+		}
+		if fmt.Sprint(live[k]) != fmt.Sprint(want) {
+			t.Errorf("%s: live = %v, want %v", k, live[k], want)
 		}
 	}
 }

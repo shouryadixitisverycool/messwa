@@ -65,8 +65,16 @@ func accountConfig(ctx context.Context, cfg *config.Config, st *store.Store, id 
 	if err != nil {
 		return nil, err
 	}
+	// The account in the main state directory shares cfg's database, so
+	// its settings are already in cfg.Live(). Start it from config.toml:
+	// starting from Live would make its saved settings the defaults, and
+	// the settings page would then drop them on the next save.
+	base := cfg.Live()
+	if dir == cfg.StateDir {
+		base = cfg.File()
+	}
 	// A fresh live pointer prevents one user's settings affecting another.
-	c, err := cfg.Live().WithSettings(nil)
+	c, err := base.WithSettings(nil)
 	if err != nil {
 		return nil, err
 	}
