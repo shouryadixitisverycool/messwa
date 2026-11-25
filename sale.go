@@ -1177,10 +1177,14 @@ func rupeeText(p int64) string { return "₹" + priceWords(paiseAmount(p)) }
 
 // receiptKeys identify the payment a screenshot shows: its UTR, the app's
 // transaction ID, the image file, and its amount with the time printed.
-// keys are all of them, to remember. check are the ones to look up: a UTR
-// or transaction ID names one payment, so a receipt with either is told
-// apart by them and its file, not by an amount and time two payments can
-// share. Only a receipt with neither falls back to amount and time.
+// keys are the ones to remember, check the ones to look up.
+//
+// A UTR or transaction ID names one payment, so two receipts that both
+// show one are told apart by those, not by an amount and time two
+// payments can share. A bare receipt with neither, such as a crop, has
+// only its amount and time: it is looked up against every receipt's, and
+// it leaves a "bare" mark that a later receipt with IDs looks up too, so
+// a crop and its full receipt count once in either order.
 func receiptKeys(rc payshot.Receipt, fileSHA256 []byte) (keys, check []string) {
 	if rc.UTR != "" {
 		keys = append(keys, "utr:"+rc.UTR)
@@ -1191,11 +1195,15 @@ func receiptKeys(rc payshot.Receipt, fileSHA256 []byte) (keys, check []string) {
 	if len(fileSHA256) > 0 {
 		keys = append(keys, fmt.Sprintf("file:%x", fileSHA256))
 	}
-	check = keys
+	check = slices.Clip(keys)
 	if rc.PaidAt != "" {
-		keys = append(slices.Clip(keys), fmt.Sprintf("at:%d@%s", rc.AmountPaise, strings.ToLower(strings.Join(strings.Fields(rc.PaidAt), " "))))
+		when := fmt.Sprintf("%d@%s", rc.AmountPaise, strings.ToLower(strings.Join(strings.Fields(rc.PaidAt), " ")))
+		keys = append(keys, "at:"+when)
 		if rc.UTR == "" && rc.TxnID == "" {
+			keys = append(keys, "bare:"+when)
 			check = keys
+		} else {
+			check = append(check, "bare:"+when)
 		}
 	}
 	return keys, check

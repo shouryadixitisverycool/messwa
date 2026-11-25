@@ -435,3 +435,26 @@ func TestScreenshotSameAmountAndTime(t *testing.T) {
 		}
 	})
 }
+
+// TestScreenshotCropBeforeFull counts one payment once when a bare crop
+// with no UTR or transaction ID comes before its full receipt.
+func TestScreenshotCropBeforeFull(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		crop := paidShot(20, "Shourya Dixit", "")
+		crop.PaidAt = "07:39 pm on 24 Nov 2026"
+		full := paidShot(20, "Shourya Dixit", "111111111111")
+		full.PaidAt = "07:39 pm on 24 Nov 2026"
+		f, _ := screenshotFixture(t, map[string]payshot.Receipt{"crop": crop, "full": full}, nil)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		f.startPaying(ctx, buyerA)
+		f.shot(buyerA, "crop")
+		f.shot(buyerA, "full")
+		want := append(slices.Clone(screenshotPrompt), "got 20, 15 more pls")
+		if got := texts(sentTo(f.conn.messages(), buyerA)); !slices.Equal(got, want) {
+			t.Fatalf("A got %q, want %q", got, want)
+		}
+		cancel()
+		synctest.Wait()
+	})
+}
