@@ -451,6 +451,9 @@ func TestCombineIntents(t *testing.T) {
 	if got := combineIntents([]string{"I bought mine for 50", "I want another for a friend", "nvm"}); got.kind != intentPass {
 		t.Errorf("combineIntents(bought mine, want another, nvm) = %+v, want pass", got)
 	}
+	if got := combineIntents([]string{"I'll take another for 60", "sorry bought elsewhere"}); got.kind != intentPass || !got.bought {
+		t.Errorf("combineIntents(take another for 60, sorry bought elsewhere) = %+v, want bought pass", got)
+	}
 	if got := combineIntents([]string{"Too much", "can't do WhatsApp Pay"}); got.kind != intentPayOther || !got.lower || !got.upi {
 		t.Errorf("combineIntents(Too much, can't do WhatsApp Pay) = %+v, want pay_other+lower+upi", got)
 	}

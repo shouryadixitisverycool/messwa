@@ -114,15 +114,15 @@ func combineIntents(texts []string) intent {
 		return intentRank[in.kind]
 	}
 	ins := make([]intent, len(texts))
-	burstBuyingMore := false
+	lastBuyingMore := -1
 	for i, t := range texts {
 		ins[i] = parseBuyer(t)
 		if ins[i].buyingMore {
-			burstBuyingMore = true
+			lastBuyingMore = i
 		}
 	}
-	for _, in := range ins {
-		if burstBuyingMore && in.boughtOnly {
+	for i, in := range ins {
+		if in.boughtOnly && i < lastBuyingMore {
 			continue
 		}
 		bought = bought || in.bought
