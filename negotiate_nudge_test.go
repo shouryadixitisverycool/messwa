@@ -83,7 +83,7 @@ func TestNudgeQuietBuyerThenDropAndTimeOut(t *testing.T) {
 	})
 }
 
-func TestNudgeNoNegotiates(t *testing.T) {
+func TestNudgeNoClosesNegotiation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data.db")
 	synctest.Test(t, func(t *testing.T) {
 		f := newSellFixture(t, path)
@@ -93,19 +93,19 @@ func TestNudgeNoNegotiates(t *testing.T) {
 		time.Sleep(nudgeAfter)
 		synctest.Wait()
 
-		// "no" to "yes or no?" gets the pass counter, not a goodbye.
+		// "no" to "yes or no?" ends the conversation.
 		f.conn.emit(dm(buyerA, "no"))
 		settle()
-		if got := texts(sentTo(f.conn.messages(), buyerA)); strings.Join(got, "|") != "60|yes or no?|how about 40" {
+		if got := texts(sentTo(f.conn.messages(), buyerA)); strings.Join(got, "|") != "60|yes or no?" {
 			t.Fatalf("A got %q", got)
 		}
-		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerNegotiating || !b.PassCountered {
+		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerPassed || b.PassCountered {
 			t.Fatalf("A = %+v", b)
 		}
-		// They spoke, so no more nudges: the usual silence applies.
+		// No further follow-ups after a decline.
 		time.Sleep(2 * nudgeAfter)
 		synctest.Wait()
-		if got := sentTo(f.conn.messages(), buyerA); len(got) != 3 {
+		if got := sentTo(f.conn.messages(), buyerA); len(got) != 2 {
 			t.Fatalf("A got %q", texts(got))
 		}
 	})

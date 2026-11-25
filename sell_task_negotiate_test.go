@@ -677,13 +677,7 @@ func TestNegotiationNoReviveAfterPass(t *testing.T) {
 		synctest.Wait()
 		f.conn.emit(f.reply(buyerA, "price?"))
 		settle()
-		// The first pass gets one counter; only the second ends negotiation.
-		f.conn.emit(dm(buyerA, "not interested"))
-		settle()
-		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerNegotiating || !b.PassCountered || b.Ask != 4000 {
-			t.Fatalf("A = %+v after the first pass", b)
-		}
-		f.conn.emit(dm(buyerA, "no thanks"))
+		f.conn.emit(dm(buyerA, "No, thank you"))
 		settle()
 		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerPassed {
 			t.Fatalf("A = %+v", b)
@@ -1016,68 +1010,48 @@ func TestNegotiationPayOtherWay(t *testing.T) {
 	})
 }
 
-// A buyer who passes on the bot's price hears one lower price, recorded in
-// the event log and the buyer's row so a restart can't send a second. A
-// second pass, or a pass after the bot's lowest, ends them as passed.
-func TestNegotiationCountersAPassOnce(t *testing.T) {
+// A decline sends no counter, records the pass, and stays closed after restart.
+func TestNegotiationPassClosesImmediately(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data.db")
 	synctest.Test(t, func(t *testing.T) {
 		f := newSellFixture(t, path)
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		m := f.negotiatingManager(ctx, 40)
-		id, err := m.Start(ctx, 0, f.date, "lunch", 30, 60, "")
-		if err != nil {
+		_, id := quietA(t, f, ctx)
+		f.conn.emit(dm(buyerA, "No, thank you"))
+		settle()
+		if got := texts(sentTo(f.conn.messages(), buyerA)); strings.Join(got, "|") != "60" {
+			t.Fatalf("A got %q", got)
+		}
+		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerPassed || b.PassCountered || b.Ask != 6000 {
+			t.Fatalf("A = %+v", b)
+		}
+		evs := eventsFor(t, f, id, buyerA)
+		if !slices.Contains(evs, store.EventPassed) || slices.Contains(evs, store.EventPassCounter) {
+			t.Fatalf("events = %q", evs)
+		}
+		f.conn.emit(f.reply(buyerB, "price?"))
+		settle()
+		f.conn.emit(dm(buyerB, "sorry bought from another person"))
+		settle()
+		if got := texts(sentTo(f.conn.messages(), buyerB)); strings.Join(got, "|") != "60" {
+			t.Fatalf("B got %q", got)
+		}
+		if b := buyerState(t, f, id, buyerB); b.State != store.BuyerPassed {
+			t.Fatalf("B = %+v", b)
+		}
+		cancel()
+		synctest.Wait()
+		ctx2, cancel2 := context.WithCancel(t.Context())
+		defer cancel2()
+		if err := f.negotiatingManager(ctx2, 40).Resume(ctx2, true); err != nil {
 			t.Fatal(err)
 		}
 		synctest.Wait()
-
-		f.conn.emit(f.reply(buyerA, "price?"))
-		settle()
-		f.conn.emit(dm(buyerA, "nah"))
-		settle()
-		if got := texts(sentTo(f.conn.messages(), buyerA)); strings.Join(got, "|") != "60|how about 40" {
-			t.Fatalf("A got %q", got)
-		}
-		b := buyerState(t, f, id, buyerA)
-		if b.State != store.BuyerNegotiating || !b.PassCountered || b.Ask != 4000 {
-			t.Fatalf("A = %+v after the first pass", b)
-		}
-		evs, err := f.st.SellTaskEvents(ctx, id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var counters []store.SellEvent
-		for _, e := range evs {
-			if e.Kind == store.EventPassCounter {
-				counters = append(counters, e)
-			}
-		}
-		if len(counters) != 1 || counters[0].Peer != buyerA.String() || counters[0].N != 4000 || counters[0].Text != "passed at ₹60; one counter at ₹40" {
-			t.Fatalf("pass counters = %+v", counters)
-		}
-
-		f.conn.emit(dm(buyerA, "nvm"))
-		settle()
-		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 2 {
-			t.Fatalf("A got %q after the second pass", got)
-		}
-		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerPassed {
-			t.Fatalf("A = %+v after the second pass", b)
-		}
-
-		// B already heard the lowest, so a pass ends them.
-		f.conn.emit(f.reply(buyerB, "price?"))
-		settle()
-		f.conn.emit(dm(buyerB, "25 final"))
-		settle()
-		f.conn.emit(dm(buyerB, "nvm"))
-		settle()
-		if got := texts(sentTo(f.conn.messages(), buyerB)); strings.Join(got, "|") != "60|40|final offer" {
-			t.Fatalf("B got %q", got)
-		}
-		if b := buyerState(t, f, id, buyerB); b.State != store.BuyerPassed || b.PassCountered {
-			t.Fatalf("B = %+v", b)
+		time.Sleep(2 * nudgeAfter)
+		synctest.Wait()
+		if got := texts(sentTo(f.conn.messages(), buyerA)); strings.Join(got, "|") != "60" {
+			t.Fatalf("A got %q after restart", got)
 		}
 	})
 }
@@ -1241,6 +1215,55 @@ func TestNegotiationPausedTimersFrozenDuringTurn(t *testing.T) {
 		synctest.Wait()
 		if toB := texts(sentTo(f.conn.messages(), buyerB)); !slices.Equal(toB, []string{"60", "yes or no?"}) {
 			t.Fatalf("B got %q after unpause", toB)
+		}
+	})
+}
+
+func TestAcknowledgementsKeepAgreedBuyersInQueue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		ctx, stop := context.WithCancel(t.Context())
+		m := f.negotiatingManager(ctx, 40)
+		id, err := m.Start(ctx, 0, f.date, "lunch", 30, 60, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		// Restore a persisted queue with two agreed buyers. A holds the turn,
+		// while B must retain their agreement through acknowledgement messages.
+		stop()
+		synctest.Wait()
+		for _, peer := range []types.JID{buyerA, buyerB} {
+			if ok, err := f.st.AddSellTaskBuyer(t.Context(), id, peer.String(), "", time.Now()); err != nil || !ok {
+				t.Fatalf("add buyer: %v, %v", ok, err)
+			}
+			n := store.Negotiation{Ask: 6000, BotMsgs: 1, Quoted: []int64{6000}, StartedAt: time.Now()}
+			if ok, err := f.st.AgreeSellTaskBuyer(t.Context(), id, peer.String(), "60.00", n, time.Now()); err != nil || !ok {
+				t.Fatalf("agree buyer: %v, %v", ok, err)
+			}
+		}
+		ctx2, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		if err := f.negotiatingManager(ctx2, 40).Resume(ctx2, true); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		if b := buyerState(t, f, id, buyerB); b.State != store.BuyerAgreed {
+			t.Fatalf("B = %+v", b)
+		}
+		for _, text := range []string{"ok got it", "got it thanks", "ok na", "works na", "done na", "ok no problem", "phone no?", "got it, paying 60"} {
+			f.conn.emit(dm(buyerB, text))
+			settle()
+			if b := buyerState(t, f, id, buyerB); b.State != store.BuyerAgreed {
+				t.Fatalf("B after %q = %+v", text, b)
+			}
+		}
+		if evs := eventsFor(t, f, id, buyerB); slices.Contains(evs, store.EventPassed) {
+			t.Fatalf("B's events = %q", evs)
+		}
+		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerOffered {
+			t.Fatalf("A lost payment turn: %+v", b)
 		}
 	})
 }

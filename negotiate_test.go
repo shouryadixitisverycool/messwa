@@ -143,22 +143,22 @@ func TestHaggleDecide(t *testing.T) {
 			[]string{"60", "kadamba veg lunch for 60"}},
 		{"pass before any price ends", 30, 60, 50, []string{"nvm"},
 			[]string{"PASS"}},
-		{"pass at the opening gets the target once", 30, 60, 50, []string{"price?", "nvm"},
-			[]string{"60", "how about 50"}},
+		{"pass at the opening ends", 30, 60, 50, []string{"price?", "nvm"},
+			[]string{"60", "PASS"}},
 		{"bought elsewhere ends without a counter", 30, 60, 50, []string{"price?", "bought already"},
 			[]string{"60", "PASS"}},
 		{"bought elsewhere after a counter ends", 30, 100, 80, []string{"price?", "75", "sorry bought"},
 			[]string{"100", "how about 90", "PASS"}},
-		{"second pass ends", 30, 60, 50, []string{"price?", "nvm", "nvm"},
-			[]string{"60", "how about 50", "PASS"}},
+		{"first pass ends", 30, 60, 50, []string{"price?", "nvm"},
+			[]string{"60", "PASS"}},
 		{"pass after hearing the lowest ends", 30, 60, 45, []string{"price?", "35 final", "nvm"},
 			[]string{"60", "45 / final offer", "PASS"}},
 		{"polite withdrawal after the lowest does not agree", 115, 120, 115, []string{"Available?", "80?", "Okay sorry then."},
 			[]string{"120", "115 / final offer", "PASS"}},
 		{"a pass with a price is an offer", 30, 60, 50, []string{"price?", "too much, 55?"},
 			[]string{"60", "AGREE 55"}},
-		{"an offer doesn't use up the pass counter", 30, 60, 40, []string{"price?", "too much, 35?", "nvm", "nvm"},
-			[]string{"60", "how about 50", "40?", "PASS"}},
+		{"pass after an offer ends", 30, 60, 40, []string{"price?", "too much, 35?", "nvm"},
+			[]string{"60", "how about 50", "PASS"}},
 		{"pay another way parks", 30, 60, 50, []string{"price?", "upi id?"},
 			[]string{"60", "PARK"}},
 		{"an offer up to 3x the max is a highball", 30, 60, 50, []string{"price?", "180"},
@@ -211,41 +211,23 @@ func TestHaggleNamesTheDay(t *testing.T) {
 	}
 }
 
-// The 12 Nov dinner run, task 7: kadamba non-veg, ₹60 to ₹70, no market
-// median, so the target is ₹70. Three buyers passed at the opening (or at
-// the floor) and the bot let each one go.
-func TestHagglePassGetsOneCounter(t *testing.T) {
+// A decline ends the conversation at any price, including old stored sessions.
+func TestHagglePassEndsImmediately(t *testing.T) {
 	end := time.Date(2026, 11, 12, 21, 30, 0, 0, time.UTC)
-	early := end.Add(-90 * time.Minute)
-	h := newHaggle(60, 70, 0, false, true, end, testLines("nonveg", ""))
-
-	// At the target: halfway to the floor.
-	if got := strings.Join(replay(h, early, "price?", "nvm", "nvm"), "|"); got != "70|how about 65|PASS" {
-		t.Fatalf("pass at the opening: %q", got)
-	}
-
-	// Above the target: the target.
-	h2 := newHaggle(50, 70, 60, true, true, end, testLines("nonveg", ""))
-	if got := strings.Join(replay(h2, early, "price?", "no"), "|"); got != "70|how about 60" {
-		t.Fatalf("pass above the target: %q", got)
-	}
-
-	// Already at the floor: nothing lower to offer.
-	s := h.decide(haggleState{ask: 60, botMsgs: 2, quoted: []int{70, 60}}, parseBuyer("nvm"), early, false)
-	if !s.pass || len(s.reply) > 0 {
-		t.Fatalf("pass at the floor: %+v", s)
-	}
-
-	// Halfway that rounds back to the ask still comes down one unit.
-	h3 := newHaggle(50, 55, 0, false, true, end, testLines("nonveg", ""))
-	if got := strings.Join(replay(h3, early, "price?", "nvm"), "|"); got != "55|how about 50" {
-		t.Fatalf("one unit above the floor: %q", got)
-	}
-
-	// No messages left for this buyer: let them go.
-	s = h.decide(haggleState{ask: 70, botMsgs: maxBotMsgs}, parseBuyer("nvm"), early, false)
-	if !s.pass {
-		t.Fatalf("pass at the message cap: %+v", s)
+	h := newHaggle(30, 70, 50, true, true, end, testLines("nonveg", "")).forMeal("dinner")
+	for _, text := range []string{"No, thank you", "no thanks", "no", "Nop", "nah", "nvm", "not interested", "I'll pass", "don't need lunch", "sorry bought from another person", "sorry, bought from someone else"} {
+		for _, st := range []haggleState{
+			{ask: 70},
+			{ask: 70, botMsgs: 1},
+			{ask: 50, botMsgs: 2},
+			{ask: 30, botMsgs: 3, saidLowest: true},
+			{ask: 40, botMsgs: 2, passCountered: true},
+		} {
+			result := h.decide(st, parseBuyer(text), end.Add(-time.Hour), false)
+			if !result.pass || len(result.reply) != 0 || result.agree != 0 {
+				t.Errorf("%q at %+v = %+v", text, st, result)
+			}
+		}
 	}
 }
 
@@ -263,10 +245,10 @@ func TestHaggleOtherMeal(t *testing.T) {
 		{"offers for another meal", []string{"price?", "bf 60?", "bf 60?"}, []string{"140", "its lunch", "PASS"}},
 		{"asks for another meal first", []string{"breakfast?", "120?"}, []string{"its lunch, 140", "140 / final offer"}},
 		{"turns down the meal", []string{"price?", "dont need lunch"}, []string{"140", "PASS"}},
-		{"dont need is a pass", []string{"price?", "dont need", "dont need"}, []string{"140", "how about 120", "PASS"}},
+		{"dont need is a pass", []string{"price?", "dont need"}, []string{"140", "PASS"}},
 		{"names the meal on sale", []string{"price?", "lunch for 120?"}, []string{"140", "140 / final offer"}},
 		{"names both", []string{"price?", "breakfast or lunch, 120?"}, []string{"140", "140 / final offer"}},
-		{"not req is a pass", []string{"price?", "not req", "not req"}, []string{"140", "how about 120", "PASS"}},
+		{"not req is a pass", []string{"price?", "not req"}, []string{"140", "PASS"}},
 	}
 	for _, c := range cases {
 		if got := replay(h, end.Add(-4*time.Hour), c.msgs...); strings.Join(got, "|") != strings.Join(c.want, "|") {

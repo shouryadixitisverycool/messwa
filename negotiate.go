@@ -124,7 +124,7 @@ type haggleState struct {
 	ask, rounds, botMsgs, unknowns, lastOffer int
 	quoted                                    []int
 	saidLowest                                bool
-	passCountered                             bool // see passCounter
+	passCountered                             bool // retained for stored sessions from older versions
 	toldMeal                                  bool // the buyer named another meal and heard which one this is
 	nudges                                    int  // see quietNudge
 }
@@ -157,35 +157,14 @@ type step struct {
 	agree     int    // > 0: agreed at this price
 	pass      bool   // the buyer is out
 	why       string // for a pass the bot reads into the message, why
-	passFrom  int    // > 0: the buyer passed at this ask and reply is the one lower price they get
 	park      string // non-empty: stop and hand the buyer to you, saying why
 	paidClaim bool   // the buyer says they paid
 }
 
-// passCounter is the one lower price a buyer who passes hears before the
-// bot lets them go. One who bought elsewhere gets none (see decide). Above the target it is the target. At or below it, it
-// is halfway from the ask to the floor, rounded to the unit and at least
-// one unit under the ask, so ₹70 with a ₹60 floor becomes ₹65. It may go
-// under the walk-away price: a buyer who passed is lost anyway, and the
-// floor still holds. It reports false when the buyer already got one, has
-// heard no price yet, the bot already called a price its lowest, the ask
-// is at the floor, or the bot has no messages left for them.
-func (h haggle) passCounter(st haggleState) (int, bool) {
-	// Capped like decide's ask, after a range edit lowered max.
-	a := min(st.ask, h.max)
-	if st.passCountered || st.botMsgs == 0 || st.botMsgs >= maxBotMsgs || st.saidLowest || a <= h.min {
-		return 0, false
-	}
-	if a > h.target {
-		return h.target, true
-	}
-	return max(h.min, min(a-h.unit, h.round(float64(a+h.min)/2))), true
-}
-
 // quietDrop is the lower price a buyer hears after staying quiet through
-// the bot's first message and the nudge: the same price passCounter would
-// give, but a later pass still gets its own counter. It reports false when
-// the ask is already at the floor.
+// the bot's first message and the nudge. Above the target it is the target;
+// otherwise it is halfway to the floor, at least one unit lower. It reports
+// false when the ask is already at the floor or was called the lowest.
 func (h haggle) quietDrop(st haggleState) (int, bool) {
 	a := min(st.ask, h.max)
 	if a <= h.min || st.saidLowest {
@@ -242,7 +221,7 @@ func (h haggle) decide(st haggleState, in intent, now time.Time, competing bool)
 		return step{next: next, agree: price}
 	}
 
-	if in.kind != intentPaid && in.kind != intentAccept && in.wantsOtherMeal(h.meal) {
+	if in.kind != intentPass && in.kind != intentPaid && in.kind != intentAccept && in.wantsOtherMeal(h.meal) {
 		// "lunch?" to a dinner seller: they may have misread the post, so
 		// say which meal this is once. Asking for another meal again ends
 		// it; no price changes that.
@@ -254,7 +233,6 @@ func (h haggle) decide(st haggleState, in intent, now time.Time, competing bool)
 	}
 	switch in.kind {
 	case intentPass:
-		k, ok := h.passCounter(st)
 		if in.bought {
 			return step{next: st, pass: true, why: "bought elsewhere"}
 		}
@@ -262,14 +240,7 @@ func (h haggle) decide(st haggleState, in intent, now time.Time, competing bool)
 			// "dont need dinner": they turned down the meal, not the price.
 			return step{next: st, pass: true, why: "doesn't want this meal"}
 		}
-		if !ok {
-			return step{next: st, pass: true}
-		}
-		next.passCountered = true
-		next.rounds++
-		s := say(k, h.l.counter(k, a, next.rounds))
-		s.passFrom = a
-		return s
+		return step{next: st, pass: true}
 	case intentPaid:
 		return step{next: st, paidClaim: true}
 	case intentPayOther:
@@ -1740,15 +1711,6 @@ func (ss *session) handle(texts []string) handled {
 	case st.paidClaim:
 		n.agreeMu.Unlock()
 		return handledPaidClaim
-	case st.passFrom > 0:
-		claimed := ss.claimSayLocked(st.next)
-		n.agreeMu.Unlock()
-		if !claimed || !ss.sendClaimed(st.next.ask, st.next.rounds, st.reply) {
-			return handledEnded
-		}
-		n.log.Info("buyer passed; countered once", "buyer", ss.buyer, "from", st.passFrom, "ask", st.next.ask)
-		n.event(ss.buyer, store.EventPassCounter, st.next.ask, fmt.Sprintf("passed at ₹%d; one counter at ₹%d", st.passFrom, st.next.ask))
-		return handledReplied
 	case st.agree > 0:
 		res := ss.agreeLocked(st)
 		n.agreeMu.Unlock()

@@ -171,7 +171,7 @@ var (
 	// Numbers next to these words are not offers: "sold at 60", "people
 	// are selling at 70", "i bought for 20 from someone else", "i paid 30",
 	// "got it for 50".
-	notOfferContext = newVocab("got it for", "got for", "got one for", "sold", "bought", "buyed", "purchased", "paid", "sent", "sending", "transferred", "getting", "selling",
+	notOfferContext = newVocab("got it for", "got already", "paying", "got for", "got one for", "sold", "bought", "baught", "buyed", "purchased", "paid", "sent", "sending", "transferred", "getting", "selling",
 		"norm", "milra", "milrha", "mil", "people", "someone", "somebody", "others", "everyone", "group", "roll", "number", "no.", "phone")
 	paidWords = newVocab("paid", "payed", "sent", "transferred", "dn", "payment done", "money sent", "done paying", "sent money", "sending money",
 		"paid via", "paid using", "sent it")
@@ -182,12 +182,15 @@ var (
 		"sorry got it", "sry got it", "sorry i got it", "sry i got it", "not req", "not reqd", "no req", "nt req", "not reqired",
 		"dont need", "don't need", "do not need", "dnt need", "nahi chahiye", "nhi chahiye",
 		// Polite withdrawals can start with "okay"; read the refusal first.
-		"sorry then", "sry then")
-	// Within a pass, these mean the buyer has a meal already. "got it"
-	// counts only here: on its own it is "understood".
-	boughtWords = newVocab("bought", "buyed", "purchased", "got for", "got from", "got another", "got one", "got other", "got elsewhere",
+		"sorry then", "sry then", "baught", "got already", "got it just now", "got it now",
+		"already had", "already ate", "already eaten", "i have eaten", "i've eaten", "ate already",
+		"not buying", "not taking", "not going to use", "not gonna use", "not going to buy", "not gonna buy")
+	// These mark explicit bought-elsewhere replies. Bare "got it" may mean understood.
+	boughtWords = newVocab("got already", "bought", "baught", "buyed", "purchased", "got for", "got from", "got another", "got one", "got other", "got elsewhere",
 		"got it", "already got", "mil gaya", "mil gya", "milgaya", "mil gayi")
-	refuseFirst = newVocab("no", "nope", "nah", "na", "nahi", "nhi")
+	refuseWords     = newVocab("nope", "nop", "nopes", "nah", "naw", "nahi", "nhi", "nahin", "nuh uh")
+	refusalCourtesy = newVocab("sorry", "sry", "thanks", "thank", "you", "u", "but", "buddy", "bruh", "mate")
+	reassurance     = newVocab("no problem", "no worries", "no issue")
 	// An apology with nothing else to say is a no: "okay sorry then" after
 	// "cant go below 115". One that excuses something isn't: "sorry for the
 	// late reply, ok".
@@ -212,7 +215,7 @@ var (
 		"half", "fair", "cmon", "c'mon", "come on", "thoda", "cheaper", "cheap", "bargain", "selling at", "norm", "milra", "people",
 		"others", "someone", "for old", "kuch kam", "high", "much?")
 	pleading    = newVocab("pls", "plz", "please", "plis", "pwease", "pleaseee", "pleez")
-	acceptWords = newVocab("same number", "same no", "samenumber", "same num", "same nmbr", "this number", "this no", "this num",
+	acceptWords = newVocab("your no", "phone no", "same number", "same no", "samenumber", "same num", "same nmbr", "this number", "this no", "this num",
 		"pay here", "pay on this", "pay to this", "pay this", "pay on same", "gpay", "g pay", "google pay", "phonepe", "phone pe", "paytm",
 		"upi", "upi?", "whatsapp pay", "paying", "sending", "send", "i'll take", "ill take", "i will take", "im taking", "i'm taking",
 		"taking it", "take it", "i take", "deal", "bhejo", "bhej", "bhejta", "karta hu", "kar raha", "kr rha", "doing")
@@ -351,7 +354,7 @@ func parseKind(text string) intent {
 		return intent{kind: intentPaid}
 	case passWords.in(m), notInterested(m.words):
 		return intent{kind: intentPass, bought: boughtWords.in(m)}
-	case len(m.words) > 0 && refuseFirst.words[m.words[0]] && !lowerWords.in(m) && !openerWords.in(m) && !payOtherWords.in(m):
+	case (refuseWords.in(m) || startsRefusal(m)) && !lowerWords.in(m) && !openerWords.in(m) && !payOtherWords.in(m) && !acceptWords.in(m) && !questionWords.in(m) && !reassurance.in(m):
 		return intent{kind: intentPass, bought: boughtWords.in(m)}
 	case payOtherWords.in(m):
 		return intent{kind: intentPayOther}
@@ -372,6 +375,20 @@ func parseKind(text string) intent {
 		return intent{kind: intentOpener}
 	}
 	return intent{kind: intentUnknown}
+}
+
+// "no" and "na" only decline at the start, after optional polite filler.
+// In "ok na" or "ok no problem" they are part of an acknowledgement.
+func startsRefusal(m msgWords) bool {
+	for _, w := range m.words {
+		if w == "no" || w == "na" {
+			return true
+		}
+		if !filler.words[w] && !refusalCourtesy.words[w] {
+			return false
+		}
+	}
+	return false
 }
 
 // digitNumbers finds prices written in digits. A number stands on its own:

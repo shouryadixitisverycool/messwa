@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // The phrases below come from a study of real, anonymized mess trades in
 // DMs with unsaved numbers.
@@ -173,6 +176,7 @@ func TestParseBuyer(t *testing.T) {
 		{"don't need it bro", intentPass, 0, false},
 		{"need it", intentOpener, 0, false},
 		{"nah", intentPass, 0, false},
+		{"Nop", intentPass, 0, false},
 		{"Not needed bro", intentPass, 0, false},
 		{"I'll pass", intentPass, 0, false},
 		{"Oh.. no sorry", intentPass, 0, false},
@@ -230,8 +234,8 @@ func TestParseBuyer(t *testing.T) {
 	}
 }
 
-// A buyer who bought elsewhere is out for good; one who just passes may
-// still take a lower price.
+// Both bought-elsewhere replies and plain declines are passes; the bought
+// flag keeps the reason in the event log.
 func TestParseBuyerBoughtElsewhere(t *testing.T) {
 	bought := []string{"Sorry bought", "Sorry bought just now", "Sorry I bought now", "Sorry, already got", "Sry, bought",
 		"sry got from other", "i got another", "Bought another one", "Bought already", "bought already", "Bought it",
@@ -239,7 +243,8 @@ func TestParseBuyerBoughtElsewhere(t *testing.T) {
 		"I have bought", "I have purchased from someone else thanks", "Thanks, already bought", "Thank you already got",
 		"Already purchased", "Nah I got it nvm", "Mujhe mil gaya bhai kisi aur se", "I got other", "Nope, got it",
 		"No just bought", "I bought for 20 from someone else", "sorry got it now",
-		"Got it for 50", "I bought it for 50 🙏", "got for 40 from someone", "Got one for 45"}
+		"Got it for 50", "I bought it for 50 🙏", "got for 40 from someone", "Got one for 45",
+		"sorry bought from another person", "sorry, bought from someone else", "Sorry dude I got already", "got already for 50"}
 	for _, text := range bought {
 		if in := parseBuyer(text); in.kind != intentPass || !in.bought {
 			t.Errorf("parseBuyer(%q) = %+v, want a bought pass", text, in)
@@ -309,5 +314,104 @@ func TestCombineIntents(t *testing.T) {
 		if got := combineIntents(c.texts); got.kind != c.kind || got.offer != c.offer {
 			t.Errorf("combineIntents(%q) = %+v, want kind %d offer %d", c.texts, got, c.kind, c.offer)
 		}
+	}
+}
+
+// Anonymized buyer replies from the locally available bot chats, plus spelling variants.
+func TestBuyerDeclinesFromConversationHistory(t *testing.T) {
+	h := newHaggle(30, 130, 100, true, true, time.Now().Add(time.Hour), testLines("nonveg", "")).forMeal("lunch")
+	declines := []string{
+		"today Baught already", "Sorry dude I got already", "Got it just now",
+		"I already had lunch", "Delete it, i am not going to use it",
+		"no thank u", "no ,i got it..", "No sry", "Nope \U0001fae0",
+		"Nah its fine\nI dont need it actually", "Bought already",
+		"Bought it, brother.. started dinner already", "No got it",
+		"Got it from someone else", "Sorry bought from a different person",
+		"Nop", "nopes", "naw", "nahin", "nuh uh", "noooo", "nopeee",
+		"oh no thanku", "thanks but nope", "sorry buddy nah", "bro nop",
+		"not buying", "not taking it", "already eaten", "I have eaten",
+		"baught for 40", "no thx", "no ty", "no thankyou",
+		"thanks, got it from a friend", "actually that is a nope", "that is a nuh uh",
+		"I got it for 80", "I am not going to buy", "not gonna buy",
+	}
+	for _, text := range declines {
+		t.Run(text, func(t *testing.T) {
+			in := parseBuyer(text)
+			if in.kind != intentPass {
+				t.Fatalf("parseBuyer(%q) = %+v, want pass", text, in)
+			}
+			result := h.decide(haggleState{ask: 130, botMsgs: 1}, in, time.Now(), false)
+			if !result.pass || len(result.reply) > 0 {
+				t.Fatalf("%q = %+v, want silent close", text, result)
+			}
+		})
+	}
+	for _, c := range []struct {
+		text string
+		kind intentKind
+	}{
+		{"Sorry too much", intentLower},
+		{"Sorry, I want @10", intentOffer},
+		{"Can we do 80?", intentOffer},
+		{"Works", intentOK},
+		{"Same number?", intentAccept},
+		{"same no?", intentAccept},
+		{"I don't have Whatsapp pay", intentPayOther},
+		{"Sorry buddy I don't have Whatsapp pay", intentPayOther},
+		{"no whatsapp pay bro", intentPayOther},
+		{"no, can you lower it?", intentLower},
+		{"no, 80?", intentOffer},
+		{"nope paid already", intentPaid},
+		{"now", intentUnknown},
+		{"noted", intentOK},
+		{"normally 50", intentOffer},
+		{"got it thanks, paid", intentPaid},
+	} {
+		if in := parseBuyer(c.text); in.kind != c.kind {
+			t.Errorf("parseBuyer(%q) = %+v, want %v", c.text, in, c.kind)
+		}
+	}
+}
+
+// Review regressions: ambiguous acknowledgements must not cancel a buyer.
+func TestBuyerAcknowledgementsAndQuestionsDoNotDecline(t *testing.T) {
+	for _, c := range []struct {
+		text  string
+		kind  intentKind
+		offer int
+		done  bool
+	}{
+		{"got it", intentUnknown, 0, false},
+		{"got it thanks", intentUnknown, 0, false},
+		{"ok got it", intentOK, 0, false},
+		{"got it, paying", intentAccept, 0, false},
+		{"got it, paying 60", intentAccept, 0, false},
+		{"got it, same number?", intentAccept, 0, false},
+		{"got it, can do 80", intentOffer, 80, false},
+		{"ok got it, 70?", intentOffer, 70, false},
+		{"got it, too much", intentLower, 0, false},
+		{"got it, send qr", intentPayOther, 0, false},
+		{"ok na", intentOK, 0, false},
+		{"works na", intentOK, 0, false},
+		{"chalega na", intentOK, 0, false},
+		{"wait na", intentOK, 0, false},
+		{"bolo na", intentOK, 0, false},
+		{"done na", intentOK, 0, true},
+		{"kadamba veg na?", intentQuestion, 0, false},
+		{"nv na?", intentQuestion, 0, false},
+		{"ok no problem", intentOK, 0, false},
+		{"yes no worries", intentOK, 0, false},
+		{"sure no issue", intentOK, 0, false},
+		{"kadamba no?", intentQuestion, 0, false},
+		{"veg no?", intentQuestion, 0, false},
+		{"whats your no?", intentAccept, 0, false},
+		{"phone no?", intentAccept, 0, false},
+	} {
+		t.Run(c.text, func(t *testing.T) {
+			in := parseBuyer(c.text)
+			if in.kind != c.kind || in.offer != c.offer || in.done != c.done {
+				t.Fatalf("parseBuyer(%q) = %+v, want kind %v offer %d done %v", c.text, in, c.kind, c.offer, c.done)
+			}
+		})
 	}
 }
