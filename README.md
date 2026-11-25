@@ -683,11 +683,13 @@ and the UTR. A free AI Studio key is enough. Then:
 - a screenshot of a finished payment for the agreed price gets the QR;
 - one for less gets `got 3, 32 more pls`, and the screenshots add up, so
   the ₹32 top-up gets the QR. A buyer who has paid part keeps the turn
-  until they pay the rest or the meal ends. A screenshot sent twice counts
-  once (by UTR, the app's transaction ID, or the image itself);
+  until they pay the rest or the meal ends. One payment counts once, even
+  as a crop or a retake: any shared UTR, app transaction ID, image, or
+  amount and time marks it as counted;
 - anything else gets `cant see a payment to me in that, can u send the
-  payment screenshot`, at most twice: a photo, a chat, a pending or failed
-  payment, or a payment to someone else's name;
+  payment screenshot`, at most twice: a photo, a chat, a receipt that
+  doesn't say the payment went through, one dated before the buyer's
+  turn, or a payment to someone else's name;
 - if Gemini can't be reached, `accept_unreadable_payments` decides, as for
   WhatsApp Pay: on, the image counts as the agreed price; off (and always
   on autopilot), no QR goes out, and the log and the buyer's events say the
@@ -702,7 +704,7 @@ go to Google, and the free tier may use them to improve its models. Without
 `GEMINI_API_KEY` nothing is read, as described above. Even read, an edited
 screenshot gets through, so keep checking your UPI app.
 
-`messwa read-payment [-upi ID] IMAGE...` reads screenshots without a sale,
+`messwa read-payment [-name NAME] [-upi ID] IMAGE...` reads screenshots without a sale,
 and `-serve` gives a page to upload them.
 
 With `-peer`, the setting and the flag apply too. There's no prompt unless

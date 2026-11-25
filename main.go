@@ -75,7 +75,7 @@ inspection (read the database only, safe while run is up):
                                 serve the dashboard alone (run serves it too)
 
 development:
-  read-payment [-upi ID] [-models M,...] (IMAGE... | -serve [-listen ADDR,...])
+  read-payment [-upi ID] [-name NAME] [-models M,...] (IMAGE... | -serve [-listen ADDR,...])
                                 read UPI payment screenshots with Gemini (needs GEMINI_API_KEY)
                                 and print the amount, payee and UTR it sees; -serve gives an upload page
   mockchat [-listen addr] [-upi ID]

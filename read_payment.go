@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -20,9 +19,6 @@ import (
 
 //go:embed read_payment.html
 var readPaymentPage []byte
-
-//go:embed read_payment_eval.html
-var readPaymentEvalPage []byte
 
 // paymentRead is one screenshot's result as read-payment prints it.
 type paymentRead struct {
@@ -34,15 +30,16 @@ type paymentRead struct {
 	PayeeOK *bool `json:"payee_matches,omitempty"`
 }
 
-func readOne(ctx context.Context, r *payshot.Reader, img []byte, mime, upi string) (paymentRead, error) {
+func readOne(ctx context.Context, r *payshot.Reader, img []byte, mime, upi, name string) (paymentRead, error) {
 	start := time.Now()
 	rc, model, err := r.Read(ctx, img, mime)
 	if err != nil {
 		return paymentRead{}, err
 	}
 	res := paymentRead{Model: model, Took: time.Since(start).Round(10 * time.Millisecond).String(), Paise: rc.AmountPaise, Receipt: rc}
-	if upi != "" {
-		ok := payshot.PayeeMatches(rc.PayeeUPI, upi)
+	if upi != "" || name != "" {
+		// The rule sales use; see payshot.PaidTo.
+		ok := payshot.PaidTo(rc, upi, name)
 		res.PayeeOK = &ok
 	}
 	return res, nil
@@ -58,7 +55,7 @@ func readPayment(ctx context.Context, out io.Writer, args []string) error {
 	upi := fs.String("upi", "", "your UPI ID, to check the screenshot paid it")
 	serve := fs.Bool("serve", false, "serve an upload page instead of reading files")
 	listen := fs.String("listen", "127.0.0.1:8099", "with -serve, addresses to listen on, comma-separated")
-	evalDir := fs.String("eval", "", "with -serve, a folder holding eval.json and its images, shown at /eval")
+	name := fs.String("name", "", "your banking name, to check the screenshot paid you (see [sell] payee_name)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -67,10 +64,10 @@ func readPayment(ctx context.Context, out io.Writer, args []string) error {
 		return errors.New("set GEMINI_API_KEY")
 	}
 	if *serve {
-		return servePaymentReader(ctx, r, *upi, *evalDir, strings.Split(*listen, ","))
+		return servePaymentReader(ctx, r, *upi, *name, strings.Split(*listen, ","))
 	}
 	if fs.NArg() == 0 {
-		return errors.New("usage: messwa read-payment [-upi ID] [-models M,...] IMAGE... | -serve [-listen ADDR,...]")
+		return errors.New("usage: messwa read-payment [-upi ID] [-name NAME] [-models M,...] IMAGE... | -serve [-listen ADDR,...]")
 	}
 	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")
@@ -80,7 +77,7 @@ func readPayment(ctx context.Context, out io.Writer, args []string) error {
 		if err != nil {
 			return err
 		}
-		res, err := readOne(ctx, r, img, "", *upi)
+		res, err := readOne(ctx, r, img, "", *upi, *name)
 		if err != nil {
 			return fmt.Errorf("%s: %w", path, err)
 		}
@@ -92,33 +89,14 @@ func readPayment(ctx context.Context, out io.Writer, args []string) error {
 	return nil
 }
 
-func servePaymentReader(ctx context.Context, r *payshot.Reader, defaultUPI, evalDir string, addrs []string) error {
+func servePaymentReader(ctx context.Context, r *payshot.Reader, defaultUPI, defaultName string, addrs []string) error {
 	mux := http.NewServeMux()
-	if evalDir != "" {
-		// An eval set: eval.json lists screenshots already read, each with
-		// the values checked by hand, so reads and truth sit side by side.
-		mux.HandleFunc("GET /eval", func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write(readPaymentEvalPage)
-		})
-		mux.HandleFunc("GET /eval/data", func(w http.ResponseWriter, req *http.Request) {
-			http.ServeFile(w, req, filepath.Join(evalDir, "eval.json"))
-		})
-		mux.HandleFunc("GET /eval/img/{name}", func(w http.ResponseWriter, req *http.Request) {
-			name := filepath.Base(req.PathValue("name"))
-			if ext := strings.ToLower(filepath.Ext(name)); ext != ".jpg" && ext != ".jpeg" && ext != ".png" && ext != ".webp" {
-				http.NotFound(w, req)
-				return
-			}
-			http.ServeFile(w, req, filepath.Join(evalDir, name))
-		})
-	}
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(readPaymentPage)
 	})
 	mux.HandleFunc("GET /config", func(w http.ResponseWriter, _ *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{"upi": defaultUPI, "models": r.Models, "eval": evalDir != ""})
+		json.NewEncoder(w).Encode(map[string]any{"upi": defaultUPI, "name": defaultName, "models": r.Models})
 	})
 	mux.HandleFunc("POST /read", func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -136,7 +114,7 @@ func servePaymentReader(ctx context.Context, r *payshot.Reader, defaultUPI, eval
 			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
-		res, err := readOne(req.Context(), r, img, hdr.Header.Get("Content-Type"), strings.TrimSpace(req.FormValue("upi")))
+		res, err := readOne(req.Context(), r, img, hdr.Header.Get("Content-Type"), strings.TrimSpace(req.FormValue("upi")), strings.TrimSpace(req.FormValue("name")))
 		if err != nil {
 			w.WriteHeader(http.StatusBadGateway)
 			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})

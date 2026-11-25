@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -400,6 +401,9 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 	var paidPaise int64
 	refs, reading := map[string]bool{}, map[string]bool{}
 	unclear := 0
+	// dropLater remembers a drop that came while a payment was being
+	// handled: it ends the turn once that payment turns out not to count.
+	dropLater := false
 	// finish runs with mu held. The delivery itself runs in a goroutine so
 	// the event handler doesn't hold up the rest of run's ingest.
 	finish := func(e *events.Message, amountMissing bool, paidAmount string, image bool) {
@@ -490,9 +494,15 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 			s.log.Warn("could not read the payment screenshot; not sending the meal image. Check the buyer's chat and your UPI app",
 				"date", d.Date, "meal", d.Meal, "image_id", e.Info.ID, "err", err)
 			return
-		case !rc.IsReceipt || rc.Status == "pending" || rc.Status == "failed" || rc.AmountPaise <= 0:
+		case !rc.IsReceipt || rc.Status != "success" || rc.AmountPaise <= 0:
 			s.log.Info("image is not a finished payment", "image_id", e.Info.ID, "receipt", rc.IsReceipt, "status", rc.Status, "amount", rc.Amount, "model", model)
 			s.note(buyer, store.EventImage, 0, "")
+			sayUnclear()
+			return
+		case rc.PaidBefore(armedAt.In(s.loc)):
+			// An old receipt, such as one from an earlier sale.
+			s.log.Warn("payment screenshot is from before the buyer's turn", "image_id", e.Info.ID, "paid_date", rc.PaidDate)
+			s.note(buyer, store.EventPayMismatch, rc.AmountPaise, "screenshot dated "+rc.PaidDate)
 			sayUnclear()
 			return
 		case !payshot.PaidTo(rc, s.upi, s.payeeName):
@@ -501,12 +511,16 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 			sayUnclear()
 			return
 		}
-		ref := firstNonEmpty(rc.UTR, rc.TxnID, fmt.Sprintf("%x", img.GetFileSHA256()))
-		if refs[ref] {
+		// One payment can come as different images: a crop, a retake, the
+		// same receipt forwarded. Any shared key means it was counted.
+		keys := receiptKeys(rc, img.GetFileSHA256())
+		if slices.ContainsFunc(keys, func(k string) bool { return refs[k] }) {
 			s.log.Info("payment screenshot already counted", "image_id", e.Info.ID)
 			return
 		}
-		refs[ref] = true
+		for _, k := range keys {
+			refs[k] = true
+		}
 		paidPaise += rc.AmountPaise
 		s.log.Info("payment screenshot read", "image_id", e.Info.ID, "amount", rc.Amount, "total_paise", paidPaise, "model", model)
 		if amount, ok := coveredPrice(paidPaise, d.Amount, t.amounts); ok {
@@ -557,7 +571,9 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 			return
 		}
 		stopRecovery := requestedPayments[e.Info.ID]
-		if queued && (!e.Info.Timestamp.Before(payUntil) || (stopRecovery == nil && !time.Now().Before(payUntil))) {
+		// A buyer who paid part of the price may send the rest until the
+		// meal ends; imagePaymentRejection checks that bound.
+		if queued && paidPaise == 0 && (!e.Info.Timestamp.Before(payUntil) || (stopRecovery == nil && !time.Now().Before(payUntil))) {
 			return
 		}
 		if queued && pending == 0 && !e.Info.Timestamp.Before(armedAt) && buyerPassed(e.Message) {
@@ -748,12 +764,21 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 			if yield() {
 				return errBuyerDropped
 			}
+			dropLater = true
+			continue
+		case <-recoveryDone:
+			if dropLater && yield() {
+				return errBuyerDropped
+			}
 			continue
 		case <-deadline:
 		case <-ctx.Done():
 			return waitDelivery(ctx.Err())
 		}
 		for {
+			if dropLater && yield() {
+				return errBuyerDropped
+			}
 			mu.Lock()
 			// A buyer who paid part of the price keeps the turn until they
 			// send the rest or the meal ends, so their money isn't lost to
@@ -780,6 +805,8 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 				return waitDelivery(ctx.Err())
 			case <-recoveryDone:
 			case <-mealEnd:
+			case <-t.drop:
+				dropLater = true
 			}
 		}
 	}
@@ -1126,3 +1153,22 @@ func paiseAmount(p int64) string { return fmt.Sprintf("%d.%02d", p/100, p%100) }
 
 // rupeeText writes paise for a dashboard note, like "₹32".
 func rupeeText(p int64) string { return "₹" + priceWords(paiseAmount(p)) }
+
+// receiptKeys identify the payment a screenshot shows: its UTR, the app's
+// transaction ID, the image file, and its amount with the time printed.
+func receiptKeys(rc payshot.Receipt, fileSHA256 []byte) []string {
+	var keys []string
+	if rc.UTR != "" {
+		keys = append(keys, "utr:"+rc.UTR)
+	}
+	if rc.TxnID != "" {
+		keys = append(keys, "txn:"+rc.TxnID)
+	}
+	if len(fileSHA256) > 0 {
+		keys = append(keys, fmt.Sprintf("file:%x", fileSHA256))
+	}
+	if rc.PaidAt != "" {
+		keys = append(keys, fmt.Sprintf("at:%d@%s", rc.AmountPaise, strings.ToLower(strings.Join(strings.Fields(rc.PaidAt), " "))))
+	}
+	return keys
+}

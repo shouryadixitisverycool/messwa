@@ -54,9 +54,11 @@ type Receipt struct {
 	UTR string `json:"utr"`
 	// TxnID is the app's own transaction ID, such as PhonePe's T2611....
 	TxnID string `json:"transaction_id"`
-	// PaidAt is the date and time as printed.
-	PaidAt string `json:"paid_at"`
-	App    string `json:"app"`
+	// PaidAt is the date and time as printed. PaidDate is its date as
+	// YYYY-MM-DD, empty when the screen shows none.
+	PaidAt   string `json:"paid_at"`
+	PaidDate string `json:"paid_date"`
+	App      string `json:"app"`
 }
 
 // Reader reads screenshots through the Gemini API.
@@ -77,6 +79,7 @@ Rules:
 - utr: the 12-digit UPI reference / UTR / UPI Ref No / RRN, digits only. BHIM labels it "Transaction ID": an all-digit 12-digit transaction ID is the UTR. Empty if not shown.
 - transaction_id: the app's own transaction ID if shown.
 - paid_at: the date and time of the payment exactly as printed.
+- paid_date: the payment's date as YYYY-MM-DD (a two-digit year like "26" is 2026). Empty if no date is shown.
 - app: the payment app (PhonePe, Google Pay, Paytm, BHIM, ...).
 - is_payment_receipt: false if this is not a payment confirmation screen.
 Never guess a value that is not visible; leave it empty.`
@@ -92,9 +95,10 @@ var schema = map[string]any{
 		"utr":                map[string]any{"type": "STRING"},
 		"transaction_id":     map[string]any{"type": "STRING"},
 		"paid_at":            map[string]any{"type": "STRING"},
+		"paid_date":          map[string]any{"type": "STRING"},
 		"app":                map[string]any{"type": "STRING"},
 	},
-	"required": []string{"is_payment_receipt", "status", "amount", "payee_name", "payee_upi", "utr", "transaction_id", "paid_at", "app"},
+	"required": []string{"is_payment_receipt", "status", "amount", "payee_name", "payee_upi", "utr", "transaction_id", "paid_at", "paid_date", "app"},
 }
 
 // busyError is a model being overloaded or rate limited, which the next
@@ -174,6 +178,9 @@ func (r *Reader) readWith(ctx context.Context, model string, img []byte, mime st
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
+		if ctx.Err() != nil {
+			return Receipt{}, busyError{err}
+		}
 		return Receipt{}, err
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -199,7 +206,12 @@ func (r *Reader) readWith(ctx context.Context, model string, img []byte, mime st
 	if len(out.Candidates) == 0 || len(out.Candidates[0].Content.Parts) == 0 {
 		return Receipt{}, fmt.Errorf("empty response: %s", strings.TrimSpace(string(raw)))
 	}
-	return parse(out.Candidates[0].Content.Parts[0].Text)
+	rc, err := parse(out.Candidates[0].Content.Parts[0].Text)
+	if err != nil {
+		// A garbled answer is this model's problem; the next may do better.
+		return Receipt{}, busyError{err}
+	}
+	return rc, nil
 }
 
 func parse(text string) (Receipt, error) {
@@ -264,6 +276,10 @@ func PayeeMatches(shown, upi string) bool {
 		return false
 	}
 	visible := strings.TrimLeftFunc(sName, func(r rune) bool { return r == '•' || r == '*' || r == 'x' || r == '.' || r == '·' })
+	if visible == sName {
+		// Nothing masked: the whole ID is there to compare.
+		return sName == uName
+	}
 	return len(visible) >= 4 && strings.HasSuffix(uName, visible)
 }
 
@@ -298,4 +314,15 @@ func PaidTo(rc Receipt, upi, name string) bool {
 		return true
 	}
 	return NameMatches(rc.PayeeName, name) || (upi != "" && PayeeMatches(rc.PayeeUPI, upi))
+}
+
+// PaidBefore reports whether the receipt is dated before day's date, as
+// an old receipt from an earlier sale would be. A receipt without a
+// readable date is not.
+func (rc Receipt) PaidBefore(day time.Time) bool {
+	d, err := time.Parse("2006-01-02", rc.PaidDate)
+	if err != nil {
+		return false
+	}
+	return d.Format("2006-01-02") < day.Format("2006-01-02")
 }
