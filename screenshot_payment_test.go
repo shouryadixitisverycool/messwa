@@ -410,8 +410,28 @@ func TestScreenshotThenWhatsAppPay(t *testing.T) {
 			t.Fatalf("A got %q, want the meal QR", got)
 		}
 		ds, err := f.st.Deliveries(ctx)
-		if err != nil || len(ds) != 1 || ds[0].Amount != "35.00" {
-			t.Fatalf("ledger = %+v, %v", ds, err)
+		if err != nil || len(ds) != 1 || ds[0].Amount != "35.00" || ds[0].PaymentKind != store.PaidByImage {
+			t.Fatalf("ledger = %+v, %v; want ₹35 marked paid by image", ds, err)
+		}
+	})
+}
+
+// TestScreenshotSameAmountAndTime counts two payments of the same amount
+// printed at the same minute when their UTRs differ.
+func TestScreenshotSameAmountAndTime(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		first := paidShot(20, "Shourya Dixit", "111111111111")
+		first.PaidAt = "07:39 pm on 24 Nov 2026"
+		second := paidShot(20, "Shourya Dixit", "222222222222")
+		second.PaidAt = "07:39 pm on 24 Nov 2026"
+		f, _ := screenshotFixture(t, map[string]payshot.Receipt{"first": first, "second": second}, nil)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		f.startPaying(ctx, buyerA)
+		f.shot(buyerA, "first")
+		f.shot(buyerA, "second")
+		if got := texts(sentTo(f.conn.messages(), buyerA)); got[len(got)-1] != "[QR]" {
+			t.Fatalf("A got %q, want the meal QR for ₹40", got)
 		}
 	})
 }

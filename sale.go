@@ -517,8 +517,8 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 		}
 		// One payment can come as different images: a crop, a retake, the
 		// same receipt forwarded. Any shared key means it was counted.
-		keys := receiptKeys(rc, img.GetFileSHA256())
-		seen := slices.ContainsFunc(keys, func(k string) bool { return refs[k] })
+		keys, check := receiptKeys(rc, img.GetFileSHA256())
+		seen := slices.ContainsFunc(check, func(k string) bool { return refs[k] })
 		// A duplicate still teaches its other keys, so a third view that
 		// shares only those is caught too.
 		for _, k := range keys {
@@ -701,7 +701,9 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 			}
 			return
 		}
-		finish(e, false, paidAmount, false)
+		// Screenshots that counted toward the price keep the sale marked as
+		// paid by image, not bank-verified.
+		finish(e, false, paidAmount, paidPaise > 0)
 	})
 	defer s.conn.RemoveEventHandler(handler)
 	// yield gives the turn up early, unless a payment is already being
@@ -1175,8 +1177,11 @@ func rupeeText(p int64) string { return "₹" + priceWords(paiseAmount(p)) }
 
 // receiptKeys identify the payment a screenshot shows: its UTR, the app's
 // transaction ID, the image file, and its amount with the time printed.
-func receiptKeys(rc payshot.Receipt, fileSHA256 []byte) []string {
-	var keys []string
+// keys are all of them, to remember. check are the ones to look up: a UTR
+// or transaction ID names one payment, so a receipt with either is told
+// apart by them and its file, not by an amount and time two payments can
+// share. Only a receipt with neither falls back to amount and time.
+func receiptKeys(rc payshot.Receipt, fileSHA256 []byte) (keys, check []string) {
 	if rc.UTR != "" {
 		keys = append(keys, "utr:"+rc.UTR)
 	}
@@ -1186,8 +1191,12 @@ func receiptKeys(rc payshot.Receipt, fileSHA256 []byte) []string {
 	if len(fileSHA256) > 0 {
 		keys = append(keys, fmt.Sprintf("file:%x", fileSHA256))
 	}
+	check = keys
 	if rc.PaidAt != "" {
-		keys = append(keys, fmt.Sprintf("at:%d@%s", rc.AmountPaise, strings.ToLower(strings.Join(strings.Fields(rc.PaidAt), " "))))
+		keys = append(slices.Clip(keys), fmt.Sprintf("at:%d@%s", rc.AmountPaise, strings.ToLower(strings.Join(strings.Fields(rc.PaidAt), " "))))
+		if rc.UTR == "" && rc.TxnID == "" {
+			check = keys
+		}
 	}
-	return keys
+	return keys, check
 }
