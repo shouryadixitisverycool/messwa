@@ -46,8 +46,8 @@
 .mh { display: grid; place-items: center; }
 .mh svg { width: 14px; height: 14px; opacity: .85; }
 .lgrid .slot.out { background: transparent; border-color: transparent; box-shadow: none; }
-.ghost { position: absolute; inset: 0; display: grid; place-items: center; }
-.ghost svg { width: 40%; height: 40%; }
+.cell .ghost { position: absolute; inset: 0; display: grid; place-items: center; }
+.cell .ghost svg { width: 40%; height: 40%; }
 .cell.is-ate .ghost, .cell.is-wasted .ghost { opacity: .28; filter: grayscale(1); }
 .cell.is-ate .stamp { color: var(--muted); }
 .cell.is-wasted .stamp { color: #ff6b5b; }
