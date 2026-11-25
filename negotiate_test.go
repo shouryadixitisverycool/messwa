@@ -300,3 +300,14 @@ func TestCombineIntentsMeals(t *testing.T) {
 		t.Errorf("bf then lunch = %v", in.meals)
 	}
 }
+
+// A buy poster saved at 90 opens at the floor once it rises to 95 before
+// their turn, so the claim is not rejected and the session doesn't stall.
+func TestHaggleSavedAskBelowRaisedFloor(t *testing.T) {
+	end := time.Now().Add(4 * time.Hour)
+	h := newHaggle(95, 110, 0, false, false, end, testLines("veg", ""))
+	s := h.decide(haggleState{ask: 90}, intent{kind: intentOpener}, time.Now(), false)
+	if s.next.ask != 95 {
+		t.Fatalf("opening ask = %d, want 95", s.next.ask)
+	}
+}

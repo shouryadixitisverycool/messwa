@@ -207,6 +207,11 @@ func (h haggle) decide(st haggleState, in intent, now time.Time, competing bool)
 	if st.ask <= 0 {
 		a = h.max
 	}
+	if !priced {
+		// A buy poster's saved ask can fall below a floor raised while
+		// they waited.
+		a = max(a, h.min)
+	}
 	w := min(h.walk(now, competing), a)
 	next := st
 	next.quoted = slices.Clone(st.quoted)
@@ -478,17 +483,9 @@ func (n *negotiation) prices() haggle {
 func (n *negotiation) refreshRange(ctx context.Context) error {
 	n.rangeMu.Lock()
 	defer n.rangeMu.Unlock()
-	t, err := n.m.st.GetSellTask(ctx, n.t.ID)
-	if err != nil || t == nil {
-		return errors.Join(err, errors.New("sell task is gone"))
-	}
-	lo, hi := t.MinPaise, t.MaxPaise
-	if pooled(*t) && t.State == store.TaskActive {
-		if p, err := n.m.pool(ctx, t.ID); err != nil {
-			n.log.Warn("could not read the task's pool; haggling on its own range", "err", err)
-		} else if len(p.active) > 1 {
-			lo, hi = poolPrices(p.active)
-		}
+	t, lo, hi, err := n.m.liveRange(ctx, n.t.ID)
+	if err != nil {
+		return err
 	}
 	n.mu.Lock()
 	old := n.h
@@ -511,6 +508,24 @@ func (n *negotiation) refreshRange(ctx context.Context) error {
 	}
 	n.log.Info("price range changed", "min", h.min, "max", h.max, "target", h.target)
 	return n.m.st.SetSellTaskTarget(ctx, n.t.ID, int64(h.target)*100)
+}
+
+// liveRange reads task id from the store with the range its negotiation
+// haggles on: its own, or the pool's while it is active in a pool.
+func (m *sellManager) liveRange(ctx context.Context, id int64) (t *store.SellTask, lo, hi int64, err error) {
+	t, err = m.st.GetSellTask(ctx, id)
+	if err != nil || t == nil {
+		return nil, 0, 0, errors.Join(err, errors.New("sell task is gone"))
+	}
+	lo, hi = t.MinPaise, t.MaxPaise
+	if pooled(*t) && t.State == store.TaskActive {
+		if p, err := m.pool(ctx, t.ID); err != nil {
+			m.log.Warn("could not read the task's pool; haggling on its own range", "task", id, "err", err)
+		} else if len(p.active) > 1 {
+			lo, hi = poolPrices(p.active)
+		}
+	}
+	return t, lo, hi, nil
 }
 
 // negotiates reports whether a task haggles: it has room between min and

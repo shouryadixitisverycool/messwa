@@ -261,3 +261,41 @@ func TestBuyPostPriceCap(t *testing.T) {
 		})
 	}
 }
+
+// The leader of a pool checks a priced buy post against the pool's floor,
+// not its own: a mate selling from 70 can take a buyer at 90.
+func TestPoolBuyPostCapUsesPoolFloor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m := f.negotiatingManager(ctx, 90)
+		if _, err := m.Start(ctx, 0, f.date, "lunch", 100, 120, ""); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		if _, err := m.Start(ctx, 0, f.date, "lunch#2", 70, 110, ""); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		now := time.Now()
+		slot, err := findSlot(f.cfg, f.date, "lunch")
+		if err != nil {
+			t.Fatal(err)
+		}
+		l := store.Listing{Seller: buyerA.String(), Kind: "buy", Meal: "lunch", MealSource: "named", MealDate: f.date, MealEnd: slot.End, Mess: "bakul", Price: 80, Qty: 1, Text: "buy bakul lunch 80", Norm: "buy bakul lunch 80", FirstSeen: now, LastSeen: now}
+		if err := f.st.CreateListing(ctx, &l); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.st.AddPost(ctx, store.Post{Chat: f.group.String(), ID: "pool-priced-buy", ListingID: l.ID, Sender: buyerA.String(), TS: now, Text: l.Text}); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(buyPostSweep)
+		settle()
+		got := texts(sentTo(f.conn.messages(), buyerA))
+		if len(got) < 2 || got[1] != "90" {
+			t.Fatalf("poster got %q, wanted an opening of 90", got)
+		}
+	})
+}

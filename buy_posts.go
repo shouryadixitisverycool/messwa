@@ -130,15 +130,16 @@ func buyPostMatches(l store.Listing, date, mess, diet string) bool {
 // messageBuyPost queues l's poster after a private reply to their post. It
 // reports whether the reply went out.
 func (m *sellManager) messageBuyPost(ctx context.Context, t store.SellTask, s *sale, gate *taskGate, queue *offerQueue, rule store.SoldRule, l store.Listing) bool {
-	// Use the live range, including edits made since the task started.
-	live, err := m.st.GetSellTask(ctx, t.ID)
-	if err != nil || live == nil {
+	// Use the live range, including edits made since the task started and
+	// the pool's range when this task leads one.
+	_, lo, hi, err := m.liveRange(ctx, t.ID)
+	if err != nil {
 		return false
 	}
-	price := int(live.MaxPaise / 100)
+	price := int(hi / 100)
 	if l.Price >= 0 {
 		price = min(price, l.Price+10)
-		if int64(price)*100 < live.MinPaise {
+		if int64(price)*100 < lo {
 			return false
 		}
 	}
@@ -185,6 +186,9 @@ func (m *sellManager) messageBuyPost(ctx context.Context, t store.SellTask, s *s
 	}
 	queue.addAfter(peer, chat, l.SellerName, func() bool {
 		if queue.opening != nil && !queue.opening(peer, price) {
+			if _, err := m.st.MoveSellTaskBuyer(context.WithoutCancel(ctx), t.ID, peer.String(), store.BuyerQueued, store.BuyerSkipped, "", time.Time{}); err != nil {
+				m.log.Warn("could not drop a buyer whose price was not saved", "task", t.ID, "buyer", peer, "err", err)
+			}
 			return false
 		}
 		_, err := gate.send(ctx, peer, quotedReply(text, post))

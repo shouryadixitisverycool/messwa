@@ -84,7 +84,7 @@ func TestNudgeNoNegotiates(t *testing.T) {
 		time.Sleep(nudgeAfter / 2)
 		synctest.Wait()
 
-		// "no" to "yes or no?" gets the pass counter, not a goodbye.
+		// "no" before the quiet drop gets the pass counter, not a goodbye.
 		f.conn.emit(dm(buyerA, "no"))
 		settle()
 		if got := texts(sentTo(f.conn.messages(), buyerA)); strings.Join(got, "|") != "60|how about 40" {
@@ -132,10 +132,8 @@ func TestNoNudgeOnceBuyerWrites(t *testing.T) {
 		settle()
 		time.Sleep(3 * nudgeAfter)
 		synctest.Wait()
-		for _, s := range texts(sentTo(f.conn.messages(), buyerA)) {
-			if s == "yes or no?" {
-				t.Fatalf("A was nudged after writing")
-			}
+		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 2 {
+			t.Fatalf("A got %q after writing", got)
 		}
 		if b := buyerState(t, f, id, buyerA); b.Nudges != 0 || b.State != store.BuyerNegotiating {
 			t.Fatalf("A = %+v", b)
@@ -149,7 +147,7 @@ func TestNudgeResumesAfterRestart(t *testing.T) {
 		f := newSellFixture(t, path)
 		ctx, stop := context.WithCancel(t.Context())
 		_, id := quietA(t, f, ctx)
-		time.Sleep(nudgeAfter)
+		time.Sleep(nudgeAfter / 2)
 		synctest.Wait()
 		stop()
 		synctest.Wait()
@@ -161,7 +159,7 @@ func TestNudgeResumesAfterRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 		synctest.Wait()
-		// The restart doesn't nudge again; a minute later comes the drop.
+		// The pending drop survives the restart and is sent once.
 		time.Sleep(nudgeAfter)
 		synctest.Wait()
 		if got := texts(sentTo(f.conn.messages(), buyerA)); strings.Join(got, "|") != "60|40" {
