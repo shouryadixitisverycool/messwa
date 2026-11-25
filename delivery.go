@@ -74,7 +74,7 @@ func deliverQR(ctx context.Context, cfg *config.Config, log *slog.Logger, args [
 		if overrides.paymentImages != nil {
 			sell.AcceptPaymentImages = *overrides.paymentImages
 		}
-		sell.UPI = cfg.Sell.UPI
+		sell.UPI, sell.PayeeName = cfg.Sell.UPI, cfg.Sell.PayeeName
 		sell.AcceptUnreadablePayments = cfg.Sell.AcceptUnreadablePayments
 		if overrides.unreadable != nil {
 			sell.AcceptUnreadablePayments = *overrides.unreadable

@@ -25,9 +25,21 @@ type fakeReader struct {
 	mu    sync.Mutex
 	shots map[string]payshot.Receipt
 	errs  map[string]error
+	// gates hold a read until closed, like a slow model.
+	gates map[string]chan struct{}
 }
 
-func (r *fakeReader) Read(_ context.Context, img []byte, _ string) (payshot.Receipt, string, error) {
+func (r *fakeReader) Read(ctx context.Context, img []byte, _ string) (payshot.Receipt, string, error) {
+	r.mu.Lock()
+	gate := r.gates[string(img)]
+	r.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return payshot.Receipt{}, "", ctx.Err()
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.errs[string(img)]; err != nil {
@@ -130,7 +142,7 @@ func TestScreenshotShortThenTopUp(t *testing.T) {
 // to the next buyer while their money is in.
 func TestScreenshotPartialPayerKeepsTurn(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		f, _ := screenshotFixture(t, map[string]payshot.Receipt{"rs3": paidShot(3, "Shourya Dixit", "1")}, nil)
+		f, _ := screenshotFixture(t, map[string]payshot.Receipt{"rs3": paidShot(3, "Shourya Dixit", "1"), "rs32": paidShot(32, "Shourya Dixit", "2")}, nil)
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		f.startPaying(ctx, buyerA)
@@ -144,8 +156,11 @@ func TestScreenshotPartialPayerKeepsTurn(t *testing.T) {
 				t.Fatalf("B was asked to pay while A had paid part: %q", texts(sentTo(f.conn.messages(), buyerB)))
 			}
 		}
-		cancel()
-		synctest.Wait()
+		// The rest, well past the two minutes, still sells the meal.
+		f.shot(buyerA, "rs32")
+		if got := texts(sentTo(f.conn.messages(), buyerA)); got[len(got)-1] != "[QR]" {
+			t.Fatalf("A's late top-up got %q, want the meal QR", got)
+		}
 	})
 }
 
@@ -235,4 +250,93 @@ func TestCoveredPrice(t *testing.T) {
 			t.Errorf("coveredPrice(%d, %v) = %q, %v; want %q, %v", c.paid, c.others, got, ok, c.want, c.ok)
 		}
 	}
+}
+
+// TestScreenshotSamePaymentTwoWays counts one payment once when a second
+// image of it shows only some of its references, such as a crop without
+// the UTR.
+func TestScreenshotSamePaymentTwoWays(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		full := paidShot(20, "Shourya Dixit", "111111111111")
+		full.TxnID = "T26111"
+		crop := paidShot(20, "Shourya Dixit", "")
+		crop.TxnID = "T26111"
+		f, _ := screenshotFixture(t, map[string]payshot.Receipt{"full": full, "crop": crop, "rest": paidShot(15, "Shourya Dixit", "222222222222")}, nil)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		f.startPaying(ctx, buyerA)
+		f.shot(buyerA, "full")
+		f.shot(buyerA, "crop")
+		want := append(slices.Clone(screenshotPrompt), "got 20, 15 more pls")
+		if got := texts(sentTo(f.conn.messages(), buyerA)); !slices.Equal(got, want) {
+			t.Fatalf("A got %q, want %q", got, want)
+		}
+		f.shot(buyerA, "rest")
+		if got := texts(sentTo(f.conn.messages(), buyerA)); got[len(got)-1] != "[QR]" {
+			t.Fatalf("A got %q, want the meal QR", got)
+		}
+	})
+}
+
+// TestScreenshotNeedsSuccessAndToday turns away a receipt that doesn't say
+// the payment finished, and one dated before the buyer's turn.
+func TestScreenshotNeedsSuccessAndToday(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		unknown := paidShot(35, "Shourya Dixit", "3")
+		unknown.Status = "unknown"
+		old := paidShot(35, "Shourya Dixit", "4")
+		old.PaidDate = "2026-11-10"
+		f, _ := screenshotFixture(t, map[string]payshot.Receipt{"unknown": unknown, "old": old}, nil)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		id := f.startPaying(ctx, buyerA)
+		f.shot(buyerA, "unknown")
+		f.shot(buyerA, "old")
+		for _, m := range texts(sentTo(f.conn.messages(), buyerA)) {
+			if m == "[QR]" {
+				t.Fatal("meal QR sent for an unfinished or old receipt")
+			}
+		}
+		if task := f.task(id); task.State != store.TaskActive {
+			t.Fatalf("task is %s", task.State)
+		}
+		cancel()
+		synctest.Wait()
+	})
+}
+
+// TestScreenshotDropDuringRead ends the turn of a buyer who backs out
+// while their screenshot is still being read, once it turns out not to be
+// a payment, so the next buyer is asked to pay.
+func TestScreenshotDropDuringRead(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f, r := screenshotFixture(t, map[string]payshot.Receipt{"photo": {Status: "unknown"}}, nil)
+		r.gates = map[string]chan struct{}{"photo": make(chan struct{})}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m := f.negotiatingManager(ctx, 60)
+		if _, _, err := m.StartNow(ctx, 0, f.date, "lunch", 30, 60, false); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		f.conn.emit(f.reply(buyerB, "price?"))
+		settle()
+		f.conn.emit(dm(buyerB, "ok"))
+		settle()
+		f.conn.emit(f.reply(buyerC, "60"))
+		settle()
+		f.shot(buyerB, "photo")
+		f.conn.emit(dm(buyerB, "Naa I said for 50 bro"))
+		settle()
+		if got := sentTo(f.conn.messages(), buyerC); len(got) != 0 {
+			t.Fatalf("C was asked to pay while B's screenshot was being read: %q", texts(got))
+		}
+		close(r.gates["photo"])
+		settle()
+		if got := texts(sentTo(f.conn.messages(), buyerC)); len(got) == 0 {
+			t.Fatal("B backed out and the photo wasn't a payment, but C was never asked to pay")
+		}
+		cancel()
+		synctest.Wait()
+	})
 }

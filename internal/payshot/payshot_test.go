@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestParsePaise(t *testing.T) {
@@ -36,6 +37,7 @@ func TestPayeeMatches(t *testing.T) {
 		"9322":            false,
 		"":                false,
 		"someone9322@upi": false,
+		"19322@upi":       false, // unmasked, so it must be the whole ID
 	} {
 		if got := PayeeMatches(shown, upi); got != want {
 			t.Errorf("PayeeMatches(%q) = %v, want %v", shown, got, want)
@@ -140,6 +142,26 @@ func TestPaidTo(t *testing.T) {
 	} {
 		if got := PaidTo(c.rc, upi, c.name); got != c.want {
 			t.Errorf("%s: PaidTo = %v, want %v", c.situation, got, c.want)
+		}
+	}
+}
+
+// TestReadFallsBackOnGarbledAnswer tries the next model when one answers
+// with an amount that doesn't parse.
+func TestReadFallsBackOnGarbledAnswer(t *testing.T) {
+	srv, calls := fakeGemini(t, map[string]any{"garbled": strings.Replace(rs3, `"amount":"3"`, `"amount":"3 INR"`, 1), "good": rs3})
+	r := &Reader{Key: "k", Models: []string{"garbled", "good"}, Endpoint: srv.URL + "/"}
+	rc, model, err := r.Read(context.Background(), []byte("img"), "image/png")
+	if err != nil || model != "good" || rc.AmountPaise != 300 || len(*calls) != 2 {
+		t.Fatalf("got %q %+v %v after %v", model, rc, err, *calls)
+	}
+}
+
+func TestPaidBefore(t *testing.T) {
+	day := time.Date(2026, 11, 24, 19, 39, 0, 0, time.UTC)
+	for date, want := range map[string]bool{"2026-11-23": true, "2026-11-24": false, "2026-11-25": false, "": false, "24 Nov": false} {
+		if got := (Receipt{PaidDate: date}).PaidBefore(day); got != want {
+			t.Errorf("PaidBefore(%q) = %v, want %v", date, got, want)
 		}
 	}
 }

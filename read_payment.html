@@ -42,9 +42,11 @@ a { color: var(--accent); }
 <body>
 <main>
   <h1>Payment reader</h1>
-  <p class="sub">Upload or paste a UPI payment screenshot. Gemini reads it and the page shows what the bot would see.<span id="evallink" hidden> <a href="eval">See the eval set →</a></span></p>
+  <p class="sub">Upload or paste a UPI payment screenshot. Gemini reads it and the page shows what the bot would see.</p>
   <div class="card">
-    <label for="upi">Your UPI ID, to check the payee</label>
+    <label for="name">Your banking name, to check the payee</label>
+    <input id="name" type="text" placeholder="As your UPI app shows it" autocomplete="off">
+    <label for="upi" style="margin-top:10px">Your UPI ID</label>
     <input id="upi" type="text" placeholder="name@upi" autocomplete="off">
     <div id="drop" tabindex="0"><strong>Choose screenshots</strong> or drop or paste them here
       <input id="file" type="file" accept="image/*" multiple hidden></div>
@@ -54,7 +56,10 @@ a { color: var(--accent); }
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-fetch("config").then(r => r.json()).then(c => { if (c.upi && !$("#upi").value) $("#upi").value = c.upi; if (c.eval) $("#evallink").hidden = false; }).catch(() => {});
+fetch("config").then(r => r.json()).then(c => {
+  if (c.upi && !$("#upi").value) $("#upi").value = c.upi;
+  if (c.name && !$("#name").value) $("#name").value = c.name;
+}).catch(() => {});
 
 function read(file) {
   const card = document.createElement("div");
@@ -65,6 +70,7 @@ function read(file) {
   const fd = new FormData();
   fd.append("image", file, file.name || "pasted.png");
   fd.append("upi", $("#upi").value);
+  fd.append("name", $("#name").value);
   fetch("read", { method: "POST", body: fd })
     .then(r => r.json())
     .then(d => { card.querySelector(".result > div").outerHTML = d.error ? `<div class="err">${esc(d.error)}</div>` : render(d); })
@@ -79,7 +85,7 @@ function render(d) {
   if (!d.utr) chips.push(`<span class="chip warn">no UTR</span>`);
   const amt = d.amount ? `₹${esc(d.amount)}` : `<span class="warn">amount unreadable</span>`;
   const rows = [["Paid to", d.payee_name], ["Payee UPI", d.payee_upi], ["UTR", d.utr], ["Txn ID", d.transaction_id],
-    ["Paid at", d.paid_at], ["App", d.app], ["Model", `${d.model} · ${d.took}`]];
+    ["Paid at", d.paid_at], ["Date", d.paid_date], ["App", d.app], ["Model", `${d.model} · ${d.took}`]];
   return `<div><p class="amount">${amt}</p><div class="chips">${chips.join("")}</div>
     <dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v) || '<span class="muted">none</span>'}</dd>`).join("")}</dl>
     <details><summary>Raw JSON</summary><pre>${esc(JSON.stringify(d, null, 2))}</pre></details></div>`;
