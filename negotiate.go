@@ -124,12 +124,13 @@ type haggleState struct {
 	saidLowest                                bool
 	passCountered                             bool // see passCounter
 	toldMeal                                  bool // the buyer named another meal and heard which one this is
+	confirmed                                 bool // asked once to confirm a bare "ok" after a large floor gap
 	nudges                                    int  // see quietNudge
 }
 
 func (s haggleState) store(started time.Time) store.Negotiation {
 	n := store.Negotiation{Ask: int64(s.ask) * 100, Rounds: s.rounds, BotMsgs: s.botMsgs, Unknowns: s.unknowns,
-		LastOffer: int64(s.lastOffer) * 100, SaidLowest: s.saidLowest, PassCountered: s.passCountered, ToldMeal: s.toldMeal, Nudges: s.nudges, StartedAt: started}
+		LastOffer: int64(s.lastOffer) * 100, SaidLowest: s.saidLowest, PassCountered: s.passCountered, ToldMeal: s.toldMeal, Confirmed: s.confirmed, Nudges: s.nudges, StartedAt: started}
 	for _, q := range s.quoted {
 		n.Quoted = append(n.Quoted, int64(q)*100)
 	}
@@ -138,7 +139,7 @@ func (s haggleState) store(started time.Time) store.Negotiation {
 
 func haggleFromStore(n store.Negotiation, maxRupees int) haggleState {
 	s := haggleState{ask: int(n.Ask / 100), rounds: n.Rounds, botMsgs: n.BotMsgs, unknowns: n.Unknowns,
-		lastOffer: int(n.LastOffer / 100), saidLowest: n.SaidLowest, passCountered: n.PassCountered, toldMeal: n.ToldMeal, nudges: n.Nudges}
+		lastOffer: int(n.LastOffer / 100), saidLowest: n.SaidLowest, passCountered: n.PassCountered, toldMeal: n.ToldMeal, confirmed: n.Confirmed, nudges: n.Nudges}
 	// An unpriced buyer keeps ask 0, so decide opens at the live max,
 	// unless a buy post saved an opening ask for them.
 	if s.ask == 0 && s.botMsgs > 0 {
@@ -280,13 +281,26 @@ func (h haggle) decide(st haggleState, in intent, now time.Time, competing bool)
 	case intentPayOther:
 		return step{next: st, park: "wants to pay some way other than WhatsApp Pay"}
 	case intentAccept:
+		if in.multi {
+			return step{next: next, park: "asked for multiple meals; check the chat"}
+		}
 		return agree(a)
 	case intentOK:
 		if priced {
+			if in.multi {
+				return step{next: next, park: "asked for multiple meals; check the chat"}
+			}
+			if st.saidLowest && st.lastOffer > 0 && st.lastOffer*4 < a*3 && a-st.lastOffer > 20 && !st.confirmed {
+				next.confirmed = true
+				return say(a, h.l.restate(a))
+			}
 			return agree(a)
 		}
 		return opening()
 	case intentOffer:
+		if in.multi {
+			return step{next: next, park: "asked for multiple meals; check the chat"}
+		}
 		c := in.offer
 		next.lastOffer = c
 		switch {
@@ -302,6 +316,9 @@ func (h haggle) decide(st haggleState, in intent, now time.Time, competing bool)
 		}
 		return counter(max(w, min(a-h.unit, h.round(float64(a+c)/2))))
 	case intentLower:
+		if in.dismiss && st.saidLowest {
+			return step{next: st, pass: true}
+		}
 		switch {
 		case !priced:
 			return opening()
@@ -319,6 +336,9 @@ func (h haggle) decide(st haggleState, in intent, now time.Time, competing bool)
 	}
 	if !priced {
 		return opening()
+	}
+	if in.dismiss && st.saidLowest {
+		return step{next: st, pass: true}
 	}
 	if st.unknowns > 0 {
 		return step{next: next, park: "sent messages the bot couldn't read"}
@@ -1631,6 +1651,24 @@ func (ss *session) handle(texts []string) handled {
 		case in.kind == intentPaid || in.kind == intentOK && in.done:
 			ss.askScreenshot()
 			return handledPaidClaim
+		case in.multi && in.kind != intentPass:
+			n.backOut(context.WithoutCancel(ctx), ss, "asked for multiple meals; check the chat")
+			if ss.current() == sessionEnded {
+				return handledEnded
+			}
+			return handledNothing
+		case in.kind == intentOffer && int64(in.offer)*100 < paise(agreed), in.kind == intentLower, in.kind == intentPayOther && in.lower:
+			// "naa I said 50" after agreeing ₹60: the deal they're waiting
+			// to pay isn't one they took.
+			note := fmt.Sprintf("agreed ₹%d, then wants it cheaper; check the chat", paise(agreed)/100)
+			if in.kind == intentOffer {
+				note = fmt.Sprintf("agreed ₹%d, then offered ₹%d; check the chat", paise(agreed)/100, in.offer)
+			}
+			n.backOut(context.WithoutCancel(ctx), ss, note)
+			if ss.current() == sessionEnded {
+				return handledEnded
+			}
+			return handledNothing
 		case in.upi && (in.kind == intentPayOther || in.kind == intentAccept) && n.s.payUPI():
 			// They have the UPI QR, or will once their turn comes. Asking
 			// for a UPI ID, scanner or QR gets it once more.
@@ -1660,16 +1698,21 @@ func (ss *session) handle(texts []string) handled {
 				n.park(context.WithoutCancel(ctx), ss, "wants to pay some way other than "+way)
 			}
 			return handledNothing
-		case in.kind == intentOffer && int64(in.offer)*100 < paise(agreed), in.kind == intentLower:
-			// "naa I said 50" after agreeing ₹60: the deal they're waiting
-			// to pay isn't one they took.
-			note := fmt.Sprintf("agreed ₹%d, then wants it cheaper; check the chat", paise(agreed)/100)
-			if in.kind == intentOffer {
-				note = fmt.Sprintf("agreed ₹%d, then offered ₹%d; check the chat", paise(agreed)/100, in.offer)
+		case in.cantPayApp && ss.holding():
+			// Right after the payment prompt, "ion have it", "cannot do", or
+			// "i do not have sorry" refers to WhatsApp Pay / the requested method.
+			if n.s.acceptImages && !n.s.payUPI() {
+				if !ss.sayOnce(linePayNumber, n.lines(ss.buyer).payNumber()) {
+					n.park(context.WithoutCancel(ctx), ss, "has no WhatsApp Pay and was told to pay the number; check the chat")
+				}
+				return handledNothing
 			}
-			n.backOut(context.WithoutCancel(ctx), ss, note)
-			if ss.current() == sessionEnded {
-				return handledEnded
+			if !ss.sayPayOther() {
+				way := "WhatsApp Pay"
+				if n.s.payUPI() {
+					way = "UPI"
+				}
+				n.park(context.WithoutCancel(ctx), ss, "wants to pay some way other than "+way)
 			}
 			return handledNothing
 		case in.kind == intentPass:
@@ -1707,10 +1750,19 @@ func (ss *session) handle(texts []string) handled {
 	}
 
 	if in.kind == intentPayOther && in.upi && n.s.acceptImages {
-		// Screenshots count, so paying by UPI is a yes: the pay prompt
-		// follows, and "send to my number" if they still have no
-		// WhatsApp Pay.
-		in.kind = intentAccept
+		switch {
+		case in.lower:
+			in.kind = intentLower
+		case hs.botMsgs > 0:
+			// Screenshots count, so paying by UPI after hearing a price is a yes:
+			// the pay prompt follows, and "send to my number" if they still have
+			// no WhatsApp Pay.
+			in.kind = intentAccept
+		default:
+			// Before any price, "Can you send the QR?" opens with the price
+			// instead of agreeing to an unseen one.
+			in.kind = intentOpener
+		}
 	}
 	if in.kind == intentPayOther {
 		if ok, err := n.m.st.ClaimBuyerLine(ctx, n.t.ID, ss.buyer.String(), linePayOther); err == nil && ok {

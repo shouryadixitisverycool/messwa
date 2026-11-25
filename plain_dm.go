@@ -38,13 +38,13 @@ const shortAsk = 8
 
 // askWords are what buyers write when they DM about a post.
 var askWords = []string{
-	"price", "prize", "rate", "cost", "how much", "hw much", "kitna", "kitne", "kitni",
-	"available", "availabe", "availble", "avail", "still there", "selling", "sold",
+	"price", "prize", "rate", "cost", "how much", "hw much", "hw mch", "hwmuch", "how mcuh", "kitna", "kitne", "kitni",
+	"available", "availabe", "availble", "avail", "avl", "still there", "selling", "sold",
 	"interested", "intrested", "buy", "buying", "take it",
 }
 
 // declineWords turn a DM down, like "not interested in buying".
-var declineWords = []string{"not interested", "no thanks", "dont want", "don t want", "do not want", "nahi chahiye"}
+var declineWords = []string{"not interested", "no thanks", "dont want", "don t want", "do not want", "donot want", "dont need", "don t need", "do not need", "donot need", "nahi chahiye"}
 
 // offerTopic is what an offer sells, for telling whether a DM is about it.
 type offerTopic struct {
