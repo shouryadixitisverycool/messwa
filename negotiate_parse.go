@@ -53,6 +53,13 @@ type intent struct {
 	// bought marks an intentPass from a buyer who got a meal elsewhere
 	// ("bought already", "got from other"): no lower price brings them back.
 	bought bool
+	// boughtOnly marks an intentPass that came solely from bought-elsewhere
+	// words (not an explicit refusal like "nvm"), so a follow-up "I want
+	// another for a friend" in the same burst can supersede it.
+	boughtOnly bool
+	// buyingMore marks a non-pass message that asks for another meal ("want
+	// another", "for a friend") despite an earlier purchase.
+	buyingMore bool
 	// multi marks a request/offer for more than one meal ("120 for both?",
 	// "2 meals for 120"), which must go to you instead of agreeing for one.
 	multi bool
@@ -106,8 +113,18 @@ func combineIntents(texts []string) intent {
 		}
 		return intentRank[in.kind]
 	}
-	for _, t := range texts {
-		in := parseBuyer(t)
+	ins := make([]intent, len(texts))
+	burstBuyingMore := false
+	for i, t := range texts {
+		ins[i] = parseBuyer(t)
+		if ins[i].buyingMore {
+			burstBuyingMore = true
+		}
+	}
+	for _, in := range ins {
+		if burstBuyingMore && in.boughtOnly {
+			continue
+		}
 		bought = bought || in.bought
 		upi = upi || in.upi
 		cantPayApp = cantPayApp || in.cantPayApp
@@ -483,6 +500,7 @@ func parseIntent(text string) intent {
 	norm := strings.ReplaceAll(text, "’", "'")
 	m := words(norm)
 	in.upi = upiWords.in(m)
+	in.buyingMore = in.kind != intentPass && wantsAnother.in(m) && !negatedAnother.in(m)
 	if !strings.ContainsAny(norm, "0123456789") && cantPayAppWords.in(m) &&
 		(in.kind == intentUnknown || (in.kind == intentPass && in.apologyOnly && !in.bought)) {
 		in.cantPayApp = true
@@ -558,7 +576,7 @@ func parseKind(text string) intent {
 	case passWords.in(m) || notInterested(m.words):
 		return intent{kind: intentPass, bought: boughtWords.in(m)}
 	case !buyingMore && (boughtPassWords.in(m) || explicitGotItBought(m)):
-		return intent{kind: intentPass, bought: true}
+		return intent{kind: intentPass, bought: true, boughtOnly: true}
 	case hasNegated:
 		return intent{kind: intentLower}
 	case wontBuyWords.in(m):

@@ -429,10 +429,32 @@ func TestTooMuchWithCantDoWhatsAppPayCountersLower(t *testing.T) {
 	}
 }
 
-// TestMultiMealAcceptanceParks checks that accepting or requesting QR for
-// multiple meals ("I'll take both", ["for both?", "send qr"]) parks instead of
-// starting a single-meal payment turn.
+// TestMultiMealAcceptanceParks checks that multi-meal openings, acceptances,
+// and QR requests ("for both?", "I'll take both", ["for both?", "send qr"])
+// park instead of quoting or starting a single-meal payment turn.
 func TestMultiMealAcceptanceParks(t *testing.T) {
+	t.Run("opening for both parks before quoting", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "data.db")
+		synctest.Test(t, func(t *testing.T) {
+			f := newSellFixture(t, path)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			m := f.negotiatingManager(ctx, 60)
+			id, err := m.Start(ctx, 0, f.date, "lunch", 30, 60, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			synctest.Wait()
+			f.conn.emit(f.reply(buyerA, "for both?"))
+			settle()
+			if b := buyerState(t, f, id, buyerA); b.State != store.BuyerParked {
+				t.Fatalf("A = %+v, want parked on multi-meal opening", b)
+			}
+			if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) != 0 {
+				t.Fatalf("A got %q, want no single-meal quote before parking", got)
+			}
+		})
+	})
 	for _, tc := range []struct {
 		name string
 		msgs []string
