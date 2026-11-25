@@ -304,16 +304,21 @@ func nameWords(s string) []string {
 	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
 }
 
-// PaidTo reports whether rc paid you. The banking name decides: apps
-// print it on every receipt, while the UPI ID may be another of yours,
-// masked, or missing. A receipt that shows upi itself also counts. With no
-// name set it's true: the UPI ID alone would turn away real payments made
-// to your other IDs, so only the amount is checked.
+// PaidTo reports whether rc paid you. The banking name decides when the
+// receipt shows one: apps print it on nearly every receipt, while the UPI
+// ID may be another of yours, masked, or misread. A receipt that names
+// someone else fails even if a masked UPI ID fits yours, since other IDs
+// end in the same digits. Only a receipt with no name falls back to the
+// UPI ID. With no name set it's true: the UPI ID alone would turn away real
+// payments to your other IDs, so only the amount is checked.
 func PaidTo(rc Receipt, upi, name string) bool {
 	if name == "" {
 		return true
 	}
-	return NameMatches(rc.PayeeName, name) || (upi != "" && PayeeMatches(rc.PayeeUPI, upi))
+	if strings.TrimSpace(rc.PayeeName) != "" {
+		return NameMatches(rc.PayeeName, name)
+	}
+	return upi != "" && PayeeMatches(rc.PayeeUPI, upi)
 }
 
 // PaidBefore reports whether the receipt is dated before day's date, as
