@@ -371,7 +371,10 @@ type msgWords struct {
 	joined string   // " w1 w2 ... "
 }
 
-const numTok = `(?:(?:\d{1,3}(?:\.\d+)?)|(?:(?:one|two|three|four|five|six|seven|eight|nine)\s+hundred|(?:twenty|thirty|forty|fourty|fifty|sixty|seventy|eighty|ninety)(?:\s+(?:one|two|three|four|five|six|seven|eight|nine))?|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|hundred))`
+const (
+	subHundredTok = `(?:(?:twenty|thirty|forty|fourty|fifty|sixty|seventy|eighty|ninety)(?:\s+(?:one|two|three|four|five|six|seven|eight|nine))?|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|one|two|three|four|five|six|seven|eight|nine)`
+	numTok        = `(?:(?:(?:100|200|(?:(?:one|two|three|four|five|six|seven|eight|nine)\s+)?hundred)(?:\s+(?:and\s+)?` + subHundredTok + `)?)|(?:\d{1,3}(?:\.\d+)?)|(?:(?:twenty|thirty|forty|fourty|fifty|sixty|seventy|eighty|ninety)(?:\s+(?:one|two|three|four|five|six|seven|eight|nine))?|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen))`
+)
 
 var (
 	wordRe  = regexp.MustCompile(`[a-z']+`)
