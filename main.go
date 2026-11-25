@@ -75,6 +75,9 @@ inspection (read the database only, safe while run is up):
                                 serve the dashboard alone (run serves it too)
 
 development:
+  read-payment [-upi ID] [-models M,...] (IMAGE... | -serve [-listen ADDR,...])
+                                read UPI payment screenshots with Gemini (needs GEMINI_API_KEY)
+                                and print the amount, payee and UTR it sees; -serve gives an upload page
   mockchat [-listen addr] [-upi ID]
                                 chat with the bot as pretend buyers in a WhatsApp-like page;
                                 real sell tasks, fake WhatsApp, a throwaway database
@@ -90,6 +93,14 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// read-payment needs no config, state or log, so it runs anywhere.
+	if flag.Arg(0) == "read-payment" {
+		if err := readPayment(ctx, os.Stdout, flag.Args()[1:]); err != nil {
+			fatal(err)
+		}
+		return
+	}
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
