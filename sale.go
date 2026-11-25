@@ -519,15 +519,6 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 		// same receipt forwarded. Any shared key means it was counted.
 		keys, check := receiptKeys(rc, img.GetFileSHA256())
 		seen := slices.ContainsFunc(check, func(k string) bool { return refs[k] })
-		if rc.UTR != "" || rc.TxnID != "" {
-			// A crop's mark names one payment: once a full receipt claims
-			// it, another payment at the same amount and time counts.
-			for _, k := range check {
-				if strings.HasPrefix(k, "bare:") {
-					delete(refs, k)
-				}
-			}
-		}
 		// A duplicate still teaches its other keys, so a third view that
 		// shares only those is caught too.
 		for _, k := range keys {
@@ -1193,8 +1184,10 @@ func rupeeText(p int64) string { return "₹" + priceWords(paiseAmount(p)) }
 // payments can share. A bare receipt with neither, such as a crop, has
 // only its amount and time: it is looked up against every receipt's, and
 // it leaves a "bare" mark that a later receipt with IDs looks up too, so
-// a crop and its full receipt count once in either order. The first such
-// receipt uses the mark up.
+// a crop and its full receipt count once in either order. The mark stays
+// for the turn: a later view showing only some of the payment's IDs can't
+// be told from a separate payment at the same amount and minute, and
+// asking for the rest once too often beats sending the meal for less.
 func receiptKeys(rc payshot.Receipt, fileSHA256 []byte) (keys, check []string) {
 	if rc.UTR != "" {
 		keys = append(keys, "utr:"+rc.UTR)
