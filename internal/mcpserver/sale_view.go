@@ -23,6 +23,8 @@ type SaleView struct {
 	Meal string `json:"meal"`
 	// BaseMeal is Meal without a slot suffix: "dinner" for "dinner#f1".
 	BaseMeal string `json:"base_meal"`
+	// Extra is non-empty when selling a registered extra separately (e.g. "Egg").
+	Extra string `json:"extra,omitempty"`
 	// Friend is set for a friend's meal: their name, or "" when none was
 	// given. ForFriend says it is one.
 	Friend    string `json:"friend,omitempty"`
@@ -167,7 +169,7 @@ func (s *Server) SaleViews(ctx context.Context) ([]SaleView, error) {
 }
 
 func (s *Server) saleView(ctx context.Context, t store.SellTask, now time.Time) (SaleView, error) {
-	v := SaleView{ID: t.ID, Date: t.Date, Meal: t.Meal, Mess: t.Mess, Diet: t.Diet, State: t.State, Autopilot: t.Autopilot, Detail: t.Detail, Handoff: t.Handoff,
+	v := SaleView{ID: t.ID, Date: t.Date, Meal: t.Meal, Extra: t.Extra, Mess: t.Mess, Diet: t.Diet, State: t.State, Autopilot: t.Autopilot, Detail: t.Detail, Handoff: t.Handoff,
 		Min: rupeesOf(t.MinPaise), Max: rupeesOf(t.MaxPaise), Started: unix(t.CreatedAt), Ends: unix(t.EndsAt), Ended: unix(t.EndedAt),
 		Posts: []SalePost{}, Buyers: []SaleBuyer{}, History: []SaleTry{}, Listings: []int64{}}
 	v.BaseMeal, _, _ = strings.Cut(t.Meal, "#")

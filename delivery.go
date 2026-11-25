@@ -410,7 +410,16 @@ func buyerPassed(message *waE2E.Message) bool {
 }
 
 func portalMealLabel(mess, diet, meal string) string {
+	return portalItemLabel(mess, diet, meal, "")
+}
+
+// portalItemLabel formats a meal ("kadamba non-veg dinner") or a separately
+// sold extra ("kadamba dinner egg").
+func portalItemLabel(mess, diet, meal, extra string) string {
 	meal = baseMeal(meal)
+	if extra = strings.ToLower(strings.Join(strings.Fields(extra), " ")); extra != "" {
+		return strings.Join(strings.Fields(mess+" "+meal+" "+extra), " ")
+	}
 	if diet == "nonveg" {
 		diet = "non-veg"
 	}
@@ -430,7 +439,32 @@ func waitForPaymentRecovery(ctx context.Context, request func(context.Context, i
 }
 
 func deliverOnce(ctx context.Context, st *store.Store, d store.Delivery, paid store.Payment, messageID string, send func() error) error {
-	claimed, err := st.ClaimDelivery(ctx, d, paid, messageID)
+	return deliverOnceGuarded(ctx, st, d, paid, messageID, nil, send)
+}
+
+// refusedPaymentError means a claim guard turned down a payment the buyer
+// already made, before anything was claimed or sent: the buyer is owed a
+// refund.
+type refusedPaymentError struct{ err error }
+
+func (e *refusedPaymentError) Error() string {
+	return "payment received but not honoured: " + e.err.Error()
+}
+func (e *refusedPaymentError) Unwrap() error { return e.err }
+
+func deliverOnceGuarded(ctx context.Context, st *store.Store, d store.Delivery, paid store.Payment, messageID string, guard func(context.Context, func() (bool, error)) (bool, error), send func() error) error {
+	claim := func() (bool, error) {
+		return st.ClaimDelivery(ctx, d, paid, messageID)
+	}
+	var claimed bool
+	var err error
+	if guard != nil {
+		if claimed, err = guard(ctx, claim); err != nil {
+			return &refusedPaymentError{err: err}
+		}
+	} else {
+		claimed, err = claim()
+	}
 	if err != nil {
 		return err
 	}

@@ -22,7 +22,7 @@ func (s *sale) payUPI() bool { return s.acceptImages && s.upi != "" }
 // amount leaves it to the buyer. The note names the mess and meal, so the
 // payment in your UPI app says what it was for.
 func (s *sale) payQRPNG(amount string) ([]byte, error) {
-	code, err := qr.Encode(config.UPIPayURI(s.upi, amount, qrCaption(s.mess, baseMeal(s.meal))), qr.M)
+	code, err := qr.Encode(config.UPIPayURI(s.upi, amount, qrCaptionFor(s.mess, baseMeal(s.meal), s.extra)), qr.M)
 	if err != nil {
 		return nil, err
 	}

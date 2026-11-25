@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +18,8 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"messwa/internal/config"
+	"messwa/internal/mcpserver"
+	"messwa/internal/portal"
 	"messwa/internal/repost"
 	"messwa/internal/store"
 )
@@ -106,8 +109,14 @@ type sellManager struct {
 	// message ID, so a reply to one can go to a task still selling that
 	// meal. See adoptTarget.
 	dead map[string]deadPost
-	// pricesMu serializes SetPrices.
+	// pricesMu serializes SetPrices with each other and with StartExtras.
 	pricesMu sync.Mutex
+	// extrasMu serializes StartExtras and extra capacity reservations so
+	// concurrent starts, payments, and manual QR sends can't oversell.
+	extrasMu sync.Mutex
+	// manualExtraReserved counts in-flight MarkSold(..., sendQR=true) calls
+	// per "date|baseMeal|lower(extra)" while QR upload runs outside extrasMu.
+	manualExtraReserved map[string]int
 	// pauseMu serializes syncPoolPause so concurrent turn changes cannot
 	// leave a pool's paused state stale.
 	pauseMu sync.Mutex
@@ -138,6 +147,9 @@ type runningTask struct {
 	// neg is the task's negotiation once it runs, so a range edit reaches
 	// it; nil for a task that doesn't negotiate.
 	neg atomic.Pointer[negotiation]
+	// queue is the task's buyer queue while running, used to adopt buyers
+	// passed between fixed-price pooled extra tasks.
+	queue atomic.Pointer[offerQueue]
 	// startLead makes the task post for its pool (see pool.go); set under
 	// sellManager.mu once the task can. leading is set once it does.
 	startLead func()
@@ -246,7 +258,7 @@ func (m *sellManager) answerLate(info types.MessageInfo) {
 			return
 		}
 		gate := &taskGate{m: m, id: t.ID}
-		if err := sendReply(ctx, gate.sendSold, to, saleLines(m.cfg, t.Mess, t.Diet, t.Meal, t.Date, t.EndsAt, nil).sold()); err != nil {
+		if err := sendReply(ctx, gate.sendSold, to, saleLinesFor(m.cfg, t.Mess, t.Diet, t.Meal, t.Extra, t.Date, t.EndsAt, nil).sold()); err != nil {
 			m.log.Warn("could not tell a late buyer the meal sold", "task", t.ID, "err", err)
 			return
 		}
@@ -268,6 +280,178 @@ func (m *sellManager) Start(ctx context.Context, userID int64, date, meal string
 // start is Start, on autopilot or not (see store.SellTask.Autopilot). An
 // autopilot task never hands off.
 func (m *sellManager) start(ctx context.Context, userID int64, date, meal string, minRupees, maxRupees int, handoff string, autopilot bool) (int64, error) {
+	return m.startWithExtra(ctx, userID, date, meal, "", minRupees, maxRupees, handoff, autopilot)
+}
+
+// ownExtrasPortal reads extra registrations strictly from the seller's own
+// real portal account, never from a legacy proxy-meal.json file.
+type ownExtrasPortal interface {
+	OwnExtraRegistrations(ctx context.Context, date, meal string) ([]portal.ExtraRegistration, error)
+}
+
+func readOwnExtras(ctx context.Context, p mealPortal, date, meal string) ([]portal.ExtraRegistration, error) {
+	if op, ok := p.(ownExtrasPortal); ok {
+		return op.OwnExtraRegistrations(ctx, date, baseMeal(meal))
+	}
+	ep, ok := p.(extrasPortal)
+	if !ok {
+		return nil, errors.New("mess portal does not support extra verification")
+	}
+	return ep.ExtraRegistrations(ctx, date, baseMeal(meal))
+}
+
+// errExtraUnavailable marks terminal extra inventory exhaustion (never retried
+// as a transient QR preparation error).
+var errExtraUnavailable = errors.New("extra unavailable")
+
+func extraReserveKey(date, baseMealName, extraName string) string {
+	return date + "|" + baseMealName + "|" + strings.ToLower(portal.NormalizeExtraName(extraName))
+}
+
+// verifyExtraCapacity reconciles live portal extra registrations against the
+// store's single-transaction slot snapshot and any in-flight manual QR sends.
+// Caller must hold m.extrasMu.
+func (m *sellManager) verifyExtraCapacity(ctx context.Context, p mealPortal, date, baseMealName, extraName, excludeSlot string, countArmed, countActive, countScheduled bool) (canonical string, total, availed, unavailed, available int, usage store.ExtraSlotUsage, err error) {
+	rows, err := readOwnExtras(ctx, p, date, baseMealName)
+	if err != nil {
+		return "", 0, 0, 0, 0, usage, fmt.Errorf("could not verify extras on the mess portal: %w", err)
+	}
+	for _, r := range rows {
+		name := portal.NormalizeExtraName(r.Name)
+		if strings.EqualFold(name, extraName) {
+			canonical = name
+			break
+		}
+	}
+	if canonical == "" {
+		return "", 0, 0, 0, 0, usage, fmt.Errorf("%w: no %s registered for %s %s on the mess portal", errExtraUnavailable, extraName, date, baseMealName)
+	}
+	usage, err = m.st.ExtraSlotUsage(ctx, date, baseMealName, canonical, excludeSlot)
+	if err != nil {
+		return "", 0, 0, 0, 0, usage, err
+	}
+	committed := m.manualExtraReserved[extraReserveKey(date, baseMealName, canonical)]
+	if countArmed {
+		committed += usage.Armed
+	}
+	if countActive {
+		committed += usage.Active
+	}
+	if countScheduled {
+		committed += usage.Scheduled
+	}
+	total, availed, unavailed, available = portal.AvailableExtras(rows, canonical, usage.SoldSentAt, committed, m.cfg.Location())
+	return canonical, total, availed, unavailed, available, usage, nil
+}
+
+// reserveManualExtra atomically verifies capacity and reserves one extra unit
+// for an in-flight MarkSold(..., sendQR=true) call, returning a release func.
+func (m *sellManager) reserveManualExtra(ctx context.Context, userID int64, date, mealSlot, extra string) (func(), error) {
+	p, err := m.portalFor(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	m.extrasMu.Lock()
+	defer m.extrasMu.Unlock()
+	canonical, total, availed, _, available, usage, err := m.verifyExtraCapacity(ctx, p, date, baseMeal(mealSlot), extra, mealSlot, false, false, false)
+	if err != nil {
+		return nil, err
+	}
+	if available < 1 {
+		return nil, fmt.Errorf("%w: no %s left available to deliver (%d registered, %d availed, %d sold)",
+			errExtraUnavailable, canonical, total, availed, usage.Sold)
+	}
+	key := extraReserveKey(date, baseMeal(mealSlot), canonical)
+	if m.manualExtraReserved == nil {
+		m.manualExtraReserved = map[string]int{}
+	}
+	m.manualExtraReserved[key]++
+	released := false
+	return func() {
+		m.extrasMu.Lock()
+		defer m.extrasMu.Unlock()
+		if !released {
+			released = true
+			if m.manualExtraReserved[key] <= 1 {
+				delete(m.manualExtraReserved, key)
+			} else {
+				m.manualExtraReserved[key]--
+			}
+		}
+	}, nil
+}
+
+// claimRetryGap spaces extraClaimGuard's portal retries; tests shorten it.
+var claimRetryGap = 500 * time.Millisecond
+
+// extraClaimGuard verifies post-payment extra capacity (counting sold
+// deliveries and in-flight manual QR sends, NOT unpaid armed holds) and claims
+// the delivery atomically under extrasMu so two simultaneous payments for the
+// last egg allocate strictly to one buyer.
+func (m *sellManager) extraClaimGuard(p mealPortal, date, mealSlot, extra string) func(context.Context, func() (bool, error)) (bool, error) {
+	return func(checkCtx context.Context, claim func() (bool, error)) (bool, error) {
+		m.extrasMu.Lock()
+		defer m.extrasMu.Unlock()
+		// The buyer has already paid, so a portal blip gets a few more tries
+		// before the payment is turned down.
+		var (
+			canonical                 string
+			total, availed, available int
+			usage                     store.ExtraSlotUsage
+			err                       error
+		)
+		for attempt := 0; attempt < 3; attempt++ {
+			if attempt > 0 {
+				select {
+				case <-checkCtx.Done():
+					return false, errors.Join(err, checkCtx.Err())
+				case <-time.After(time.Duration(attempt) * claimRetryGap):
+				}
+			}
+			canonical, total, availed, _, available, usage, err = m.verifyExtraCapacity(checkCtx, p, date, baseMeal(mealSlot), extra, mealSlot, false, false, false)
+			if err == nil {
+				break
+			}
+		}
+		if err != nil {
+			return false, err
+		}
+		if available < 1 {
+			return false, fmt.Errorf("%w: no %s left available to deliver (%d registered, %d availed, %d sold)",
+				errExtraUnavailable, canonical, total, availed, usage.Sold)
+		}
+		return claim()
+	}
+}
+
+// extraArmGuard verifies extra capacity (including other armed reservations)
+// and writes this slot's armed delivery atomically under extrasMu so two
+// concurrent extra tasks cannot both arm the last available egg.
+func (m *sellManager) extraArmGuard(p mealPortal, date, mealSlot, extra string) func(context.Context, func() (time.Time, error)) (time.Time, error) {
+	return func(checkCtx context.Context, arm func() (time.Time, error)) (time.Time, error) {
+		m.extrasMu.Lock()
+		defer m.extrasMu.Unlock()
+		canonical, total, availed, _, available, usage, err := m.verifyExtraCapacity(checkCtx, p, date, baseMeal(mealSlot), extra, mealSlot, true, false, false)
+		if err != nil {
+			return time.Time{}, err
+		}
+		if available < 1 {
+			return time.Time{}, fmt.Errorf("%w: no %s left available to sell (%d registered, %d availed, %d sold, %d armed)",
+				errExtraUnavailable, canonical, total, availed, usage.Sold, usage.Armed)
+		}
+		return arm()
+	}
+}
+
+func (m *sellManager) startWithExtra(ctx context.Context, userID int64, date, meal, extra string, minRupees, maxRupees int, handoff string, autopilot bool) (int64, error) {
+	return m.startWithExtraChecked(ctx, userID, date, meal, extra, minRupees, maxRupees, handoff, autopilot, true)
+}
+
+func (m *sellManager) startWithExtraChecked(ctx context.Context, userID int64, date, meal, extra string, minRupees, maxRupees int, handoff string, autopilot, verifyCapacity bool) (int64, error) {
+	extra = portal.NormalizeExtraName(extra)
+	if store.IsExtraSlot(meal) && extra == "" {
+		return 0, errors.New("extra slots must be started through StartExtras or an existing extra schedule")
+	}
 	if autopilot {
 		handoff = ""
 	}
@@ -296,16 +480,43 @@ func (m *sellManager) start(ctx context.Context, userID int64, date, meal string
 	} else if len(settings.Groups) == 0 {
 		return 0, errors.New("no group to post the offer in; add the mess groups to config.toml")
 	}
+	if extra != "" && verifyCapacity {
+		m.extrasMu.Lock()
+		defer m.extrasMu.Unlock()
+	}
 	p, err := m.portalFor(ctx, userID)
 	if err != nil {
 		return 0, err
 	}
+	if extra != "" && verifyCapacity {
+		canonical, total, availed, _, available, usage, err := m.verifyExtraCapacity(ctx, p, date, baseMeal(meal), extra, meal, true, true, false)
+		if err != nil {
+			return 0, err
+		}
+		extra = canonical
+		if promised, perr := m.st.MainMealPromisedExtra(ctx, date, baseMeal(meal), canonical, time.Now().Add(-postEditWindow)); perr != nil {
+			return 0, perr
+		} else if promised {
+			return 0, fmt.Errorf("the main %s has a post that offers it with %s; cannot sell %s separately", baseMeal(meal), canonical, canonical)
+		}
+		if available < 1 {
+			return 0, fmt.Errorf("no %s left available to sell (%d registered, %d availed, %d sold, %d selling)",
+				canonical, total, availed, usage.Sold, usage.Armed+usage.Active)
+		}
+		if minRupees == maxRupees && !autopilot && (h == "" || h == config.HandoffNever) {
+			if conflict := m.activeFixedExtraPrice(date, baseMeal(meal), canonical, int64(minRupees)*100); conflict > 0 {
+				return 0, fmt.Errorf("active fixed-price %s tasks are already selling at %s; change their price or sell at %s",
+					canonical, store.FormatPaise(conflict), store.FormatPaise(conflict))
+			}
+		}
+	}
 	s := m.newSale(date, meal, slot.End)
+	s.extra = extra
 	if err := s.usePortal(ctx, p, m.cfg.VegOnly); err != nil {
 		return 0, err
 	}
 	t := store.SellTask{Date: date, Meal: meal, MinPaise: int64(minRupees) * 100, MaxPaise: int64(maxRupees) * 100,
-		UserID: userID, AccountHash: s.accountHash, Mess: s.mess, Diet: s.diet, Handoff: string(h), CreatedAt: time.Now(), EndsAt: slot.End, Autopilot: autopilot}
+		UserID: userID, AccountHash: s.accountHash, Mess: s.mess, Diet: s.diet, Handoff: string(h), CreatedAt: time.Now(), EndsAt: slot.End, Autopilot: autopilot, Extra: extra}
 	if t.ID, err = m.st.CreateSellTask(ctx, t); err != nil {
 		return 0, err
 	}
@@ -317,9 +528,186 @@ func (m *sellManager) start(ctx context.Context, userID int64, date, meal string
 		m.disarm(sid)
 	}
 	m.launch(t, s, nil)
-	m.log.Info("sell task started", "task", t.ID, "date", date, "meal", meal, "min", minRupees, "max", maxRupees, "handoff", h, "autopilot", autopilot)
+	m.log.Info("sell task started", "task", t.ID, "date", date, "meal", meal, "extra", extra, "min", minRupees, "max", maxRupees, "handoff", h, "autopilot", autopilot)
 	m.poolChanged(t)
 	return t.ID, nil
+}
+
+// StartExtras verifies with the mess portal API how many unavailed
+// registrations of extraName the account holds for (date, meal), checks how
+// many are already sold/selling/scheduled, and starts or schedules count
+// separate extra slots (e.g. dinner#e1..N) that pool together.
+func (m *sellManager) StartExtras(ctx context.Context, userID int64, date, meal, extraName string, count, minRupees, maxRupees int, at time.Time, startNow, autopilot bool) (mcpserver.ExtraSaleResult, error) {
+	var res mcpserver.ExtraSaleResult
+	extraName = portal.NormalizeExtraName(extraName)
+	if extraName == "" {
+		return res, errors.New("extra name is required")
+	}
+	if count < 1 || count > 20 {
+		return res, errors.New("count must be between 1 and 20")
+	}
+	if strings.Contains(meal, "#") {
+		return res, errors.New("meal must be a base meal name like dinner")
+	}
+	if minRupees <= 0 || maxRupees < minRupees || maxRupees > 10000 {
+		return res, errors.New("min_price must be at least 1 and max_price between min_price and 10000")
+	}
+	if m.cfg.Live().HiddenMeal(meal) {
+		return res, errors.New("this meal is hidden in settings")
+	}
+	slot, err := findSlot(m.cfg, date, meal)
+	if err != nil {
+		return res, err
+	}
+	now := time.Now()
+	if !now.Before(slot.End) {
+		return res, errors.New("meal has already ended")
+	}
+	if settings, err := taskSellSettings(m.cfg); err != nil {
+		return res, err
+	} else if len(settings.Groups) == 0 {
+		return res, errors.New("no group to post the offer in; add the mess groups to config.toml")
+	}
+	opens := listOpens(m.cfg, slot)
+	custom := !at.IsZero()
+	if startNow {
+		if now.Before(opens) {
+			at = opens
+		} else {
+			at = time.Time{}
+		}
+	} else {
+		if !custom {
+			at = listTime(slot.Start, slot.End, m.cfg.Live().Sell.ListAt.Duration, opens)
+		} else if at.Before(slot.Start.Add(-30*time.Minute)) || at.After(slot.Start.Add(90*time.Minute)) || !at.Before(slot.End) {
+			return res, errors.New("posting time must be within 30 minutes before and 90 minutes after serving starts, and before the meal ends")
+		}
+		if at.Before(opens) {
+			at = opens
+		}
+		if (!custom && !now.Before(slot.Start)) || !now.Before(at) {
+			at = time.Time{}
+		}
+	}
+
+	// A new fixed-price slot joins its pool at the pool's price; holding
+	// pricesMu keeps SetPrices from repricing the pool halfway through.
+	// Lock order: pricesMu, then extrasMu.
+	m.pricesMu.Lock()
+	defer m.pricesMu.Unlock()
+	m.extrasMu.Lock()
+	unlocked := false
+	unlock := func() {
+		if !unlocked {
+			unlocked = true
+			m.extrasMu.Unlock()
+		}
+	}
+	defer unlock()
+
+	p, err := m.portalFor(ctx, userID)
+	if err != nil {
+		return res, err
+	}
+	canonical, total, availed, unavailed, available, usage, err := m.verifyExtraCapacity(ctx, p, date, meal, extraName, "", true, true, true)
+	if err != nil {
+		return res, err
+	}
+	if promised, perr := m.st.MainMealPromisedExtra(ctx, date, meal, canonical, time.Now().Add(-postEditWindow)); perr != nil {
+		return res, perr
+	} else if promised {
+		return res, fmt.Errorf("the main %s has a post that offers it with %s; cannot sell %s separately", meal, canonical, canonical)
+	}
+	// Fixed-price pooled extras for the same (date, meal, extra) share one
+	// group post and price, so disallow starting a new fixed-price batch at a
+	// different price while an active pooled fixed-price batch is running.
+	if minRupees == maxRupees && !autopilot && at.IsZero() {
+		if existingPaise := m.activeFixedExtraPrice(date, meal, canonical, int64(minRupees)*100); existingPaise > 0 {
+			return res, fmt.Errorf("active fixed-price %s tasks are already selling at %s; change their price or sell at %s",
+				canonical, store.FormatPaise(existingPaise), store.FormatPaise(existingPaise))
+		}
+	}
+	if count > available {
+		return res, fmt.Errorf("only %d of %d registered %s available to sell (%d availed, %d sold, %d selling, %d scheduled)",
+			available, total, canonical, availed, usage.Sold, usage.Armed+usage.Active, usage.Scheduled)
+	}
+	slots, err := m.st.FreeExtraSlots(ctx, date, meal, count)
+	if err != nil {
+		return res, err
+	}
+	res = mcpserver.ExtraSaleResult{
+		Extra:             canonical,
+		Count:             count,
+		VerifiedTotal:     total,
+		VerifiedUnavailed: unavailed,
+		VerifiedAvailable: available - count,
+	}
+	if !at.IsZero() {
+		res.At = at
+		for _, sl := range slots {
+			id, _, err := m.scheduleExtra(ctx, userID, slot, date, sl, canonical, minRupees, maxRupees, autopilot, at)
+			if err != nil {
+				unlock()
+				for _, prev := range res.IDs {
+					_ = m.CancelSchedule(context.WithoutCancel(ctx), prev)
+				}
+				return mcpserver.ExtraSaleResult{}, err
+			}
+			res.IDs = append(res.IDs, id)
+			res.Slots = append(res.Slots, sl)
+		}
+		unlock()
+		m.kickMainMealTasks(date, meal)
+		return res, nil
+	}
+	for _, sl := range slots {
+		id, err := m.startWithExtraChecked(ctx, userID, date, sl, canonical, minRupees, maxRupees, "", autopilot, false)
+		if err != nil {
+			// Release extrasMu before Cancel so an already-launched task
+			// waiting on extrasMu cannot deadlock rollback.
+			unlock()
+			for _, prev := range res.IDs {
+				_ = m.Cancel(context.WithoutCancel(ctx), prev, true)
+			}
+			return mcpserver.ExtraSaleResult{}, err
+		}
+		res.IDs = append(res.IDs, id)
+		res.Slots = append(res.Slots, sl)
+	}
+	unlock()
+	m.kickMainMealTasks(date, meal)
+	return res, nil
+}
+
+// activeFixedExtraPrice returns the price (in paise) of any active pooled
+// fixed-price task for (date, meal, extra) whose price differs from wantPaise.
+func (m *sellManager) activeFixedExtraPrice(date, meal, extra string, wantPaise int64) int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, ort := range m.running {
+		if ort.gate.active.Load() && pooled(ort.task) && !negotiates(ort.task) &&
+			ort.task.Date == date && baseMeal(ort.task.Meal) == meal &&
+			strings.EqualFold(ort.task.Extra, extra) && ort.task.MinPaise != wantPaise {
+			return ort.task.MinPaise
+		}
+	}
+	return 0
+}
+
+// kickMainMealTasks wakes any running main-meal task for (date, meal) so its
+// offer copy can drop extras that were just allocated to separate extra slots.
+func (m *sellManager) kickMainMealTasks(date, meal string) {
+	m.mu.Lock()
+	var rts []*runningTask
+	for _, rt := range m.running {
+		if rt.gate.active.Load() && rt.task.Date == date && rt.task.Meal == meal && rt.task.Extra == "" {
+			rts = append(rts, rt)
+		}
+	}
+	m.mu.Unlock()
+	for _, rt := range rts {
+		rt.kick()
+	}
 }
 
 // event records one step of a task's sale for the dashboard, then tells it.
@@ -353,6 +741,10 @@ func (m *sellManager) saleEvents(id int64) func(buyer types.JID, kind string, n 
 func (m *sellManager) Cancel(ctx context.Context, id int64, revoke bool) error {
 	m.mu.Lock()
 	rt := m.running[id]
+	var task store.SellTask
+	if rt != nil {
+		task = rt.task
+	}
 	m.mu.Unlock()
 	if rt == nil {
 		t, err := m.st.GetSellTask(ctx, id)
@@ -369,7 +761,7 @@ func (m *sellManager) Cancel(ctx context.Context, id int64, revoke bool) error {
 		return nil
 	}
 	// Replies that arrive while the task winds down already go elsewhere.
-	m.retire(rt.task)
+	m.retire(task)
 	rt.revoke.Store(revoke)
 	rt.gate.active.Store(false)
 	rt.cancel(errCancelledByUser)
@@ -418,28 +810,48 @@ func (m *sellManager) SetPrices(ctx context.Context, id int64, minRupees, maxRup
 	if minPaise == t.MinPaise && maxPaise == t.MaxPaise {
 		return nil
 	}
-	old, err := m.st.SetSellTaskPrices(ctx, id, minPaise, maxPaise)
-	if err != nil {
-		return err
-	}
-	m.log.Info("sell task prices changed", "task", id, "min", minRupees, "max", maxRupees,
-		"was_min", old.MinPaise/100, "was_max", old.MaxPaise/100)
-	m.event(ctx, store.SellEvent{TaskID: id, Kind: store.EventPrices, N: minPaise,
-		Text: fmt.Sprintf("%s-%s was %s-%s", store.FormatPaise(minPaise), store.FormatPaise(maxPaise),
-			store.FormatPaise(old.MinPaise), store.FormatPaise(old.MaxPaise))})
-	m.mu.Lock()
-	rt := m.running[id]
-	m.mu.Unlock()
-	if rt != nil {
-		if n := rt.neg.Load(); n != nil {
-			if err := n.refreshRange(ctx); err != nil {
-				m.log.Warn("the running negotiation did not take the new prices", "task", id, "err", err)
-			}
+	var oldPool []store.SellTask
+	if pooled(*t) {
+		if p, perr := m.pool(ctx, id); perr == nil {
+			oldPool = p.active
 		}
 	}
-	if minPaise < old.MinPaise {
-		m.flagOffersAtFloor(ctx, id, minPaise)
+	// A pooled fixed-price extra pool shares one price and one group post:
+	// repricing any task in it updates every active mate in the pool together
+	// so the pool never splits or strands shared copies.
+	targets := []store.SellTask{*t}
+	if pooled(*t) && !negotiates(*t) && t.Extra != "" && len(oldPool) > 0 {
+		targets = oldPool
 	}
+	for _, target := range targets {
+		old, err := m.st.SetSellTaskPrices(ctx, target.ID, minPaise, maxPaise)
+		if err != nil {
+			return err
+		}
+		m.log.Info("sell task prices changed", "task", target.ID, "min", minRupees, "max", maxRupees,
+			"was_min", old.MinPaise/100, "was_max", old.MaxPaise/100)
+		m.event(ctx, store.SellEvent{TaskID: target.ID, Kind: store.EventPrices, N: minPaise,
+			Text: fmt.Sprintf("%s-%s was %s-%s", store.FormatPaise(minPaise), store.FormatPaise(maxPaise),
+				store.FormatPaise(old.MinPaise), store.FormatPaise(old.MaxPaise))})
+		m.mu.Lock()
+		rt := m.running[target.ID]
+		if rt != nil {
+			rt.task.MinPaise = minPaise
+			rt.task.MaxPaise = maxPaise
+		}
+		m.mu.Unlock()
+		if rt != nil {
+			if n := rt.neg.Load(); n != nil {
+				if err := n.refreshRange(ctx); err != nil {
+					m.log.Warn("the running negotiation did not take the new prices", "task", target.ID, "err", err)
+				}
+			}
+		}
+		if minPaise < old.MinPaise {
+			m.flagOffersAtFloor(ctx, target.ID, minPaise)
+		}
+	}
+	t.MinPaise, t.MaxPaise = minPaise, maxPaise
 	m.poolChanged(*t)
 	return nil
 }
@@ -562,8 +974,11 @@ func (m *sellManager) launch(t store.SellTask, s *sale, ready chan struct{}) {
 			m.log.Info("sell task paused until run restarts", "task", t.ID)
 			return
 		}
-		if final := m.end(t, state, detail); final != "" {
-			m.endPool(t, final, rt.revoke.Load())
+		m.mu.Lock()
+		cur := rt.task
+		m.mu.Unlock()
+		if final := m.end(cur, state, detail); final != "" {
+			m.endPool(cur, final, rt.revoke.Load())
 		}
 		m.notifyReserved()
 	}()
@@ -644,6 +1059,7 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, rt
 			return err
 		}
 		s = m.newSale(t.Date, t.Meal, t.EndsAt)
+		s.extra = t.Extra
 		// Binds to the account the task started with.
 		s.accountHash = t.AccountHash
 		if err := s.usePortal(ctx, p, m.cfg.VegOnly); err != nil {
@@ -665,13 +1081,63 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, rt
 	s.reader, s.payeeName = screenshotReader(), settings.PayeeName
 	s.assumeUnreadable = settings.AcceptUnreadablePayments && !t.Autopilot
 	queue := newOfferQueue()
+	rt.queue.Store(queue)
 	s.joined = queue
-	s.extras = sync.OnceValue(func() []string {
-		if ep, ok := s.portal.(extrasPortal); ok {
-			return readExtras(ctx, ep, m.log, t.Date, t.Meal, s.mess)
+	if t.Extra != "" && s.portal != nil {
+		s.extraCapacity = func(checkCtx context.Context) error {
+			m.extrasMu.Lock()
+			defer m.extrasMu.Unlock()
+			canonical, total, availed, _, available, usage, err := m.verifyExtraCapacity(checkCtx, s.portal, t.Date, baseMeal(t.Meal), t.Extra, t.Meal, true, false, false)
+			if err != nil {
+				return err
+			}
+			if available < 1 {
+				return fmt.Errorf("%w: no %s left available to sell (%d registered, %d availed, %d sold, %d armed)",
+					errExtraUnavailable, canonical, total, availed, usage.Sold, usage.Armed)
+			}
+			return nil
 		}
-		return nil
-	})
+		s.armGuard = m.extraArmGuard(s.portal, t.Date, t.Meal, t.Extra)
+		s.claimGuard = m.extraClaimGuard(s.portal, t.Date, t.Meal, t.Extra)
+		s.refund = func(ctx context.Context, buyer types.JID, amount, reason string) {
+			m.log.Warn("payment not honoured", "task", t.ID, "buyer", buyer, "amount", amount, "reason", reason)
+			if err := m.st.RefundSellTaskBuyer(ctx, t.ID, buyer.String(), amount, reason); err != nil {
+				m.log.Error("could not record the payment to refund", "task", t.ID, "err", err)
+			}
+			m.event(ctx, store.SellEvent{TaskID: t.ID, Peer: buyer.String(), Kind: store.EventParked, N: paise(amount), Text: reason})
+		}
+	}
+	if t.Extra == "" {
+		portalRows := sync.OnceValue(func() []portal.ExtraRegistration {
+			ep, ok := s.portal.(extrasPortal)
+			if !ok {
+				return nil
+			}
+			// Pass t.Meal (preserving #fN for friend slots) so proxyPortal
+			// reads the friend's saved extras rather than the seller's own.
+			rows, err := ep.ExtraRegistrations(ctx, t.Date, t.Meal)
+			if err != nil {
+				m.log.Warn("could not read extra registrations; posting the offer without extras", "err", err)
+				return nil
+			}
+			return rows
+		})
+		s.extras = func() []string {
+			rows := portalRows()
+			if len(rows) == 0 {
+				return nil
+			}
+			if store.IsFriendSlot(t.Meal) {
+				return offerExtras(rows, s.mess)
+			}
+			allocated, err := m.st.AllocatedExtras(ctx, t.Date, baseMeal(t.Meal))
+			if err != nil {
+				m.log.Warn("could not read allocated extra slots; posting the offer without extras", "err", err)
+				return nil
+			}
+			return offerExtrasRemaining(rows, s.mess, allocated, m.cfg.Location())
+		}
+	}
 	queue.join = func(peer, chat types.JID) bool {
 		if gate.turnsAway(ctx, peer, chat) {
 			logSavedSkip(m.log, peer, "task", t.ID)
@@ -764,7 +1230,7 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, rt
 			}
 		}
 		if settings.AcceptPlainDMs {
-			posting.acceptPlainDMs(newPlainDMs(m.cfg, m.st, m.log.With("task", t.ID), s.mess, baseMeal(t.Meal), ""))
+			posting.acceptPlainDMs(newPlainDMsForExtra(m.cfg, m.st, m.log.With("task", t.ID), s.mess, s.diet, baseMeal(t.Meal), t.Extra, ""))
 		}
 		if err := m.postCopies(ctx, syncCtx, t, s, rt, posting, settings, claimed); err != nil {
 			return err
@@ -826,6 +1292,12 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, rt
 	if n != nil {
 		err = m.sellNegotiated(ctx, n, s, j, resume)
 	} else {
+		if pooled(t) {
+			s.keep = func(ctx context.Context, buyers []types.JID) []types.JID {
+				moved := m.passOn(ctx, t)
+				return slices.DeleteFunc(buyers, func(b types.JID) bool { return moved[b.String()] })
+			}
+		}
 		err = s.sellToQueue(ctx, context.WithoutCancel(ctx), queue, j, 0, resume)
 	}
 	if errors.Is(err, errHandedOff) {
@@ -867,18 +1339,20 @@ func (m *sellManager) postCopies(ctx, syncCtx context.Context, t store.SellTask,
 		listed = true
 		return groups, nil
 	}
-	extras := sync.OnceValue(func() []string {
-		// Extras typed in for someone else's meal are meant to be posted.
-		if ep, ok := s.portal.(extrasPortal); ok && (settings.MentionExtras || t.Meal != baseMeal(t.Meal)) {
-			return readExtras(ctx, ep, m.log, t.Date, t.Meal, s.mess)
+	extras := func() []string {
+		if t.Extra != "" || s.extras == nil {
+			return nil
+		}
+		if settings.MentionExtras || store.IsFriendSlot(t.Meal) {
+			return s.extras()
 		}
 		return nil
-	})
+	}
 	// Each copy shows the opening price and the pool's count as they are
 	// now, after any range edit.
 	text := func() string {
 		price, count := m.offerShows(ctx, t)
-		return offerText(offerDetails{Mess: s.mess, Diet: s.diet, Meal: t.Meal, Price: rupees(store.FormatPaise(price)),
+		return offerText(offerDetails{Mess: s.mess, Diet: s.diet, Meal: t.Meal, Extra: t.Extra, Price: rupees(store.FormatPaise(price)),
 			ShowPrice: settings.ShowPrice, Day: offerDay(m.cfg, t.Date), Extras: extras(), Count: count})
 	}
 	send := m.taskCopy(t, gate, text)

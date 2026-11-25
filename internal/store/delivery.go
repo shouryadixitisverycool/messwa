@@ -46,6 +46,8 @@ var deliveryColumns = []string{
 	// What counted as the payment: empty for WhatsApp Pay, PaidByImage
 	// for an image accepted under [sell] accept_payment_images.
 	"payment_kind TEXT NOT NULL DEFAULT ''",
+	// Extra item name when selling an extra separately (e.g. "Egg"), empty for a meal.
+	"extra TEXT NOT NULL DEFAULT ''",
 }
 
 // PaidByImage marks a delivery sent for an image the buyer sent, assumed
@@ -62,11 +64,13 @@ type Delivery struct {
 	// Mess and Diet are recorded when known, from the portal registration.
 	// Resuming doesn't compare them.
 	Mess, Diet string
+	// Extra is the extra item name when selling an extra separately (e.g. "Egg").
+	Extra string
 }
 
 func (s *Store) insertDelivery(ctx context.Context, d Delivery) (bool, error) {
-	r, err := s.db.ExecContext(ctx, `INSERT INTO qr_deliveries(date,meal,peer,amount,image_hash,armed_at,mess,diet)
- VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(date,meal) DO NOTHING`, d.Date, d.Meal, d.Peer, d.Amount, d.ImageHash, d.ArmedAt.Unix(), d.Mess, d.Diet)
+	r, err := s.db.ExecContext(ctx, `INSERT INTO qr_deliveries(date,meal,peer,amount,image_hash,armed_at,mess,diet,extra)
+ VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(date,meal) DO NOTHING`, d.Date, d.Meal, d.Peer, d.Amount, d.ImageHash, d.ArmedAt.Unix(), d.Mess, d.Diet, d.Extra)
 	if err != nil {
 		return false, err
 	}
@@ -112,8 +116,8 @@ func (s *Store) ReleaseUnpaidDelivery(ctx context.Context, d Delivery) error {
 // slot is reserved but the bot sends nothing and waits for no payment.
 // buyerName is the buyer's WhatsApp push name, if known.
 func (s *Store) HandOffDelivery(ctx context.Context, d Delivery, buyerName string) error {
-	r, err := s.db.ExecContext(ctx, `INSERT INTO qr_deliveries(date,meal,peer,amount,image_hash,armed_at,state,mess,diet,buyer_name)
- VALUES(?,?,?,?,?,?,'handed_off',?,?,?) ON CONFLICT(date,meal) DO NOTHING`, d.Date, d.Meal, d.Peer, d.Amount, d.ImageHash, d.ArmedAt.Unix(), d.Mess, d.Diet, buyerName)
+	r, err := s.db.ExecContext(ctx, `INSERT INTO qr_deliveries(date,meal,peer,amount,image_hash,armed_at,state,mess,diet,buyer_name,extra)
+ VALUES(?,?,?,?,?,?,'handed_off',?,?,?,?) ON CONFLICT(date,meal) DO NOTHING`, d.Date, d.Meal, d.Peer, d.Amount, d.ImageHash, d.ArmedAt.Unix(), d.Mess, d.Diet, buyerName, d.Extra)
 	if err != nil {
 		return err
 	}
@@ -256,7 +260,7 @@ func (s *Store) FinishDelivery(ctx context.Context, d Delivery, messageID string
 // DeliveryRecord is one armed meal as the sales page sees it.
 type DeliveryRecord struct {
 	Date, Meal, Peer, Amount, State string
-	Mess, Diet                      string
+	Mess, Diet, Extra               string
 	// BuyerName is the push name from the payment message, falling back to
 	// the one stored for the DM peer. PeerAlt is the peer's other JID (phone
 	// or LID) when known. Both are untrusted.
@@ -270,7 +274,7 @@ type DeliveryRecord struct {
 // Deliveries returns every recorded meal, oldest first: armed, handed_off,
 // sending and sent.
 func (s *Store) Deliveries(ctx context.Context) ([]DeliveryRecord, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT d.date,d.meal,d.peer,d.amount,d.state,d.mess,d.diet,
+	rows, err := s.db.QueryContext(ctx, `SELECT d.date,d.meal,d.peer,d.amount,d.state,d.mess,d.diet,d.extra,
  CASE WHEN d.buyer_name != '' THEN d.buyer_name ELSE coalesce((SELECT p.push_name FROM dm_peers p WHERE d.peer IN (p.jid, p.alt) AND p.push_name != '' LIMIT 1), '') END,
  coalesce((SELECT CASE WHEN p.jid = d.peer THEN p.alt ELSE p.jid END FROM dm_peers p WHERE d.peer IN (p.jid, p.alt) LIMIT 1), ''),
  d.armed_at, coalesce(d.offer_at,0), coalesce(d.paid_at,0), coalesce(d.sent_at,0), d.payment_kind, coalesce(d.task_id,0)
@@ -289,7 +293,7 @@ func (s *Store) Deliveries(ctx context.Context) ([]DeliveryRecord, error) {
 	for rows.Next() {
 		var r DeliveryRecord
 		var armed, offer, paid, sent int64
-		if err := rows.Scan(&r.Date, &r.Meal, &r.Peer, &r.Amount, &r.State, &r.Mess, &r.Diet, &r.BuyerName, &r.PeerAlt, &armed, &offer, &paid, &sent, &r.PaymentKind, &r.TaskID); err != nil {
+		if err := rows.Scan(&r.Date, &r.Meal, &r.Peer, &r.Amount, &r.State, &r.Mess, &r.Diet, &r.Extra, &r.BuyerName, &r.PeerAlt, &armed, &offer, &paid, &sent, &r.PaymentKind, &r.TaskID); err != nil {
 			return nil, err
 		}
 		r.ArmedAt, r.OfferAt, r.PaidAt, r.SentAt = unix(armed), unix(offer), unix(paid), unix(sent)
@@ -304,7 +308,7 @@ type ManualSale struct {
 	Date, Meal, Peer, Amount string
 	// Mess and Diet come from the registration. Empty keeps what the row
 	// already has.
-	Mess, Diet string
+	Mess, Diet, Extra string
 	// BuyerName is the buyer's name as you know it. Empty keeps the name
 	// already recorded.
 	BuyerName string
@@ -348,8 +352,8 @@ func (s *Store) RecordManualSale(ctx context.Context, m ManualSale, force bool) 
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		state = ""
-		_, err = tx.ExecContext(ctx, `INSERT INTO qr_deliveries(date,meal,peer,amount,image_hash,armed_at,state,mess,diet,buyer_name,paid_at,sent_at,payment_kind)
- VALUES(?,?,?,?,'manual',?,'sent',?,?,?,?,?,?)`, m.Date, m.Meal, m.Peer, m.Amount, m.At.Unix(), m.Mess, m.Diet, m.BuyerName, m.At.Unix(), m.At.Unix(), m.Kind)
+		_, err = tx.ExecContext(ctx, `INSERT INTO qr_deliveries(date,meal,peer,amount,image_hash,armed_at,state,mess,diet,extra,buyer_name,paid_at,sent_at,payment_kind)
+ VALUES(?,?,?,?,'manual',?,'sent',?,?,?,?,?,?,?)`, m.Date, m.Meal, m.Peer, m.Amount, m.At.Unix(), m.Mess, m.Diet, m.Extra, m.BuyerName, m.At.Unix(), m.At.Unix(), m.Kind)
 	case err != nil:
 	case taskActive:
 		return state, errors.New("an active sell task is selling this meal; cancel it first")
@@ -358,9 +362,10 @@ func (s *Store) RecordManualSale(ctx context.Context, m ManualSale, force bool) 
 	default:
 		_, err = tx.ExecContext(ctx, `UPDATE qr_deliveries SET state='sent',peer=?,amount=?,payment_kind=?,paid_at=?,sent_at=?,
  mess=CASE WHEN ?='' THEN mess ELSE ? END, diet=CASE WHEN ?='' THEN diet ELSE ? END,
+ extra=CASE WHEN ?='' THEN extra ELSE ? END,
  buyer_name=CASE WHEN ?<>'' THEN ? WHEN peer=? THEN buyer_name ELSE '' END
  WHERE date=? AND meal=?`, m.Peer, m.Amount, m.Kind, m.At.Unix(), m.At.Unix(),
-			m.Mess, m.Mess, m.Diet, m.Diet, m.BuyerName, m.BuyerName, m.Peer, m.Date, m.Meal)
+			m.Mess, m.Mess, m.Diet, m.Diet, m.Extra, m.Extra, m.BuyerName, m.BuyerName, m.Peer, m.Date, m.Meal)
 	}
 	if err != nil {
 		return state, err

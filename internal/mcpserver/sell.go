@@ -51,6 +51,39 @@ type SchedulePlanner interface {
 	CancelPlannedSchedule(ctx context.Context, id, revision int64) error
 }
 
+// ExtraSaleResult reports what StartExtras created and the live portal counts
+// it verified against.
+type ExtraSaleResult struct {
+	IDs               []int64   `json:"ids"`
+	Slots             []string  `json:"slots"`
+	At                time.Time `json:"-"`
+	Extra             string    `json:"extra"`
+	Count             int       `json:"count"`
+	VerifiedTotal     int       `json:"verified_total"`
+	VerifiedUnavailed int       `json:"verified_unavailed"`
+	VerifiedAvailable int       `json:"verified_available"`
+}
+
+// ExtraSeller sells registered meal extras (such as Kadamba dinner eggs)
+// separately from the main meal, verifying registered counts against the mess
+// portal API first.
+type ExtraSeller interface {
+	StartExtras(ctx context.Context, userID int64, date, meal, extraName string, count, minRupees, maxRupees int, at time.Time, startNow, autopilot bool) (ExtraSaleResult, error)
+}
+
+// ExtraSeller returns what sells registered extras separately while sell tasks are on.
+func (s *Server) ExtraSeller() (ExtraSeller, error) {
+	sell, err := s.SellControl()
+	if err != nil {
+		return nil, err
+	}
+	es, ok := sell.(ExtraSeller)
+	if !ok {
+		return nil, errors.New("this messwa can't sell extras separately")
+	}
+	return es, nil
+}
+
 // SetSellTasks adds the sell task tools while the sell_tasks setting is on.
 func (s *Server) SetSellTasks(t SellTasks) { s.sell = t }
 
@@ -58,12 +91,14 @@ func (s *Server) sellEnabled() bool { return s.sell != nil && s.cfg.Live().MCP.S
 
 const sellInstructions = `
 
-Sell tasks (your account only) sell one of your registered meals through WhatsApp. start_sell_task checks the registration and posts an offer in the mess groups set in messwa's settings. With [sell] accept_plain_dms in config.toml, people who DM about the offer without quoting it count as replies too. With [sell] message_buy_posts (on by default), the task also privately replies to open buy posts in the groups for the same meal, date, mess and diet (a post naming no mess or diet counts) and queues those people as buyers, at most 10 per task and never the same person twice. When config.toml sets [sell] buyers = "unsaved_only", replies from saved contacts are skipped and they get nothing. With max_price above min_price, the task negotiates with everyone who replies privately to a post, all at once: it opens at max_price and meets buyers anywhere down to min_price; with [sell] smart_haggle it holds at the meal's usual price and comes down toward min_price only in the meal's last 2 hours. It never quotes, agrees or accepts less than min_price. Buyers who agree pay one at a time; the first matching WhatsApp Pay payment gets the meal's QR, and the offer posts get a ✅. With [sell] accept_payment_images, an image the paying buyer sends after the payment prompt also counts as payment; nothing verifies it, and sell_task_status says so. With it on, the pay message no longer rules out GPay or UPI, a buyer asking to pay by UPI counts as agreeing, a negotiating task tells a paying buyer who has no WhatsApp Pay to pay the number, and asks a buyer who says they paid but sent no image for the screenshot. With [sell] upi also set to the user's UPI ID, the pay message comes with a UPI QR for the exact agreed price and asks for the screenshot. Autopilot tasks count screenshots too when accept_payment_images is on. With [sell] accept_unreadable_payments, a WhatsApp Pay message whose amount stays unreadable counts as payment of the agreed price. With max_price equal to min_price it just asks that price. Buyers the bot can't handle (unreadable messages, still too low after its lowest price, asking twice to pay another way) are listed in needs_you, along with buyers whose payment it could not honour and the amount to refund. With handoff "on_reply" the task stops at the first private reply and sends that buyer nothing; with "on_agreement" it negotiates and hands over the first buyer who agrees, at the agreed price, then keeps posting and haggling: a buyer who agrees more takes the handoff, and the earlier buyer is told not to pay. Once the handed-off buyer pays the user, record it with mark_sell_task_sold, or a higher offer can still take the handoff. sell_task_status shows who to message. While the task is active it reposts the offer in a group once the last copy has dropped out of view (once enough messages, or other sellers' listings for the same meal and mess, came in after it; time alone never triggers one), up to max_reposts per group and never in the meal's last 15 minutes. Replies to any copy count. sell_task_status lists every copy and when each group gets its next one, and why. A task ends when the meal sells, when it hands off on reply, when it is cancelled, or when the meal ends. Check on it with sell_task_status and stop it with cancel_sell_task. sell_task_events lists what happened in a time window, to the second. To change an active task's prices, use set_sell_task_prices rather than cancelling and starting again: the posts, buyers and haggles carry on, and buyers mid-haggle get the new range on their next message. Prices the bot already quoted or agreed with a buyer stand even if the new floor is higher. Lowering the floor lists buyers whose last offer now meets it under needs_you; the bot doesn't message them. Change prices only when the user asked. Start a task only when the user asked you to sell that meal, at the prices they gave.`
+Sell tasks (your account only) sell one of your registered meals through WhatsApp. start_sell_task checks the registration and posts an offer in the mess groups set in messwa's settings. To sell registered meal extras (such as Kadamba dinner eggs) separately from the main meal, use start_extra_sell_task, which verifies registered/unavailed counts against the mess portal API and starts or schedules pooled extra slots. With [sell] accept_plain_dms in config.toml, people who DM about the offer without quoting it count as replies too. With [sell] message_buy_posts (on by default), the task also privately replies to open buy posts in the groups for the same meal, date, mess and diet (a post naming no mess or diet counts) and queues those people as buyers, at most 10 per task and never the same person twice. When config.toml sets [sell] buyers = "unsaved_only", replies from saved contacts are skipped and they get nothing. With max_price above min_price, the task negotiates with everyone who replies privately to a post, all at once: it opens at max_price and meets buyers anywhere down to min_price; with [sell] smart_haggle it holds at the meal's usual price and comes down toward min_price only in the meal's last 2 hours. It never quotes, agrees or accepts less than min_price. Buyers who agree pay one at a time; the first matching WhatsApp Pay payment gets the meal's QR, and the offer posts get a ✅. With [sell] accept_payment_images, an image the paying buyer sends after the payment prompt also counts as payment; nothing verifies it, and sell_task_status says so. With it on, the pay message no longer rules out GPay or UPI, a buyer asking to pay by UPI counts as agreeing, a negotiating task tells a paying buyer who has no WhatsApp Pay to pay the number, and asks a buyer who says they paid but sent no image for the screenshot. With [sell] upi also set to the user's UPI ID, the pay message comes with a UPI QR for the exact agreed price and asks for the screenshot. Autopilot tasks count screenshots too when accept_payment_images is on. With [sell] accept_unreadable_payments, a WhatsApp Pay message whose amount stays unreadable counts as payment of the agreed price. With max_price equal to min_price it just asks that price. Buyers the bot can't handle (unreadable messages, still too low after its lowest price, asking twice to pay another way) are listed in needs_you, along with buyers whose payment it could not honour and the amount to refund. With handoff "on_reply" the task stops at the first private reply and sends that buyer nothing; with "on_agreement" it negotiates and hands over the first buyer who agrees, at the agreed price, then keeps posting and haggling: a buyer who agrees more takes the handoff, and the earlier buyer is told not to pay. Once the handed-off buyer pays the user, record it with mark_sell_task_sold, or a higher offer can still take the handoff. sell_task_status shows who to message. While the task is active it reposts the offer in a group once the last copy has dropped out of view (once enough messages, or other sellers' listings for the same meal and mess, came in after it; time alone never triggers one), up to max_reposts per group and never in the meal's last 15 minutes. Replies to any copy count. sell_task_status lists every copy and when each group gets its next one, and why. A task ends when the meal sells, when it hands off on reply, when it is cancelled, or when the meal ends. Check on it with sell_task_status and stop it with cancel_sell_task. sell_task_events lists what happened in a time window, to the second. To change an active task's prices, use set_sell_task_prices rather than cancelling and starting again: the posts, buyers and haggles carry on, and buyers mid-haggle get the new range on their next message. Prices the bot already quoted or agreed with a buyer stand even if the new floor is higher. Lowering the floor lists buyers whose last offer now meets it under needs_you; the bot doesn't message them. Change prices only when the user asked. Start a task only when the user asked you to sell that meal, at the prices they gave.`
 
 func (s *Server) addSellTools(srv *mcp.Server) {
 	write := &mcp.ToolAnnotations{OpenWorldHint: ptr(true)}
 	mcp.AddTool(srv, &mcp.Tool{Name: "start_sell_task", Annotations: write,
 		Description: "Sell one of your registered meals: post an offer in the mess group, negotiate between min_price and max_price with buyers who reply privately, and send the QR after a matching payment. Prices are whole rupees. Uses your own linked account."}, s.startSellTask)
+	mcp.AddTool(srv, &mcp.Tool{Name: "start_extra_sell_task", Annotations: write,
+		Description: "Sell registered meal extras (such as Kadamba dinner eggs) separately from the main meal. Verifies how many unavailed extras are registered on the mess portal API before starting or scheduling count pooled slots. Uses your own linked account."}, s.startExtraSellTask)
 	mcp.AddTool(srv, &mcp.Tool{Name: "sell_task_status", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 		Description: "One sell task by id, or every active task plus those started in the last 24 hours: state, every copy of the offer posted (reposts included, marking each group's current one), when each group gets its next fresh copy and why, buyers who replied, and the sale. Uses your own linked account."}, s.sellTaskStatus)
 	mcp.AddTool(srv, &mcp.Tool{Name: "cancel_sell_task", Annotations: write,
@@ -83,6 +118,29 @@ type StartSellIn struct {
 	MinPrice int    `json:"min_price" jsonschema:"lowest price in rupees to accept; never quoted or accepted below this"`
 	MaxPrice int    `json:"max_price" jsonschema:"price in rupees to open at; above min_price the task negotiates down from it"`
 	Handoff  string `json:"handoff,omitempty" jsonschema:"never (default): the task runs the whole sale. on_reply: the first private reply ends the task and hands that buyer's chat to the user; the bot sends them nothing. on_agreement: the task negotiates, then hands over the first buyer who agrees, at the agreed price, without asking them to pay; it keeps selling, and a buyer who agrees more takes the handoff, until the meal is marked sold"`
+}
+
+type StartExtraSellIn struct {
+	Date      string `json:"date" jsonschema:"meal date, YYYY-MM-DD"`
+	Meal      string `json:"meal" jsonschema:"breakfast, lunch, snacks or dinner"`
+	Extra     string `json:"extra" jsonschema:"extra name as registered on the mess portal, e.g. Egg"`
+	Count     int    `json:"count" jsonschema:"how many registered extras to sell (verified against the mess portal)"`
+	MinPrice  int    `json:"min_price" jsonschema:"lowest price per extra in whole rupees"`
+	MaxPrice  int    `json:"max_price" jsonschema:"opening price per extra in whole rupees"`
+	StartNow  bool   `json:"start_now,omitempty" jsonschema:"post straight away if the previous meal has ended; otherwise follows list_at"`
+	Autopilot bool   `json:"autopilot,omitempty" jsonschema:"skip buyers who would need you"`
+}
+
+type StartExtraSellOut struct {
+	TaskIDs           []int64  `json:"task_ids,omitempty"`
+	ScheduleIDs       []int64  `json:"schedule_ids,omitempty"`
+	Slots             []string `json:"slots"`
+	ScheduledFor      string   `json:"scheduled_for,omitempty"`
+	Extra             string   `json:"extra"`
+	Count             int      `json:"count"`
+	VerifiedTotal     int      `json:"verified_total"`
+	VerifiedUnavailed int      `json:"verified_unavailed"`
+	VerifiedAvailable int      `json:"verified_available"`
 }
 
 type SellTaskIn struct {
@@ -177,6 +235,7 @@ type SellTaskOut struct {
 	ID       int64          `json:"id"`
 	Date     string         `json:"date"`
 	Meal     string         `json:"meal"`
+	Extra    string         `json:"extra,omitempty"`
 	Mess     string         `json:"mess,omitempty"`
 	Diet     string         `json:"diet,omitempty"`
 	State    string         `json:"state" jsonschema:"active, sold, handed_off, cancelled, expired, or failed"`
@@ -238,6 +297,36 @@ func (s *Server) startSellTask(ctx context.Context, req *mcp.CallToolRequest, in
 	}
 	out, err := s.sellTask(ctx, id)
 	return nil, out, err
+}
+
+func (s *Server) startExtraSellTask(ctx context.Context, req *mcp.CallToolRequest, in StartExtraSellIn) (*mcp.CallToolResult, StartExtraSellOut, error) {
+	uid, err := s.sellAdmin(ctx, req)
+	if err != nil {
+		return nil, StartExtraSellOut{}, err
+	}
+	es, err := s.ExtraSeller()
+	if err != nil {
+		return nil, StartExtraSellOut{}, err
+	}
+	res, err := es.StartExtras(ctx, uid, in.Date, in.Meal, in.Extra, in.Count, in.MinPrice, in.MaxPrice, time.Time{}, in.StartNow, in.Autopilot)
+	if err != nil {
+		return nil, StartExtraSellOut{}, err
+	}
+	out := StartExtraSellOut{
+		Slots:             res.Slots,
+		ScheduledFor:      s.fmt(res.At),
+		Extra:             res.Extra,
+		Count:             res.Count,
+		VerifiedTotal:     res.VerifiedTotal,
+		VerifiedUnavailed: res.VerifiedUnavailed,
+		VerifiedAvailable: res.VerifiedAvailable,
+	}
+	if res.At.IsZero() {
+		out.TaskIDs = res.IDs
+	} else {
+		out.ScheduleIDs = res.IDs
+	}
+	return nil, out, nil
 }
 
 func (s *Server) sellTaskStatus(ctx context.Context, req *mcp.CallToolRequest, in SellTaskIn) (*mcp.CallToolResult, SellTasksOut, error) {
@@ -322,7 +411,7 @@ func (s *Server) nextRepost(ctx context.Context, rules repost.Rules, group strin
 
 func (s *Server) sellTaskOut(ctx context.Context, t store.SellTask) (SellTaskOut, error) {
 	out := SellTaskOut{
-		ID: t.ID, Date: t.Date, Meal: t.Meal, Mess: t.Mess, Diet: t.Diet, State: t.State, Detail: t.Detail,
+		ID: t.ID, Date: t.Date, Meal: t.Meal, Extra: t.Extra, Mess: t.Mess, Diet: t.Diet, State: t.State, Detail: t.Detail,
 		MinPrice: store.FormatPaise(t.MinPaise), MaxPrice: store.FormatPaise(t.MaxPaise), Handoff: t.Handoff,
 		Started: s.fmt(t.CreatedAt), Ends: s.fmt(t.EndsAt), Ended: s.fmt(t.EndedAt),
 		Offers: []SellOfferOut{}, Buyers: []SellBuyerOut{},

@@ -90,6 +90,7 @@ type scheduledSale struct {
 	Date      string  `json:"date"`
 	Meal      string  `json:"meal"`
 	BaseMeal  string  `json:"base_meal"`
+	Extra     string  `json:"extra,omitempty"`
 	ForFriend bool    `json:"for_friend,omitempty"`
 	Friend    string  `json:"friend,omitempty"`
 	Mess      string  `json:"mess,omitempty"`
@@ -116,7 +117,7 @@ func scheduledSales(ctx context.Context, srv *mcpserver.Server) ([]scheduledSale
 		if sc.State != store.ScheduleWaiting {
 			continue
 		}
-		v := scheduledSale{ID: sc.ID, Date: sc.Date, Meal: sc.Meal, At: srv.ScheduledAt(sc).Unix(), Ends: sc.EndsAt.Unix(),
+		v := scheduledSale{ID: sc.ID, Date: sc.Date, Meal: sc.Meal, Extra: sc.Extra, At: srv.ScheduledAt(sc).Unix(), Ends: sc.EndsAt.Unix(),
 			Min: float64(sc.MinPaise) / 100, Max: float64(sc.MaxPaise) / 100, Autopilot: sc.Autopilot}
 		v.Opens, v.OpensAfter = opensAt(srv, sc.Date, sc.Meal)
 		v.BaseMeal, _, _ = strings.Cut(sc.Meal, "#")
@@ -250,6 +251,7 @@ func Handler(cfg *config.Config, srv *mcpserver.Server, hub *Hub, acc *accounts.
 	attentionRoutes(mux, srv)
 	recurringRoutes(mux, srv)
 	mux.Handle("GET /api/sales", member(salesHandler(cfg, srv, regs)))
+	mux.Handle("GET /api/meal-extras", member(mealExtrasHandler(cfg, srv, regs)))
 	mux.Handle("GET /api/insights", requireRole(accounts.Admin, insightsHandler(cfg, srv)))
 	mux.Handle("PUT /api/insights/gala", requireRole(accounts.Admin, galaHandler(srv)))
 

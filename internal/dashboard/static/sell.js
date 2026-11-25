@@ -64,11 +64,22 @@ function sellSheet(ctx) {
     return c.opens && at === c.opens && want < c.opens ? `once ${before(c)} ends` : listWord(c.meal);
   }
   const startedToast = (meal, res) => (res && res.at ? `Scheduled. Your ${meal} goes up at ${hm(res.at)}` : `Selling your ${meal}`);
+  // what names what c sells: "dinner", or "dinner egg" for an extra sold
+  // apart from its meal. slot is the meal the server knows it by: "dinner",
+  // or the extra's own slot, "dinner#e1".
+  const what = (c) => (c.extra ? `${c.meal} ${c.extra.toLowerCase()}` : c.meal);
+  const slot = (c) => c.slot || c.meal;
 
 
   // sellBounds is the slider's scale: wide enough for the median ask with
   // room to haggle above it.
   function sellBounds(c) {
+    // An extra costs a fraction of a meal: ₹1 up to three times the mess's
+    // rate, at least ₹50.
+    if (c.extra) {
+      const top = Math.max(50, Math.ceil(((c.rate || 20) * 3) / 5) * 5, c.task ? Math.ceil(c.task.max / 5) * 5 : 0, c.schedule ? Math.ceil(c.schedule.max / 5) * 5 : 0);
+      return { lo: 1, hi: top };
+    }
     const top = Math.max(150, c.ask ? Math.ceil((c.ask * 2.5) / 50) * 50 : 0, c.task ? Math.ceil(c.task.max / 50) * 50 : 0, c.schedule ? Math.ceil(c.schedule.max / 50) * 50 : 0);
     return { lo: c.planner ? 1 : 10, hi: top };
   }
@@ -78,6 +89,7 @@ function sellSheet(ctx) {
   function sellDefaults(c, b) {
     if (c.task) return [c.task.min, c.task.max];
     if (c.schedule) return [c.schedule.min, c.schedule.max];
+    if (c.extra) return c.rate > 0 ? [Math.max(1, Math.round(c.rate * 0.7)), Math.max(1, Math.round(c.rate))] : [10, 15];
     if (c.ask == null) return [40, 80];
     const r5 = (v) => Math.max(b.lo, Math.min(b.hi, Math.round(v / 5) * 5));
     return [r5(c.ask * 0.85), r5(c.ask * 1.25)];
@@ -101,7 +113,7 @@ function sellSheet(ctx) {
     const t = c.task;
     const head = el('div', 'sell-head');
     const sold = !t && isSold(c);
-    const h = el('h2', '', `${t ? 'Selling' : c.schedule ? 'Scheduled' : sold ? 'Sold' : 'Sell'} ${messName(c.mess)} ${c.meal}${c.friend != null ? ` for ${c.friend || 'a friend'}` : ''}`);
+    const h = el('h2', '', `${t ? 'Selling' : c.schedule ? 'Scheduled' : sold ? 'Sold' : 'Sell'} ${messName(c.mess)} ${c.meal}${c.extra ? ` · ${c.extra}` : ''}${c.friend != null ? ` for ${c.friend || 'a friend'}` : ''}`);
     h.id = 'sellTitle';
     h.style.setProperty('color', messColor(c.mess));
     const live = now() >= c.start;
@@ -110,6 +122,9 @@ function sellSheet(ctx) {
     sheet.replaceChildren(head);
     if (sold) saleView(date, c);
     else if (!t && c.schedule && view !== 'prices') scheduleView(date, c);
+    // An extra is put up from the meal panel, never from here, so one with
+    // no task or schedule (armed, handed off) only says where it stands.
+    else if (!t && !c.schedule && c.extra) extraView(date, c);
     else if (!t) priceView(date, c);
     else if (view === 'prices') priceView(date, c);
     else if (view === 'sold') soldView(date, c);
@@ -205,11 +220,11 @@ function sellSheet(ctx) {
     const sum = el('div', 'sell-sum');
     const stat = (k, v, cls) => { const d = el('div', 'st'); d.append(el('span', '', k), el('b', cls || '', v)); return d; };
     sum.append(stat('PAID', rupees(s.amount), 'gold'), stat('BUYER', s.name || fmtPhone(s.phone) || 'Unknown'), stat('AT', s.paid_at ? hm(s.paid_at) : '-'));
-    const note = el('p', 'sell-note', `Deleting the sale takes it out of your ledger and totals, and you can sell the ${c.meal} again. `
+    const note = el('p', 'sell-note', `Deleting the sale takes it out of your ledger and totals, and you can sell the ${what(c)} again. `
       + 'The bot sends nothing, and the buyer still has the QR it sent them. Reset your QR token on the mess portal if they shouldn\'t be able to use it.');
     const tools = el('div', 'sell-tools one');
     const del = btn('', 'sell-tool red', () => {
-      if (del.dataset.sure) return run({ action: 'delete-sale', date, meal: c.meal }, `Sale deleted. Your ${c.meal} is unsold again.`);
+      if (del.dataset.sure) return run({ action: 'delete-sale', date, meal: slot(c) }, `Sale deleted. Your ${what(c)} is unsold again.`);
       del.dataset.sure = '1';
       del.querySelector('span').textContent = 'SURE? DELETE';
       del.querySelector('small').textContent = 'Click again to delete';
@@ -224,6 +239,24 @@ function sellSheet(ctx) {
     close.dataset.focus = '1';
     acts.append(close);
     sheet.append(sum, note, tools, error, acts);
+  }
+
+  // extraView is an extra slot between selling and sold: armed for a buyer
+  // to pay, or handed to you. There is nothing to change from here.
+  function extraView(date, c) {
+    const { error, acts, btn } = sellParts();
+    const s = c.sale != null ? D().sales[c.sale] : null;
+    const sum = el('div', 'sell-sum');
+    const stat = (k, v, cls) => { const d = el('div', 'st'); d.append(el('span', '', k), el('b', cls || '', v)); return d; };
+    const word = { armed: 'ARMED', handoff: 'HANDED OFF', sending: 'PAID · SENDING' }[c.state] || String(c.state || '').toUpperCase();
+    sum.append(stat('STATE', word, 'gold'), stat('AMOUNT', s ? rupees(s.amount) : '-'), stat('BUYER', s ? s.name || fmtPhone(s.phone) || 'Unknown' : '-'));
+    const note = el('p', 'sell-note', c.state === 'armed' ? `Waiting for the buyer to pay for the ${what(c)}. The bot sends the QR once they do.`
+      : c.state === 'handoff' ? 'The bot handed this buyer to you and sent them nothing.' : `The ${what(c)} is on its way to the buyer.`);
+    if (D().sell_off) error.textContent = '';
+    const close = btn('CLOSE', '', closeModal);
+    close.dataset.focus = '1';
+    acts.append(close);
+    sheet.append(sum, note, error, acts);
   }
 
   // scheduleView is a sale waiting for its meal: when it goes up, at what
@@ -245,9 +278,9 @@ function sellSheet(ctx) {
     const early = tooEarly(c);
     const go = early
       ? tool('⏰', afterLabel(c), `At ${hm(c.opens)}`, 'grn', () =>
-        run({ action: 'start', date, meal: c.meal, min: sc.min, max: sc.max, now: true, autopilot: !!sc.autopilot }, (res) => startedToast(c.meal, res)))
+        run({ action: 'start', date, meal: slot(c), min: sc.min, max: sc.max, now: true, autopilot: !!sc.autopilot }, (res) => startedToast(what(c), res)))
       : tool('▶', 'START NOW', sc.autopilot ? 'On autopilot' : 'Post the offer now', 'grn', () =>
-        run({ action: 'start', date, meal: c.meal, min: sc.min, max: sc.max, now: true, autopilot: !!sc.autopilot }, (res) => res && res.at ? startedToast(c.meal, res) : `Selling your ${c.meal}${sc.autopilot ? ' on autopilot' : ''}`));
+        run({ action: 'start', date, meal: slot(c), min: sc.min, max: sc.max, now: true, autopilot: !!sc.autopilot }, (res) => res && res.at ? startedToast(what(c), res) : `Selling your ${what(c)}${sc.autopilot ? ' on autopilot' : ''}`));
     if (early) go.title = afterTitle(c);
     go.dataset.focus = '1';
     // Autopilot is a switch: it saves at once and keeps the sheet open.
@@ -266,8 +299,8 @@ function sellSheet(ctx) {
     });
     auto.setAttribute('role', 'switch');
     auto.setAttribute('aria-checked', String(!!sc.autopilot));
-    const drop = tool('✕', 'UNSCHEDULE', 'Keep the meal', 'red', () => {
-      if (drop.dataset.sure) return run({ action: 'unschedule', id: sc.id }, `Unscheduled. Your ${c.meal} won't go up.`);
+    const drop = tool('✕', 'UNSCHEDULE', c.extra ? `Keep the ${c.extra.toLowerCase()}` : 'Keep the meal', 'red', () => {
+      if (drop.dataset.sure) return run({ action: 'unschedule', id: sc.id }, `Unscheduled. Your ${what(c)} won't go up.`);
       drop.dataset.sure = '1';
       drop.querySelector('span').textContent = 'SURE?';
       drop.querySelector('small').textContent = 'Click again to drop it';
@@ -301,9 +334,10 @@ function sellSheet(ctx) {
       marks: c.ask != null ? [{ at: c.ask, cls: 'med' }] : [],
       axis: [rupees(b.lo), c.ask != null ? `median ${rupees(Math.round(c.ask))}` : '', rupees(b.hi)],
       onChange: (lo, hi) => {
+        const thing = c.extra ? `each ${c.extra.toLowerCase()}` : 'the meal';
         note.textContent = lo === hi
-          ? `Posts the meal at ${rupees(lo)} and sells to the first buyer who pays it.`
-          : `Opens at ${rupees(hi)} and haggles down toward the median, reaching ${rupees(lo)} only as the meal nears its end. Never goes below ${rupees(lo)}.`;
+          ? `Posts ${thing} at ${rupees(lo)} and sells to the first buyer who pays it.`
+          : `Opens at ${rupees(hi)} and haggles down${c.ask != null ? ' toward the median' : ''}, reaching ${rupees(lo)} only as the meal nears its end. Never goes below ${rupees(lo)}.`;
         if (t) note.textContent += ' Prices already quoted or agreed stand.';
         if (onChange) onChange(lo, hi);
       },
@@ -325,8 +359,8 @@ function sellSheet(ctx) {
       acts.append(btn('BACK', '', () => openSell(date, c)),
         btn('SAVE', 'gold', () => {
           const [min, max] = slider.get();
-          run({ action: 'plan', id: c.schedule.id, revision: c.schedule.revision, at: c.schedule.at, date, meal: c.meal, min, max, autopilot: !!c.schedule.autopilot },
-            (res) => startedToast(c.meal, res));
+          run({ action: 'plan', id: c.schedule.id, revision: c.schedule.revision, at: c.schedule.at, date, meal: slot(c), min, max, autopilot: !!c.schedule.autopilot },
+            (res) => startedToast(what(c), res));
         }));
     } else if (listAt(c)) {
       const at = listAt(c);
@@ -384,7 +418,9 @@ function sellSheet(ctx) {
     pick.addEventListener('change', sync);
     sync();
 
-    form.append(el('p', 'sell-note', 'Only confirm once the meal is sold and paid for. The bot stops selling, records the sale, sends your buyer the meal QR, ticks the offer posts and tells other buyers it\'s sold.'));
+    form.append(el('p', 'sell-note', c.extra
+      ? `Only confirm once the ${c.extra.toLowerCase()} is sold and paid for. The bot stops selling, records the sale, sends your buyer the QR, ticks the offer posts and tells other buyers it's sold.`
+      : 'Only confirm once the meal is sold and paid for. The bot stops selling, records the sale, sends your buyer the meal QR, ticks the offer posts and tells other buyers it\'s sold.'));
     const submit = btn('CONFIRM + SEND QR', 'gold', () => {});
     submit.type = 'submit';
     acts.append(btn('BACK', '', () => openSell(date, c)), submit);
@@ -405,8 +441,28 @@ function sellSheet(ctx) {
   // friendCell turns a friend's meal (api/sales friends) into the cell
   // openSell takes. friend is '' for an unnamed friend, so the title still
   // says "for a friend".
+  // findExtra finds the extra slot named slotName ("dinner#e1") on meal
+  // cell c, as [extra, slot], or null.
+  function findExtra(c, slotName) {
+    for (const x of (c && c.extras) || []) for (const s of x.slots || []) if (s.slot === slotName) return [x, s];
+    return null;
+  }
+
+  // extraCell turns one of meal cell c's extra slots into the cell openSell
+  // takes: the meal's times, the slot's task or schedule, and its sale in
+  // api/sales once one is recorded.
+  function extraCell(date, c, x, s) {
+    const sales = D().sales || [];
+    const i = sales.findIndex((v) => v.date === date && v.slot === s.slot);
+    return {
+      meal: c.meal, slot: s.slot, extra: x.name, rate: x.rate, mess: x.mess || c.mess, diet: c.diet,
+      start: c.start, end: c.end, opens: c.opens, opens_after: c.opens_after,
+      state: s.state, task: s.task || null, schedule: s.schedule || null, sale: i >= 0 ? i : null, ask: null,
+    };
+  }
+
   const friendCell = (f) => ({ meal: f.meal, mess: f.mess, diet: f.diet, start: f.start, end: f.end, ask: f.ask, task: f.task,
     schedule: f.schedule, opens: f.opens, opens_after: f.opens_after, friend: f.friend || '' });
 
-  return { open: openSell, isSold, friendCell, priceSlider, priceText, listAt, listWord, listWhen, sellBounds, sellDefaults };
+  return { open: openSell, isSold, friendCell, findExtra, extraCell, priceSlider, priceText, listAt, listWord, listWhen, sellBounds, sellDefaults };
 }

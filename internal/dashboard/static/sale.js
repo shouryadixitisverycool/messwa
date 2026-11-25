@@ -34,8 +34,13 @@ const won = (v) => v.state === 'sold' || (v.pay && v.pay.state === 'sent');
 const rup = (x) => '₹' + (Number.isInteger(x) ? x : x.toFixed(2));
 // A friend's meal is stored under a slot like "dinner#f1"; show "dinner"
 // and whose it is.
+// An extra sold apart from its meal (an egg with Kadamba's dinner) is
+// stored under a slot like "dinner#e1" and names itself in extra: show
+// "dinner · Egg".
 const mealOf = (v) => v.base_meal || v.meal.split('#')[0];
-const mealLabel = (v) => (v.for_friend ? `${mealOf(v)} · for ${v.friend || 'a friend'}` : mealOf(v));
+const mealLabel = (v) => (v.for_friend ? `${mealOf(v)} · for ${v.friend || 'a friend'}` : v.extra ? `${mealOf(v)} · ${v.extra}` : mealOf(v));
+// saleWord names a sale in a sentence: "dinner", "dinner egg".
+const saleWord = (v) => (v.extra ? `${mealOf(v)} ${v.extra.toLowerCase()}` : mealOf(v));
 
 // ---------- reading a buyer ----------
 
@@ -133,24 +138,10 @@ function saleClosed() { saleSheet = null; }
 function renderToday(box, kept) {
   const list = (D && D.sales) || [];
   const waiting = (D && D.scheduled) || [];
-  const date = ymd(now());
-  const used = new Set();
-  const cards = boardMeals().map((meal) => {
-    const v = list.find((x) => !x.for_friend && x.date === date && mealOf(x) === meal);
-    if (v && (!isOver(v) || won(v))) {
-      used.add(v.id);
-      return kept && v.id === rangeEdit.id ? kept : chest(v);
-    }
-    const s = waiting.find((x) => !x.for_friend && x.date === date && x.meal === meal);
-    if (s) return scheduledCard(s);
-    if (v) used.add(v.id);
-    return mealTile(date, meal, v);
-  });
-  for (const v of list) {
-    if (used.has(v.id) || isOver(v)) continue;
-    used.add(v.id);
-    cards.push(kept && v.id === rangeEdit.id ? kept : chest(v));
-  }
+  const plan = todayPlan(list, waiting, ymd(now()), boardMeals());
+  const cards = plan.cards.map((p) => (p.kind === 'tile' ? mealTile(plan.date, p.meal, p.v)
+    : p.kind === 'sched' ? scheduledCard(p.s) : kept && p.v.id === rangeEdit.id ? kept : chest(p.v)));
+  const used = plan.used;
   const grid = el('div', 'ms-grid today-grid');
   grid.append(...cards);
   packToday(box, grid);
@@ -167,6 +158,45 @@ function renderToday(box, kept) {
     }
   }
   box.replaceChildren(...parts);
+}
+
+// todayPlan decides the Today cards: for each meal on today's board its
+// sale ({kind: 'sale', v}) while it sells or once it sold, else its
+// schedule ({kind: 'sched', s}), else a tile ({kind: 'tile', meal, v}).
+// Extras sold apart from their meal (v.extra) never stand in for the meal:
+// they follow as cards of their own, with today's scheduled extras, then
+// every other running sale. used holds the sale ids shown, so the rest can
+// fold under ENDED.
+function todayPlan(list, waiting, date, meals) {
+  const used = new Set();
+  const own = (x) => !x.for_friend && !x.extra && x.date === date;
+  const cards = meals.map((meal) => {
+    const v = list.find((x) => own(x) && mealOf(x) === meal);
+    if (v && (!isOver(v) || won(v))) {
+      used.add(v.id);
+      return { kind: 'sale', v };
+    }
+    const s = waiting.find((x) => own(x) && x.meal === meal);
+    if (s) return { kind: 'sched', s };
+    if (v) used.add(v.id);
+    return { kind: 'tile', meal, v };
+  });
+  // Today's extras, meal by meal: sold or selling first, then scheduled.
+  const order = (m) => { const i = meals.indexOf(m); return i < 0 ? meals.length : i; };
+  const xsales = list.filter((x) => x.extra && !x.for_friend && x.date === date && (!isOver(x) || won(x)));
+  const xwait = waiting.filter((x) => x.extra && !x.for_friend && x.date === date);
+  const xs = [...xsales.map((v) => ({ kind: 'sale', v, m: mealOf(v), k: 0 })), ...xwait.map((s) => ({ kind: 'sched', s, m: mealOf(s), k: 1 }))];
+  xs.sort((a, b) => order(a.m) - order(b.m) || a.k - b.k || (a.v || a.s).meal.localeCompare((b.v || b.s).meal));
+  for (const x of xs) {
+    if (x.v) used.add(x.v.id);
+    cards.push(x.kind === 'sale' ? { kind: 'sale', v: x.v } : { kind: 'sched', s: x.s });
+  }
+  for (const v of list) {
+    if (used.has(v.id) || isOver(v)) continue;
+    used.add(v.id);
+    cards.push({ kind: 'sale', v });
+  }
+  return { date, cards, used };
 }
 
 // packToday lays the Today cards out masonry style. A plain grid row is as
@@ -225,6 +255,8 @@ function mealTile(date, meal, v) {
   else if (c.state === 'none') body.append(el('span', 'tile-line', 'Nothing to sell.'));
   else if (line) body.append(el('span', 'tile-line', line));
   t.append(body);
+  const xrow = extrasRow(date, c);
+  if (xrow) t.append(xrow);
 
   // A meal still to come can start selling. The sell sheet opens here when
   // the ledger has the meal; otherwise the sales page plans it.
@@ -242,6 +274,42 @@ function mealTile(date, meal, v) {
   if (v && v.buyers.length) tapCard(t, () => openSaleBuyer(v));
   return t;
 }
+
+// extrasRow is a meal's registered extras on its card: "3× Egg registered
+// · 2 left to sell", with a link to the meal's Extras section on the sales
+// page, where they sell apart from the meal. Null when the ledger shows
+// none.
+function extrasRow(date, c) {
+  const xs = (c && c.extras) || [];
+  if (!xs.length) return null;
+  const row = el('div', 'ms-xrow');
+  const ic = el('span', 'ms-xic');
+  ic.append(svgEl(extraIcon()));
+  const words = el('span', 'ms-xwords');
+  let left = 0;
+  xs.forEach((x, i) => {
+    left += x.available || 0;
+    if (i) words.append(' · ');
+    words.append(el('b', '', `${x.total}× ${x.name}`), ' registered');
+    const bits = [x.available ? `${x.available} left to sell` : '', x.selling ? `${x.selling} selling` : '', x.scheduled ? `${x.scheduled} scheduled` : '', x.sold ? `${x.sold} sold` : '']
+      .filter(Boolean);
+    if (bits.length) words.append(` · ${bits.join(' · ')}`);
+  });
+  row.append(ic, words);
+  if (typeof N !== 'undefined' && N && N.owner && c.end > now()) {
+    const go = el('a', 'ms-btn ms-xgo' + (left && !N.sell_off ? ' egg' : ''), left ? `SELL ${xs.length === 1 ? pluralUp(xs[0].name) : 'EXTRAS'}` : 'MANAGE');
+    go.href = `sales.html#extras=${encodeURIComponent(`${date}|${c.meal}`)}`;
+    go.setAttribute('aria-label', left ? `Sell your ${c.meal} extras on their own` : `Manage your ${c.meal} extras`);
+    row.append(go);
+  }
+  return row;
+}
+const pluralUp = (name) => {
+  const raw = (name || 'extra').trim();
+  if (raw.includes(' ')) return raw.toUpperCase();
+  const w = raw.toUpperCase();
+  return /S$/.test(w) ? w : w + 'S';
+};
 
 // renderScheduled fills box with the sales waiting for their meal, soonest
 // first. The rest are on the sales page.
@@ -267,9 +335,12 @@ function renderScheduled(box) {
 function mealHead(v, cls) {
   const dot = el('span', 'ms-mess');
   dot.style.setProperty('--m', messColor(v.mess));
-  const diet = el('span', 'ms-diet');
-  diet.append(svgEl(dietMark(v.diet)));
+  // An extra shows the egg where a meal shows its diet, and names itself
+  // after the meal: "Dinner · Egg".
+  const diet = el('span', 'ms-diet' + (v.extra ? ' ms-egg' : ''));
+  diet.append(svgEl(v.extra ? extraIcon() : dietMark(v.diet)));
   const name = el('span', cls, cap(mealOf(v)));
+  if (v.extra) name.append(el('span', 'ms-xtag', ` · ${v.extra}`));
   const sub = [v.for_friend ? `for ${v.friend || 'a friend'}` : '', v.date === ymd(now()) ? '' : dayWord(v.date)].filter(Boolean).join(' · ');
   if (sub) name.append(el('small', '', ' · ' + sub));
   return [dot, diet, name];
@@ -280,9 +351,9 @@ function chest(v) {
   const needs = looks.filter((l) => l.cls === 'need' || l.cls === 'chk').length;
   const paying = payingNow(v);
   const failed = v.posts.filter((p) => p.state === 'failed').length;
-  const c = el('section', 'mysale' + (won(v) ? ' sold' : paying ? ' pay' : needs ? ' hot' : ''));
+  const c = el('section', 'mysale' + (won(v) ? ' sold' : paying ? ' pay' : needs ? ' hot' : '') + (v.extra ? ' extra' : ''));
   c.dataset.id = v.id;
-  c.setAttribute('aria-label', v.for_friend ? `Your sale of ${mealLabel(v)}` : `Your ${mealOf(v)} sale`);
+  c.setAttribute('aria-label', v.for_friend ? `Your sale of ${mealLabel(v)}` : `Your ${saleWord(v)} sale`);
 
   const top = el('div', 'ms-top');
   top.append(...mealHead(v, 'ms-meal'));
@@ -319,6 +390,11 @@ function chest(v) {
   if (!won(v)) c.append(postsRow(v));
   const mk = marketRow(v);
   if (mk) c.append(mk);
+  // A meal's own card says what became of its extras, which it sells without.
+  if (!v.extra && !v.for_friend) {
+    const xrow = extrasRow(v.date, ledgerCell(v.date, mealOf(v)));
+    if (xrow) c.append(xrow);
+  }
   const acts = cardActions(v);
   if (acts) c.append(acts);
   if (v.state === 'active' || v.buyers.length) tapCard(c, () => openTaskMenu(v) || openSaleBuyer(v));
@@ -331,6 +407,7 @@ function chest(v) {
 function openTaskMenu(v, view) {
   if (v.state !== 'active') return false;
   if (v.for_friend) return openFriendHere(v.id, 'task', view);
+  if (v.extra) return openExtraHere(v.date, v.meal, view);
   const cell = ledgerCell(v.date, v.meal);
   if (!cell || !cell.task || cell.task.id !== v.id) return false;
   return openSellHere(v.date, v.meal, view);
@@ -342,9 +419,9 @@ function openTaskMenu(v, view) {
 // change the price or unschedule. The mess and diet come from the ledger the nudge reads
 // (N in app.js), when it has loaded.
 function scheduledCard(s) {
-  const cell = ledgerCell(s.date, s.meal);
+  const cell = ledgerCell(s.date, mealOf(s));
   const v = { ...s, mess: s.mess || (cell && cell.mess), diet: cell && cell.diet };
-  const c = el('section', 'mysale sched');
+  const c = el('section', 'mysale sched' + (s.extra ? ' extra' : ''));
   c.dataset.schedule = s.id;
   c.setAttribute('aria-label', `Your ${mealLabel(v)} sale, scheduled for ${hm(s.at)}`);
 
@@ -370,6 +447,10 @@ function scheduledCard(s) {
     s.autopilot ? [{ t: 'On autopilot: it skips any buyer who would need you.', c: 'cc' }] : null,
   ].filter(Boolean));
   c.append(price);
+  if (!s.for_friend && !s.extra && cell && cell.extras && cell.extras.length) {
+    const xr = extrasRow(s.date, cell);
+    if (xr) c.append(xr);
+  }
 
   const err = el('p', 'ms-err');
   err.setAttribute('role', 'alert');
@@ -398,7 +479,7 @@ function scheduledCard(s) {
   // schedules the offer for then.
   const early = s.opens && now() < s.opens;
   const go = btn(early ? 'grn after' : 'grn', early ? `⏰ Send after ${s.opens_after || 'meal'} ends` : '▶ Start now', (x) => act(x, { action: 'start', date: s.date, meal: s.meal, min: s.min, max: s.max, now: true, autopilot: !!s.autopilot },
-    early ? `Scheduled. Your ${mealOf(v)} goes up at ${hm(s.opens)}` : `Selling your ${mealOf(v)}${s.autopilot ? ' on autopilot' : ''}`));
+    early ? `Scheduled. Your ${saleWord(v)} goes up at ${hm(s.opens)}` : `Selling your ${saleWord(v)}${s.autopilot ? ' on autopilot' : ''}`));
   if (early) {
     const prev = s.opens_after;
     go.title = `Posts at ${hm(s.opens)}, once ${prev || 'the meal before'} ends. An offer sent during ${prev || 'another meal'} gets read as one for ${prev || 'that meal'}.`;
@@ -411,7 +492,7 @@ function scheduledCard(s) {
   auto.title = 'Autopilot sells without waiting on you: it skips any buyer who would need you, even one offering more.';
   // Without the ledger loaded it goes to the sales page instead.
   tapCard(c, () => {
-    if (s.for_friend ? openFriendHere(s.id, 'schedule') : openSellHere(s.date, s.meal)) return;
+    if (s.for_friend ? openFriendHere(s.id, 'schedule') : s.extra ? openExtraHere(s.date, s.meal) : openSellHere(s.date, s.meal)) return;
     location.href = s.for_friend ? 'sales.html' : `sales.html#sell=${encodeURIComponent(`${s.date}|${s.meal}`)}`;
   });
   c.append(a, err);
@@ -432,10 +513,24 @@ function tapCard(c, open) {
   });
 }
 
+// openExtraHere opens the sell sheet for an extra sold apart from its meal,
+// by its slot ("dinner#e1"), from the ledger the nudge loaded. It returns
+// false when that ledger doesn't have the slot yet.
+function openExtraHere(date, slot, view) {
+  if (typeof SELL === 'undefined' || typeof N === 'undefined' || !N || !N.owner) return false;
+  const c = ledgerCell(date, slot.split('#')[0]);
+  const hit = c && SELL.findExtra(c, slot);
+  if (!hit) return false;
+  sheet.className = 'sheet sell-sheet';
+  SELL.open(date, SELL.extraCell(date, c, ...hit), view);
+  return true;
+}
+
 // ledgerCell finds a meal in the sales ledger app.js loaded for the nudge.
 function ledgerCell(date, meal) {
   if (typeof N === 'undefined' || !N) return null;
-  const days = N.ahead ? [...N.days, { date: N.ahead.date, cells: [N.ahead.cell] }] : N.days;
+  const days = [...(N.days || []), ...(N.upcoming || [])];
+  if (N.ahead) days.push({ date: N.ahead.date, cells: [N.ahead.cell] });
   const d = days.find((x) => x.date === date);
   return (d && d.cells.find((x) => x.meal === meal)) || null;
 }
@@ -544,7 +639,7 @@ function rangeEditor(v) {
   const fixed = v.min === v.max;
   // The scale hugs the current range, so a ₹5 step still moves a thumb a
   // useful distance. Typing goes past it.
-  const B = { lo: Math.max(5, Math.floor((v.min * 0.6) / 5) * 5), hi: Math.max(20, Math.ceil((v.max * 1.5) / 5) * 5) };
+  const B = { lo: v.extra ? 1 : Math.max(5, Math.floor((v.min * 0.6) / 5) * 5), hi: Math.max(20, Math.ceil((v.max * 1.5) / 5) * 5) };
 
   const box = el('div', 'ms-edit');
   const head = el('div', 'eh');
@@ -721,9 +816,10 @@ function postsRow(v) {
 
 // The other open listings for the same meal, cheapest first, yours in gold.
 function marketRow(v) {
-  if (!D || v.state !== 'active') return null;
+  // The market lists meals; an extra has nothing there to compare with.
+  if (!D || v.state !== 'active' || v.extra) return null;
   const mine = new Set(v.listings);
-  const ls = D.listings.filter((l) => l.kind !== 'buy' && l.mess === v.mess && l.meal === mealOf(v) && l.meal_date === v.date
+  const ls = D.listings.filter((l) => l.kind !== 'buy' && l.diet !== 'extra' && l.mess === v.mess && l.meal === mealOf(v) && l.meal_date === v.date
     && l.status === 'available' && (!v.diet || !l.diet || l.diet === v.diet) && (l.price != null || mine.has(l.id)));
   if (ls.length < 2) return null;
   ls.sort((a, b) => (a.price ?? 1e9) - (b.price ?? 1e9));
@@ -1106,7 +1202,9 @@ function saleActionForm(v, action, buyer) {
     const price = field('price', 'Sale price (₹)', buyer ? buyer.agreed || buyer.asked || buyer.offer || '' : '', 'number');
     price.min = '1'; price.max = '10000'; price.step = '1'; price.required = true;
     field('note', 'Note (optional)');
-    form.append(el('p', 'sb-note', 'Confirm only after you sold the meal. This stops negotiation, records it as paid and sends the buyer the meal QR. Other buyers get the usual sold notice.'));
+    form.append(el('p', 'sb-note', v.extra
+      ? `Confirm only after you sold the ${saleWord(v)}. This stops negotiation, records it as paid and sends the buyer the QR. Other buyers get the usual sold notice.`
+      : 'Confirm only after you sold the meal. This stops negotiation, records it as paid and sends the buyer the meal QR. Other buyers get the usual sold notice.'));
   } else if (action === 'add') {
     form.append(el('p', 'sb-note', 'The bot will send this buyer its opening quote.'));
   } else if (action === 'stop') {

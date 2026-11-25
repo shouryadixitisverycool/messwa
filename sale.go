@@ -94,6 +94,13 @@ type mealPortal interface {
 	QRForMeal(ctx context.Context, date, meal, accountHash string) (portal.CurrentQR, error)
 }
 
+// extraSalePortal is implemented by portal clients that verify and fetch QR
+// codes for separately sold extra registrations (such as dinner eggs).
+type extraSalePortal interface {
+	RequireExtra(ctx context.Context, date, meal, extraName string, need int) (portal.ExtraRegistration, int, error)
+	QRForExtra(ctx context.Context, date, meal, extraName string, need int, accountHash string) (portal.CurrentQR, int, error)
+}
+
 var errBuyerPassed = errors.New("buyer passed on the meal")
 var errBuyerTimedOut = errors.New("buyer payment window expired")
 
@@ -120,7 +127,9 @@ type sale struct {
 	muted func(context.Context, types.JID) bool
 
 	date, meal string
-	end        time.Time
+	// extra is non-empty when selling a registered extra separately (e.g. "Egg").
+	extra string
+	end   time.Time
 	// cfg is the account's config, for its wording; nil says the built-in
 	// lines. joined is everyone who replied, for their names, and extras
 	// lists the meal's extras. Both may be nil.
@@ -135,6 +144,17 @@ type sale struct {
 	portal      mealPortal
 	accountHash string
 	portalMess  string
+	// extraCapacity checks capacity before a buyer's turn (counting other
+	// armed reservations); armGuard runs that check and the store arm write
+	// atomically under extrasMu; claimGuard runs the post-payment sold-only
+	// capacity check and payment claim atomically under extrasMu so two
+	// simultaneous payments on the last egg allocate strictly to one buyer.
+	extraCapacity func(ctx context.Context) error
+	armGuard      func(ctx context.Context, arm func() (time.Time, error)) (time.Time, error)
+	claimGuard    func(ctx context.Context, claim func() (bool, error)) (bool, error)
+	// refund records a payment claimGuard turned down, so the owner knows
+	// to send it back. Unset outside sell tasks.
+	refund func(ctx context.Context, buyer types.JID, amount, reason string)
 	// Without a portal, this image is sent. testImage marks the embedded
 	// placeholder, so the payment prompt says it's a test.
 	image     []byte
@@ -221,9 +241,26 @@ func findSlot(cfg *config.Config, date, meal string) (meals.Slot, error) {
 	return meals.Slot{}, errors.New("meal must name a configured meal")
 }
 
-// usePortal checks the meal's registration and binds the sale to the
-// portal account, not the QR token that rotates daily.
+// usePortal checks the meal's (or extra's) registration and binds the sale to
+// the portal account, not the QR token that rotates daily.
 func (s *sale) usePortal(ctx context.Context, p mealPortal, vegOnly func(string) bool) error {
+	if s.extra != "" {
+		ep, ok := p.(extraSalePortal)
+		if !ok {
+			return errors.New("portal does not support extra registrations")
+		}
+		current, _, err := ep.QRForExtra(ctx, s.date, baseMeal(s.meal), s.extra, 1, s.accountHash)
+		if err != nil {
+			return err
+		}
+		s.portal = p
+		s.accountHash = current.AccountHash
+		s.portalMess = current.Registration.Mess
+		s.mess, _ = current.Registration.MessDiet()
+		s.diet = ""
+		s.imageHash = "portal:" + s.accountHash
+		return nil
+	}
 	current, err := p.QRForMeal(ctx, s.date, s.meal, s.accountHash)
 	if err != nil {
 		return err
@@ -245,6 +282,17 @@ func (s *sale) checkRegistration(ctx context.Context) error {
 	if s.portal == nil {
 		return nil
 	}
+	if s.extra != "" {
+		if s.extraCapacity != nil {
+			return s.extraCapacity(ctx)
+		}
+		ep, ok := s.portal.(extraSalePortal)
+		if !ok {
+			return errors.New("portal does not support extra registrations")
+		}
+		_, _, err := ep.RequireExtra(ctx, s.date, baseMeal(s.meal), s.extra, 1)
+		return err
+	}
 	reg, err := s.portal.RequireRegistration(ctx, s.date, s.meal)
 	if err != nil {
 		return err
@@ -256,7 +304,7 @@ func (s *sale) checkRegistration(ctx context.Context) error {
 }
 
 func (s *sale) reservation(peer types.JID, amount string) store.Delivery {
-	return store.Delivery{Date: s.date, Meal: s.meal, Peer: peer.String(), Amount: amount, ImageHash: s.imageHash, ArmedAt: time.Now(), Mess: s.mess, Diet: s.diet}
+	return store.Delivery{Date: s.date, Meal: s.meal, Peer: peer.String(), Amount: amount, ImageHash: s.imageHash, ArmedAt: time.Now(), Mess: s.mess, Diet: s.diet, Extra: s.extra}
 }
 
 // qrPreparationError means no WhatsApp message was attempted. Fetching the
@@ -300,14 +348,26 @@ func (s *sale) sendQR(ctx context.Context, recipient types.JID, id string, d sto
 func (s *sale) prepareQR(ctx context.Context, d store.Delivery, queued bool) (*waE2E.Message, error) {
 	data := s.image
 	if s.portal != nil {
-		current, err := s.portal.QRForMeal(ctx, d.Date, d.Meal, s.accountHash)
-		if err != nil {
-			return nil, &qrPreparationError{fmt.Errorf("fetch current meal QR: %w", err)}
+		if s.extra != "" {
+			ep, ok := s.portal.(extraSalePortal)
+			if !ok {
+				return nil, errors.New("portal does not support extra registrations")
+			}
+			current, _, err := ep.QRForExtra(ctx, d.Date, baseMeal(d.Meal), s.extra, 1, s.accountHash)
+			if err != nil {
+				return nil, &qrPreparationError{fmt.Errorf("fetch current extra QR: %w", err)}
+			}
+			data = current.PNG
+		} else {
+			current, err := s.portal.QRForMeal(ctx, d.Date, d.Meal, s.accountHash)
+			if err != nil {
+				return nil, &qrPreparationError{fmt.Errorf("fetch current meal QR: %w", err)}
+			}
+			if queued && current.Registration.Mess != s.portalMess {
+				return nil, errors.New("portal registration changed during the sale")
+			}
+			data = current.PNG
 		}
-		if queued && current.Registration.Mess != s.portalMess {
-			return nil, errors.New("portal registration changed during the sale")
-		}
-		data = current.PNG
 	}
 	data, mime, width, height, err := deliveryImageBytes(data)
 	if err != nil {
@@ -317,8 +377,12 @@ func (s *sale) prepareQR(ctx context.Context, d store.Delivery, queued bool) (*w
 	if err != nil {
 		return nil, &qrPreparationError{fmt.Errorf("upload QR media: %w", err)}
 	}
+	extra := d.Extra
+	if extra == "" {
+		extra = s.extra
+	}
 	return &waE2E.Message{ImageMessage: &waE2E.ImageMessage{
-		Caption: proto.String(qrCaption(d.Mess, baseMeal(d.Meal))), Mimetype: proto.String(mime), Width: proto.Uint32(uint32(width)), Height: proto.Uint32(uint32(height)),
+		Caption: proto.String(qrCaptionFor(d.Mess, baseMeal(d.Meal), extra)), Mimetype: proto.String(mime), Width: proto.Uint32(uint32(width)), Height: proto.Uint32(uint32(height)),
 		URL: &up.URL, DirectPath: &up.DirectPath, MediaKey: up.MediaKey, FileEncSHA256: up.FileEncSHA256, FileSHA256: up.FileSHA256, FileLength: &up.FileLength,
 	}}, nil
 }
@@ -365,7 +429,13 @@ type turn struct {
 func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, t turn) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	armedAt, err := t.arm(ctx, d)
+	var armedAt time.Time
+	var err error
+	if s.armGuard != nil && len(t.prompt) > 0 {
+		armedAt, err = s.armGuard(ctx, func() (time.Time, error) { return t.arm(ctx, d) })
+	} else {
+		armedAt, err = t.arm(ctx, d)
+	}
 	if err != nil {
 		return err
 	}
@@ -449,10 +519,14 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 				}
 			}
 			s.log.Info("payment assumed; sending meal image", "date", d.Date, "meal", d.Meal, "amount", d.Amount, "paid_by", paidBy(paid.Kind))
-			err := deliverOnce(sendCtx, s.st, d, paid, id, func() error { return s.sendQR(sendCtx, e.Info.Chat, id, d, queued) })
+			err := deliverOnceGuarded(sendCtx, s.st, d, paid, id, s.claimGuard, func() error { return s.sendQR(sendCtx, e.Info.Chat, id, d, queued) })
 			if err == nil {
 				s.log.Info("meal image sent", "date", d.Date, "meal", d.Meal, "message_id", id)
 				s.note(buyer, store.EventQRSent, paise(d.Amount), "")
+			}
+			var refused *refusedPaymentError
+			if errors.As(err, &refused) && s.refund != nil {
+				s.refund(sendCtx, buyer, d.Amount, fmt.Sprintf("paid INR %s but could not honour the sale (%v); refund them", d.Amount, refused.err))
 			}
 			done <- err
 		}()
@@ -946,8 +1020,14 @@ func (s *sale) sellToQueue(ctx, notifyCtx context.Context, q *offerQueue, j sale
 				}
 				continue
 			}
-			if err := s.checkRegistration(ctx); err != nil {
-				return err
+			if s.armGuard == nil {
+				if err := s.checkRegistration(ctx); err != nil {
+					return err
+				}
+			} else if s.handoff != nil {
+				if err := s.checkRegistration(ctx); err != nil {
+					return err
+				}
 			}
 			if s.holding != nil {
 				s.holding(true)
@@ -1111,7 +1191,7 @@ type lineJournal interface {
 
 // lines are the bot's lines for this meal, said to buyer.
 func (s *sale) lines(buyer types.JID) lines {
-	l := saleLines(s.cfg, s.mess, s.diet, s.meal, s.date, s.end, s.extras)
+	l := saleLinesFor(s.cfg, s.mess, s.diet, s.meal, s.extra, s.date, s.end, s.extras)
 	if s.joined != nil && !buyer.IsEmpty() {
 		l = l.forBuyer(s.joined.name(buyer))
 	}

@@ -18,6 +18,14 @@ let calBusy = false;     // a request from the panel is in flight
 let calForm = null;      // the panel's form values, kept across reloads
 let calNote = null;      // {key, error|text}: what the last action did
 let calPanelSig = '';    // what the panel was last drawn from
+// Extras (Kadamba's dinner eggs) sell apart from their meal, from the
+// panel's Extras section.
+const calXFetched = new Map(); // "date|meal" → {extras, at, dRev, error, loading}: api/meal-extras answers
+const calXForms = new Map();   // "date|meal|Egg" → {count, min, max}: what the section's form holds
+let calXNote = null;           // {key, error|text}: what the last extras action did
+let calXVer = 0;               // bumps when a fetch starts or ends, so the panel redraws
+let calDRev = 0;               // bumps on each api/sales load so same-second Verify answers win
+let calXBtns = [];             // the sell buttons on screen, relabelled when the posting time moves
 
 const calKey = (date, c) => `${date}|${c.meal}`;
 const calStep = 5;       // posting time moves in 5-minute steps
@@ -30,7 +38,27 @@ function calCells() {
   const m = new Map();
   for (const d of D.days) m.set(d.date, d.cells);
   for (const d of D.upcoming || []) if (d.date > D.today) m.set(d.date, d.cells);
+  // Extras checked from the panel stand in for the page's when the page has
+  // none for that meal, when fetched after this page load (even within the
+  // same second), or when strictly newer than the page's verification time.
+  for (const [key, f] of calXFetched) {
+    if (f.loading || !f.extras) continue;
+    const [date, meal] = key.split('|');
+    const c = m.get(date)?.find((x) => x.meal === meal);
+    if (!c || (c.extras?.length && f.dRev !== calDRev && !(f.at > (c.extras_verified_at || 0)))) continue;
+    c.extras = f.extras;
+    c.extras_err = f.error || '';
+  }
   return m;
+}
+function calXReset() { calXFetched.clear(); calXVer++; }
+// A fresh page drops panel answers for meals past tomorrow: the page has no
+// extras of its own for them, so an old answer would keep showing slots
+// cancelled since. The panel asks again when the meal is open.
+function calXPageLoaded() {
+  calDRev++;
+  const tomorrow = addDays(D.today, 1);
+  for (const [key, f] of calXFetched) if (!f.loading && key.split('|')[0] > tomorrow) calXFetched.delete(key);
 }
 const calFirst = () => mondayOf(D.days[0]?.date || D.today);
 const calLast = () => mondayOf((D.upcoming || []).at(-1)?.date || D.today);
@@ -127,9 +155,9 @@ function renderCalendar() {
     g.append(h);
   }
 
-  // Skip a meal row when nothing in it was registered this week.
+  // Skip a meal row when nothing in it (nor any extra) was registered this week.
   const cellAt = (date, meal) => cells.get(date)?.find((x) => x.meal === meal);
-  const shown = meals().filter((meal) => dates.some((date) => { const c = cellAt(date, meal); return c && c.state !== 'none'; }));
+  const shown = meals().filter((meal) => dates.some((date) => { const c = cellAt(date, meal); return c && (c.state !== 'none' || c.extras?.length); }));
   for (const meal of shown) {
     const plannable = dates.flatMap((date) => { const c = cellAt(date, meal); return c && calPlannable(c) ? [calKey(date, c)] : []; });
     const mh = el(plannable.length ? 'button' : 'div', 'mh');
@@ -146,7 +174,7 @@ function renderCalendar() {
     for (const date of dates) {
       const c = cellAt(date, meal);
       if (!c) { g.append(el('div', 'slot out')); continue; }
-      if (c.state === 'none') { g.append(el('div', 'slot')); continue; }
+      if (c.state === 'none' && !c.extras?.length) { g.append(el('div', 'slot')); continue; }
       g.append(calCellNode(date, c, picked));
     }
   }
@@ -196,10 +224,20 @@ function renderCalMeta(dates, cells) {
   const wasted = all.filter(([, c]) => c.state === 'wasted');
   const lost = sum(wasted.map(([, c]) => c.ask || 0));
   const queued = all.filter(([, c]) => c.schedule).length;
+  // Extras sold apart from their meal count toward the week's money.
+  const xsold = D.sales.filter((s) => s.extra && isSold(s) && dates.includes(s.date));
   const meta = $('ledMeta');
   meta.replaceChildren(`${fmtShort(dates[0])} - ${fmtShort(dates[6])}`);
   if (D.owner) {
-    if (sold.length) meta.append(' · ', el('b', '', String(sold.length)), ' sold · ', el('span', 'gold', rupees(earned)));
+    if (sold.length || xsold.length) {
+      if (sold.length) {
+        meta.append(' · ', el('b', '', String(sold.length)), ' sold');
+        if (xsold.length) meta.append(' + ', el('b', '', String(xsold.length)), ` extra${xsold.length === 1 ? '' : 's'}`);
+      } else {
+        meta.append(' · ', el('b', '', String(xsold.length)), ` extra${xsold.length === 1 ? '' : 's'} sold`);
+      }
+      meta.append(' · ', el('span', 'gold', rupees(earned + sum(xsold.map((s) => s.amount)))));
+    }
     if (queued) meta.append(' · ', el('b', '', String(queued)), ' scheduled');
   } else {
     $('ledName').textContent = 'Meal ledger';
@@ -223,6 +261,7 @@ function calClick(key, add) {
     calPicked = calPicked.length === 1 && calPicked[0] === key ? [] : [key];
   }
   calNote = null;
+  calXNote = null;
   renderCalendar();
 }
 
@@ -244,7 +283,9 @@ function calClear() { calPicked = []; calNote = null; renderCalendar(); }
 function renderCalPanel() {
   const picks = calPicks();
   const one = picks.length === 1 ? picks[0] : null;
-  const sig = JSON.stringify([calPicked, picks, calBusy, calNote, D.sell_off, calMulti, calPicked.length ? '' : weekDates()[0]]);
+  // A meal past tomorrow has no extras on the page, so ask the portal now.
+  if (one && calXWant(...one)) calXLoad(one[0], one[1].meal, false);
+  const sig = JSON.stringify([calPicked, picks, calBusy, calNote, calXNote, calXVer, D.sell_off, calMulti, calPicked.length ? '' : weekDates()[0]]);
   // A reload that changed nothing for these meals keeps the panel as it is,
   // so a slider being dragged or a box being typed in isn't rebuilt.
   if (sig === calPanelSig && $('insp').childNodes.length) return;
@@ -254,6 +295,7 @@ function renderCalPanel() {
   if (!calForm || calForm.key !== formKey || !calForm.touched) calForm = picks.length && picks.every(([, c]) => calPlannable(c)) ? { key: formKey, ...calFormFor(picks) } : null;
 
   const panel = $('insp');
+  calXBtns = [];
   panel.classList.toggle('calm', !picks.length);
   if (!picks.length) { $('sideK').textContent = 'This week'; return calWeekPanel(panel); }
   $('sideK').textContent = one ? 'Meal' : `${picks.length} meals picked`;
@@ -283,14 +325,19 @@ function calWeekPanel(panel) {
 // Its sale opens in the sell sheet.
 function calInfoPanel(panel, date, c) {
   // The head names the meal and its time, so the lines start after them;
-  // the click hints are for the grid.
-  fillLines(panel, cellLines(date, c).slice(2).filter((l) => !(Array.isArray(l) && l[0]?.c === 'lore')));
+  // the click hints are for the grid. Extras get their own section.
+  fillLines(panel, cellLines(date, c, { extras: false }).slice(2).filter((l) => !(Array.isArray(l) && l[0]?.c === 'lore')));
+  const xnote = calXMealNote(c);
+  if (xnote) panel.prepend(xnote);
   panel.prepend(calHead(c, date));
-  if (!D.owner) return;
-  const open = (label, cls) => { const b = el('button', 'sell-btn ' + cls, label); b.type = 'button'; b.onclick = () => openSell(date, c); return b; };
-  if (c.task) panel.append(calActs(open('MANAGE SALE', 'gold')));
-  else if (SELL.isSold(c)) panel.append(calActs(saleChat(D.sales[c.sale]), open('DELETE SALE', 'red')));
-  else if (c.schedule) panel.append(calActs(open('OPEN SCHEDULE', 'gold')));
+  const xsec = calExtrasSec(date, c);
+  if (D.owner) {
+    const open = (label, cls) => { const b = el('button', 'sell-btn ' + cls, label); b.type = 'button'; b.onclick = () => openSell(date, c); return b; };
+    if (c.task) panel.append(calActs(open('MANAGE SALE', 'gold')));
+    else if (SELL.isSold(c)) panel.append(calActs(saleChat(D.sales[c.sale]), open('DELETE SALE', 'red')));
+    else if (c.schedule) panel.append(calActs(open('OPEN SCHEDULE', 'gold')));
+  }
+  if (xsec) panel.append(xsec);
 }
 
 function calHead(c, date) {
@@ -342,6 +389,8 @@ function calPlanPanel(panel, picks) {
     if (c.schedule?.retry_at) panel.append(el('p', 'sell-err', `${c.schedule.detail}. Retrying at ${hm(c.schedule.retry_at)}.`));
     if (c.schedule_issue && !c.schedule) panel.append(el('p', 'sell-err', `${cap(c.schedule_state)}: ${c.schedule_issue}`));
     if (c.schedule?.rule_id) panel.append(calRuleNote(c.schedule));
+    const xnote = calXMealNote(c);
+    if (xnote) panel.append(xnote);
     if (c.kept && !c.schedule) {
       const allow = calBtn('ALLOW RULES AGAIN', '', () => calRun(async () => {
         await send('POST', 'api/recurring-rules', { action: 'allow', date, meal: c.meal });
@@ -417,6 +466,8 @@ function calPlanPanel(panel, picks) {
   const acts = el('div', 'sell-acts cal-acts');
   acts.id = 'calActs';
   panel.append(err, note, acts);
+  const xsec = one && calExtrasSec(...one);
+  if (xsec) panel.append(xsec);
   calDirty();
 }
 
@@ -462,6 +513,8 @@ function calDirty() {
   // Say when each picked meal will go up.
   const when = document.querySelector('#insp .pr-when');
   if (when) when.textContent = one ? calWhenText(one[1], f.off) : `Each meal goes up ${offWords(f.off)}.`;
+  // The extras go up with the meal, so their buttons follow the time too.
+  calXDirty();
 }
 
 function calUnscheduleBtn(scheduled) {
@@ -616,11 +669,277 @@ function calRuleNote(sc) {
   return note;
 }
 
+// ---------- extras ----------
+
+// An extra (an egg registered with Kadamba's dinner) sells on its own: the
+// meal's sale never includes it. The section lists what the mess portal
+// has registered for the meal, the extras already up for sale or sold, and
+// for the owner a form to put some up: how many, at what price.
+
+// calXWant: the page has nothing on c's extras because it only asks the
+// portal for today and tomorrow, and the panel hasn't asked yet.
+const calXWant = (date, c) => c.state !== 'none' && c.end > now() && !c.extras?.length && !c.extras_err
+  && date > addDays(D.today, 1) && !calXFetched.has(calKey(date, c));
+
+// calXLoad asks the server, and through it the mess portal, which extras
+// are registered for date's meal. refresh skips the server's minute-long
+// cache. The panel redraws once the answer is in.
+async function calXLoad(date, meal, refresh) {
+  const key = `${date}|${meal}`;
+  const reqRev = calDRev;
+  const prev = calXFetched.get(key);
+  calXFetched.set(key, { ...(prev || {}), loading: true });
+  calXVer++;
+  let next;
+  try {
+    const r = await fetch(`api/meal-extras?date=${encodeURIComponent(date)}&meal=${encodeURIComponent(meal)}${refresh ? '&refresh=1' : ''}`, { cache: 'no-store' });
+    if (r.status === 401) { toLogin(); return; }
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    next = { extras: data.extras || [], at: data.verified_at || Math.floor(now()), dRev: reqRev, error: data.error || '' };
+  } catch (e) {
+    next = { extras: prev?.extras || null, at: Math.floor(now()), dRev: reqRev, error: e.message };
+  }
+  calXFetched.set(key, next);
+  calXVer++;
+  if (D) renderCalendar();
+}
+
+// calXClamp keeps a count of extras to sell between 1 and what is free.
+const calXClamp = (n, available) => Math.max(1, Math.min(Math.max(1, available), Math.round(Number(n) || 1)));
+
+const calXPlural = (name) => { const w = (name || 'extra').toLowerCase(); return /s$/.test(w) ? w : w + 's'; };
+
+// calXMealNote explains how selling extras separately works and warns that
+// meals and extras share the same account QR at the mess counter.
+function calXMealNote(c) {
+  const xs = (c.extras || []).filter((x) => x.total || x.slots?.length);
+  if (!xs.length) return null;
+  const names = xs.map((x) => (x.name.includes(' ') ? x.name : calXPlural(x.name))).join(' and ');
+  const p = el('p', 'sell-note cal-xmeal');
+  p.append(svgEl(extraIcon()), `Sell ${names} on their own under Extras. Mess and extras share your account QR — tell buyers what they're scanning for.`);
+  return p;
+}
+
+// calXWhen is when extras sold from the panel go up: in the plan panel, at
+// the posting time and autopilot set for the meal; otherwise when a meal
+// sold now would (listAt), 0 meaning straight away.
+function calXWhen(date, c) {
+  const f = calForm;
+  if (f && calPicked.length === 1 && calPicked[0] === calKey(date, c) && calPlannable(c)) {
+    const at = calAt(c, f.off);
+    return { at: at <= now() ? 0 : at, autopilot: !!f.autopilot };
+  }
+  return { at: typeof listAt === 'function' ? listAt(c) || 0 : 0, autopilot: false };
+}
+
+// calXBody is the sell-extras action for count of extra x on date's meal.
+function calXBody(date, c, x, f, startNow) {
+  const w = calXWhen(date, c);
+  const body = { action: 'sell-extras', date, meal: c.meal, extra: x.name, count: calXClamp(f.count, x.available), min: f.min, max: f.max, autopilot: w.autopilot };
+  if (startNow || !w.at) body.now = true;
+  else body.at = w.at;
+  return body;
+}
+
+// calXSell puts the form's count of extra x up for sale, then reloads.
+async function calXSell(date, c, x, f, startNow) {
+  const key = calKey(date, c);
+  if (!calValid(f)) { calXNote = { key, error: 'Use whole rupees: lowest at least ₹1, opening at least the lowest and at most ₹10,000.' }; calPanelSig = ''; renderCalPanel(); return; }
+  const body = calXBody(date, c, x, f, startNow);
+  calBusy = true;
+  calXNote = { key, text: 'Checking your extras on the mess portal…' };
+  renderCalendar();
+  try {
+    const res = await send('POST', 'api/sell-action', body);
+    const n = res?.count || body.count;
+    const what = extraWord(res?.extra || x.name, n);
+    const left = res && res.verified_available != null ? ` ${res.verified_available} left to sell.` : '';
+    calXNote = { key, text: res?.at ? `Scheduled ${what} for ${hm(res.at)}.${left}` : `Selling ${what} now.${left}` };
+    calXForms.delete(`${key}|${x.name}`);
+    calXFetched.delete(key);
+    toast(res?.at ? `Scheduled ${what}` : `Selling ${what}`);
+  } catch (e) {
+    calXNote = { key, error: e.message };
+  } finally {
+    calBusy = false;
+    await load();
+    // load redraws on success; this also covers a reload that failed.
+    if (D) renderCalendar();
+  }
+}
+
+// calXDirty relabels the extras' sell buttons for the posting time now set.
+function calXDirty() {
+  for (const b of calXBtns) b.draw();
+}
+
+const XSLOT = {
+  selling: ['SELLING', 'sel'], scheduled: ['SCHEDULED', 'sch'], armed: ['ARMED', 'arm'], sending: ['PAID', 'arm'],
+  sold: ['SOLD', 'sold'], handoff: ['HANDED OFF', 'arm'],
+};
+
+// calXSlot is one extra already up for sale or sold. It opens the sell
+// sheet, to reprice, mark sold, stop, unschedule or delete the sale.
+function calXSlot(date, c, x, s) {
+  const n = /#e(\d+)$/.exec(s.slot)?.[1];
+  const [word, cls] = XSLOT[s.state] || [String(s.state || '').toUpperCase(), ''];
+  const b = el(D.owner ? 'button' : 'div', `cal-xslot ${cls}`);
+  if (D.owner) {
+    b.type = 'button';
+    b.disabled = calBusy;
+    b.onclick = () => openSell(date, extraCell(date, c, x, s));
+  }
+  const t = s.task, sc = s.schedule;
+  const price = t ? priceText(t) : sc ? priceText(sc) : s.amount ? rupees(s.amount) : '';
+  const tag = el('b', '', s.state === 'scheduled' && sc ? `⏰ ${hm(sc.at)}` : word);
+  b.append(el('span', 'n', `${x.name}${n ? ' ' + n : ''}`), tag, el('span', 'p', price));
+  if (s.buyer) b.append(el('span', 'who', s.buyer));
+  b.setAttribute('aria-label', `${x.name}${n ? ' ' + n : ''}: ${word.toLowerCase()}${price ? ', ' + price : ''}${s.buyer ? ', ' + s.buyer : ''}`);
+  return b;
+}
+
+// calXCount is the how-many box: − / count / + between 1 and max.
+function calXCount(f, max, changed) {
+  const w = el('div', 'pr-box cal-xcount');
+  const minus = el('button', '', '−'), plus = el('button', '', '+');
+  const out = el('output', 'cal-time-v');
+  out.tabIndex = 0;
+  out.setAttribute('role', 'spinbutton');
+  out.setAttribute('aria-label', 'How many to sell');
+  out.setAttribute('aria-valuemin', '1');
+  out.setAttribute('aria-valuemax', String(max));
+  const draw = () => {
+    f.count = calXClamp(f.count, max);
+    out.replaceChildren(String(f.count), el('small', '', ` OF ${max}`));
+    out.setAttribute('aria-valuenow', String(f.count));
+    minus.disabled = f.count <= 1;
+    plus.disabled = f.count >= max;
+  };
+  const step = (d) => { f.count = calXClamp(f.count + d, max); draw(); changed(); };
+  for (const [b, d, word] of [[minus, -1, 'One fewer'], [plus, 1, 'One more']]) {
+    b.type = 'button';
+    b.setAttribute('aria-label', word);
+    b.onclick = () => step(d);
+  }
+  out.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowUp' || e.key === 'ArrowRight') { e.preventDefault(); step(1); }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') { e.preventDefault(); step(-1); }
+  });
+  const field = el('div', 'pr-in');
+  field.append(minus, out, plus);
+  w.append(el('span', 'pr-k', 'HOW MANY'), field);
+  draw();
+  return w;
+}
+
+// calXForm is the owner's form for selling some of extra x.
+function calXForm(date, c, x) {
+  const fk = `${calKey(date, c)}|${x.name}`;
+  let f = calXForms.get(fk);
+  if (!f) {
+    const base = { extra: x.name, rate: x.rate, ask: null, task: null, schedule: null, planner: true };
+    const [min, max] = sellDefaults(base, sellBounds(base));
+    f = { count: x.available, min, max };
+    calXForms.set(fk, f);
+  }
+  f.count = calXClamp(f.count, x.available);
+  const box = el('fieldset', 'plan-fieldset cal-xform');
+  box.disabled = calBusy || !!D.sell_off;
+  const acts = el('div', 'sell-acts cal-acts');
+  const go = calBtn('', 'gold cal-xgo', () => calXSell(date, c, x, f, false));
+  const now_ = calBtn('NOW', '', () => calXSell(date, c, x, f, true));
+  now_.title = 'Post it now instead of with the meal';
+  const draw = () => {
+    const w = calXWhen(date, c);
+    const what = extraWord(x.name, f.count).toUpperCase();
+    go.textContent = w.at ? `SCHEDULE ${what} · ${hm(w.at)}` : `SELL ${what} NOW`;
+    now_.hidden = !w.at;
+    go.disabled = calBusy || !!D.sell_off || !calValid(f);
+  };
+  const count = calXCount(f, x.available, draw);
+  const slider = priceSlider({ extra: x.name, rate: x.rate, ask: null, task: null, planner: true, schedule: { min: f.min, max: f.max } },
+    (lo, hi) => { f.min = lo; f.max = hi; draw(); });
+  box.append(count, ...slider.nodes);
+  acts.append(go, now_);
+  calXBtns.push({ draw });
+  draw();
+  return [box, acts];
+}
+
+// calExtrasSec is the panel's Extras section for one meal, or null when
+// there is nothing to show or check.
+function calExtrasSec(date, c) {
+  const key = calKey(date, c);
+  const f = calXFetched.get(key);
+  const xs = c.extras || [];
+  const ahead = c.state !== 'none' && c.end > now();
+  if (!xs.length && !c.extras_err && !f && !(ahead && D.owner)) return null;
+
+  const sec = el('section', 'cal-xsec');
+  sec.setAttribute('aria-label', 'Extras');
+  const head = el('div', 'cal-xhead');
+  const k = el('span', 'side-k', 'EXTRAS');
+  const when = el('span', 'cal-xwhen');
+  if (f?.loading) when.textContent = 'checking the portal…';
+  else if (f?.at) when.textContent = `checked ${hm(f.at)}`;
+  else if (c.extras_verified_at) when.textContent = `checked ${hm(c.extras_verified_at)}`;
+  else if (xs.length && D.now) when.textContent = `checked ${hm(D.now)}`;
+  const verify = el('button', 'pg cal-xverify', f?.loading ? '…' : '↻ VERIFY');
+  verify.type = 'button';
+  verify.disabled = calBusy || !!f?.loading;
+  verify.title = 'Ask the mess portal again how many are registered';
+  verify.setAttribute('aria-label', 'Check the registered extras on the mess portal again');
+  verify.onclick = () => calXLoad(date, c.meal, true);
+  head.append(k, when, verify);
+  sec.append(head);
+
+  if (c.extras_err) sec.append(el('p', 'sell-err', `Couldn't check the portal: ${c.extras_err}`));
+  if (!xs.length) {
+    sec.append(el('p', 'sell-note cal-xnone', f?.loading && !c.extras_err ? 'Asking the mess portal…' : 'No extras registered for this meal.'));
+  }
+  for (const x of xs) {
+    const item = el('div', 'cal-xitem');
+    const name = el('div', 'cal-xname');
+    const ic = el('span', 'cal-xic');
+    ic.append(svgEl(extraIcon()));
+    name.append(ic, el('b', '', x.name), el('span', '', `${x.total} registered`));
+    if (x.rate) name.append(el('span', 'cal-xrate', `${rupees(x.rate)} each`));
+    item.append(name);
+    const pills = el('div', 'cal-xpills');
+    const pill = (n, word, cls) => { if (n) pills.append(el('span', 'xpill ' + cls, `${n} ${word}`)); };
+    pill(x.available, 'TO SELL', 'left');
+    pill(x.selling, 'SELLING', 'sel');
+    pill(x.scheduled, 'SCHEDULED', 'sch');
+    pill(x.sold, 'SOLD', 'sold');
+    pill(x.availed, 'EATEN', 'ate');
+    if (!pills.children.length) pills.append(el('span', 'xpill ate', x.total ? 'NONE LEFT' : 'NONE'));
+    item.append(pills);
+    if (x.earned) item.append(el('p', 'sell-note cal-xearned', `Earned ${rupees(x.earned)} from ${extraWord(x.name, x.sold)}.`));
+    if (x.slots?.length) {
+      const list = el('div', 'cal-xslots');
+      for (const s of x.slots) list.append(calXSlot(date, c, x, s));
+      item.append(list);
+    }
+    if (D.owner && x.available > 0 && c.end > now()) item.append(...calXForm(date, c, x));
+    sec.append(item);
+  }
+
+  const err = el('p', 'sell-err');
+  err.setAttribute('role', 'alert');
+  const note = el('p', 'sell-note cal-done');
+  note.setAttribute('role', 'status');
+  if (calXNote?.key === key) { if (calXNote.error) err.textContent = calXNote.error; else note.textContent = calXNote.text; }
+  sec.append(err, note);
+  return sec;
+}
+
 // calGoto shows the week with date and opens that meal in the panel.
 function calGoto(date, meal) {
   calWeek = mondayOf(date);
   calPicked = [`${date}|${meal}`];
   calNote = null;
+  calXNote = null;
   renderCalendar();
   $('insp').scrollIntoView({ block: 'center' });
 }

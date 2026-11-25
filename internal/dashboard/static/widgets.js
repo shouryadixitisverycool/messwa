@@ -25,6 +25,9 @@ const HW = (() => {
   };
   const isSold = (s) => s.state === 'sold' || s.state === 'sending';
   const priceDiet = (d) => (d === 'nonveg' || d === 'egg' ? d : 'veg');
+  const dietOf = (s) => (s.extra ? 'extra' : priceDiet(s.diet));
+  const dietName = (d) => (d === 'extra' ? 'Extras' : DIET_LABEL[d]);
+  const saleWhat = (s) => (s.extra ? `${s.meal} · ${s.extra}` : s.meal);
   const messName = (m) => (m ? cap(m) : 'Unknown mess');
   const fmtPhone = (p) => (/^\+91\d{10}$/.test(p) ? `+91 ${p.slice(3, 8)} ${p.slice(8)}` : p);
   const signed = (v) => `${v > 0 ? '+' : v < 0 ? '−' : '±'}${rupees(Math.abs(Math.round(v)))}`;
@@ -59,7 +62,8 @@ const HW = (() => {
     grid.append(el('div'));
     for (const d of week) {
       const h = el('div', 'dh' + (d === N.today ? ' today' : ''), fmt(d, { weekday: 'short' }).toUpperCase());
-      const earned = sum((cells.get(d) || []).filter((c) => c.sale != null && isSold(N.sales[c.sale])).map((c) => N.sales[c.sale].amount));
+      const earned = sum((cells.get(d) || []).filter((c) => c.sale != null && isSold(N.sales[c.sale])).map((c) => N.sales[c.sale].amount))
+        + sum(N.sales.filter((s) => s.extra && isSold(s) && s.date === d).map((s) => s.amount));
       h.append(el('span', earned ? '' : 'none', earned ? rupees(Math.round(earned)) : '-'));
       grid.append(h);
     }
@@ -79,6 +83,7 @@ const HW = (() => {
     const all = week.flatMap((d) => (cells.get(d) || []).map((c) => c));
     const count = (st) => all.filter((c) => st.includes(c.state)).length;
     const sold = all.filter((c) => c.sale != null && isSold(N.sales[c.sale]));
+    const xsold = N.sales.filter((s) => s.extra && isSold(s) && week.includes(s.date));
     const side = el('div', 'w-week');
     const tiles = el('div', 'w-week-tiles');
     const tile = (k, v, cls, sub) => {
@@ -88,8 +93,12 @@ const HW = (() => {
       return t;
     };
     const wasted = count(['wasted']);
+    const soldSub = sold.length && xsold.length
+      ? `${sold.length} meal${sold.length === 1 ? '' : 's'} + ${xsold.length} extra${xsold.length === 1 ? '' : 's'}`
+      : xsold.length ? `${xsold.length} extra${xsold.length === 1 ? '' : 's'}`
+      : `${sold.length} meal${sold.length === 1 ? '' : 's'}`;
     tiles.append(
-      tile('SOLD', rupees(Math.round(sum(sold.map((c) => N.sales[c.sale].amount)))), 'g', `${sold.length} meal${sold.length === 1 ? '' : 's'}`),
+      tile('SOLD', rupees(Math.round(sum(sold.map((c) => N.sales[c.sale].amount)) + sum(xsold.map((s) => s.amount)))), 'g', soldSub),
       tile('SELLING OR SCHEDULED', String(count(['selling', 'scheduled', 'armed'])), 'gold'),
       tile('STILL OPEN', String(all.filter((c) => c.state === 'open' && c.end > now()).length)),
       tile('ATE', String(count(['ate']))),
@@ -116,9 +125,12 @@ const HW = (() => {
     c.style.setProperty('left', `${ew * 100}%`);
     c.style.setProperty('width', `${cw * 100}%`);
     bar.append(e, c);
+    const soldWord = M.extras_sold
+      ? (M.sold ? `${M.sold} meal${M.sold === 1 ? '' : 's'} + ${M.extras_sold} extra${M.extras_sold === 1 ? '' : 's'}` : `${M.extras_sold} extra${M.extras_sold === 1 ? '' : 's'}`)
+      : `${M.sold} sold`;
     tip(bar, () => [
       [{ t: `${monthName} so far`, c: 'nm' }],
-      N.owner ? [{ t: 'Earned ', c: 'c7' }, { t: rupees(M.earned), c: 'ca' }, { t: ` from ${M.sold} sold`, c: 'c8' }] : null,
+      N.owner ? [{ t: 'Earned ', c: 'c7' }, { t: rupees(M.earned), c: 'ca' }, { t: ` from ${soldWord}`, c: 'c8' }] : null,
       M.wasted ? [{ t: 'Left on the table ', c: 'c7' }, { t: rupees(Math.round(M.potential)), c: 'c6' }, { t: ` from ${M.wasted} wasted`, c: 'c8' }] : null,
       M.fee > 0 ? [{ t: 'Mess bill ', c: 'c7' }, { t: rupees(M.fee), c: 'cf' }] : null,
     ].filter(Boolean));
@@ -196,11 +208,11 @@ const HW = (() => {
     const cards = [];
     for (const m of [...N.messes, { name: '' }]) {
       const sold = mine.filter((s) => messOf(s) === m.name);
-      for (const diet of ['veg', 'nonveg', 'egg']) if (sold.some((s) => priceDiet(s.diet) === diet)) cards.push({ mess: m.name, diet });
+      for (const diet of ['veg', 'nonveg', 'egg', 'extra']) if (sold.some((s) => dietOf(s) === diet)) cards.push({ mess: m.name, diet });
     }
     if (!cards.length) return empty(box, 'No sales in the last 4 weeks.');
     const per = new Map(cards.map((k) => [keyOf(k.mess, k.diet), days.map(() => 0)]));
-    for (const s of mine) per.get(keyOf(messOf(s), priceDiet(s.diet)))[days.indexOf(s.date)] += s.amount;
+    for (const s of mine) per.get(keyOf(messOf(s), dietOf(s)))[days.indexOf(s.date)] += s.amount;
     const mx = Math.max(1, ...[...per.values()].flat());
     const totals = cards.map((k) => sum(per.get(keyOf(k.mess, k.diet))));
     const best = Math.max(...totals);
@@ -209,22 +221,22 @@ const HW = (() => {
 
     const grid = el('div', 'ecards');
     cards.forEach(({ mess: m, diet }, ci) => {
-      const list = mine.filter((s) => messOf(s) === m && priceDiet(s.diet) === diet);
+      const list = mine.filter((s) => messOf(s) === m && dietOf(s) === diet);
       const c = el('div', 'card');
       c.style.setProperty('--m', messColor(m));
       const head = el('div', 'card-head');
       head.append(svgEl(messIcon(m)));
       const nm = el('span', 'card-name', messName(m));
       nm.style.setProperty('color', messColor(m));
-      const dt = span('card-diet', dietMark(diet));
-      dt.append(DIET_LABEL[diet]);
+      const dt = span('card-diet', diet === 'extra' ? extraIcon() : dietMark(diet));
+      dt.append(dietName(diet));
       nm.append(dt);
       head.append(nm);
       if (ci === top) head.append(el('span', 'verdict hot', 'TOP EARNER'));
       const kpis = el('div', 'kpis');
       const kpi = (v, label) => { const k = el('div', 'kpi'); k.append(el('b', v == null ? 'none' : '', v == null ? '-' : v), el('span', '', label)); return k; };
       const m2 = med(list.map((s) => s.amount));
-      kpis.append(kpi(String(list.length), 'MEALS SOLD'), kpi(rupees(Math.round(totals[ci])), 'EARNED'), kpi(m2 == null ? null : rupees(Math.round(m2)), 'MEDIAN PRICE'));
+      kpis.append(kpi(String(list.length), diet === 'extra' ? 'EXTRAS SOLD' : 'MEALS SOLD'), kpi(rupees(Math.round(totals[ci])), 'EARNED'), kpi(m2 == null ? null : rupees(Math.round(m2)), 'MEDIAN PRICE'));
       const spark = el('div', 'spark');
       spark.style.setProperty('--n', days.length);
       if (w0 >= 0) {
@@ -243,8 +255,8 @@ const HW = (() => {
         }
         const ds = list.filter((s) => s.date === days[i]);
         tip(bk, () => [
-          [{ t: `${messName(m)} ${DIET_LABEL[diet].toLowerCase()}, ${fmtDay(days[i])}`, c: 'nm', color: messColor(m) }],
-          ...(ds.length ? ds.map((s) => [{ t: `${cap(s.meal)} `, c: 'c7' }, { t: rupees(s.amount), c: 'c6' }, { t: ` · ${s.name || fmtPhone(s.phone) || 'Unknown buyer'}`, c: 'c8' }]) : [[{ t: 'No sales', c: 'c8' }]]),
+          [{ t: `${messName(m)} ${dietName(diet).toLowerCase()}, ${fmtDay(days[i])}`, c: 'nm', color: messColor(m) }],
+          ...(ds.length ? ds.map((s) => [{ t: `${cap(saleWhat(s))} `, c: 'c7' }, { t: rupees(s.amount), c: 'c6' }, { t: ` · ${s.name || fmtPhone(s.phone) || 'Unknown buyer'}`, c: 'c8' }]) : [[{ t: 'No sales', c: 'c8' }]]),
         ]);
         spark.append(bk);
       });
@@ -258,7 +270,12 @@ const HW = (() => {
 
   const earnMeta = (N) => {
     const mine = recentSales(N);
-    return `${rupees(Math.round(sum(mine.map((s) => s.amount))))} from ${mine.length} meals · 4 weeks`;
+    const meals = mine.filter((s) => !s.extra).length;
+    const extras = mine.length - meals;
+    const count = extras
+      ? (meals ? `${meals} meal${meals === 1 ? '' : 's'} + ${extras} extra${extras === 1 ? '' : 's'}` : `${extras} extra${extras === 1 ? '' : 's'}`)
+      : `${meals} meals`;
+    return `${rupees(Math.round(sum(mine.map((s) => s.amount))))} from ${count} · 4 weeks`;
   };
 
   // ---------- regulars ----------
@@ -319,7 +336,7 @@ const HW = (() => {
     const t = tierOf(b.n);
     const usual = new Map();
     for (const s of b.sales) {
-      const k = `${messName(s.mess)} ${s.meal}`;
+      const k = `${messName(s.mess)} ${saleWhat(s)}`;
       usual.set(k, (usual.get(k) || 0) + 1);
     }
     const fav = [...usual.entries()].sort((x, y) => y[1] - x[1])[0];
@@ -346,7 +363,8 @@ const HW = (() => {
   // A row per meal and diet you sold in: the market's middle half and median
   // ask against your own sales. Drawn as one SVG at the box's width.
   function prices(box, N) {
-    const mine = recentSales(N);
+    // Extras sell for a fraction of a meal and have no market median.
+    const mine = recentSales(N).filter((s) => !s.extra);
     const rows = [];
     for (const meal of mealsOf(N)) {
       for (const diet of ['veg', 'egg', 'nonveg']) {

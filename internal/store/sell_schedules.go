@@ -60,14 +60,16 @@ type SellSchedule struct {
 	EndedAt   time.Time // zero while waiting
 	// Autopilot starts the task on autopilot; see SellTask.Autopilot.
 	Autopilot bool
+	// Extra is the extra item name when selling an extra separately (e.g. "Egg").
+	Extra string
 }
 
-const sellScheduleCols = `id,date,meal,min_paise,max_paise,user_id,handoff,starts_at,ends_at,state,task_id,detail,created_at,ended_at,autopilot,revision,attempts,retry_at,rule_id,rule_revision,overridden`
+const sellScheduleCols = `id,date,meal,min_paise,max_paise,user_id,handoff,starts_at,ends_at,state,task_id,detail,created_at,ended_at,autopilot,revision,attempts,retry_at,rule_id,rule_revision,overridden,extra`
 
 func scanSellSchedule(row interface{ Scan(...any) error }) (SellSchedule, error) {
 	var s SellSchedule
 	var starts, ends, created, ended, retry int64
-	err := row.Scan(&s.ID, &s.Date, &s.Meal, &s.MinPaise, &s.MaxPaise, &s.UserID, &s.Handoff, &starts, &ends, &s.State, &s.TaskID, &s.Detail, &created, &ended, &s.Autopilot, &s.Revision, &s.Attempts, &retry, &s.RuleID, &s.RuleRevision, &s.Overridden)
+	err := row.Scan(&s.ID, &s.Date, &s.Meal, &s.MinPaise, &s.MaxPaise, &s.UserID, &s.Handoff, &starts, &ends, &s.State, &s.TaskID, &s.Detail, &created, &ended, &s.Autopilot, &s.Revision, &s.Attempts, &retry, &s.RuleID, &s.RuleRevision, &s.Overridden, &s.Extra)
 	s.StartsAt, s.EndsAt, s.CreatedAt = time.Unix(starts, 0), time.Unix(ends, 0), time.Unix(created, 0)
 	if retry != 0 {
 		s.RetryAt = time.Unix(retry, 0)
@@ -115,8 +117,8 @@ func (s *Store) CreateSellSchedule(ctx context.Context, sc SellSchedule) (int64,
 			return 0, errors.New(c.msg)
 		}
 	}
-	r, err := tx.ExecContext(ctx, `INSERT INTO sell_schedules(date,meal,min_paise,max_paise,user_id,handoff,starts_at,ends_at,created_at,autopilot,rule_id,rule_revision)
- VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, sc.Date, sc.Meal, sc.MinPaise, sc.MaxPaise, sc.UserID, sc.Handoff, sc.StartsAt.Unix(), sc.EndsAt.Unix(), sc.CreatedAt.Unix(), sc.Autopilot, sc.RuleID, sc.RuleRevision)
+	r, err := tx.ExecContext(ctx, `INSERT INTO sell_schedules(date,meal,min_paise,max_paise,user_id,handoff,starts_at,ends_at,created_at,autopilot,rule_id,rule_revision,extra)
+ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, sc.Date, sc.Meal, sc.MinPaise, sc.MaxPaise, sc.UserID, sc.Handoff, sc.StartsAt.Unix(), sc.EndsAt.Unix(), sc.CreatedAt.Unix(), sc.Autopilot, sc.RuleID, sc.RuleRevision, sc.Extra)
 	if err != nil {
 		return 0, err
 	}

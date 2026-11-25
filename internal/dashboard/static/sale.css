@@ -29,6 +29,24 @@ a.ms-btn { text-decoration: none; display: inline-flex; align-items: center; }
 .mysale.sold { border-color: color-mix(in srgb, var(--veg) 60%, transparent); }
 @keyframes ms-glow { 50% { box-shadow: 0 0 0 1px rgba(255, 107, 91, .18), 0 0 8px rgba(255, 107, 91, .1); } }
 
+/* An extra sold apart from its meal: an egg-yellow edge on the left, so it
+   reads as the meal's side order, never as the meal. */
+.mysale.extra { border-left: 3px solid color-mix(in srgb, var(--egg) 75%, transparent); padding-left: 12px; }
+.mysale.extra.sched { border-left-style: dashed; }
+.ms-diet.ms-egg { display: grid; place-items: center; width: 14px; height: 14px; border-radius: 4px; background: #1a1608; border: 1px solid color-mix(in srgb, var(--egg) 50%, transparent); }
+.ms-diet.ms-egg svg { width: 8px; height: 9px; }
+.ms-xtag { color: var(--egg); font-weight: 600; }
+
+/* A meal's registered extras on its card, with a link to sell them. */
+.ms-xrow { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 7px 9px; border-radius: 9px; background: color-mix(in srgb, var(--egg) 7%, var(--slot)); border: 1px solid color-mix(in srgb, var(--egg) 22%, transparent); }
+.ms-xic { flex: none; display: grid; place-items: center; width: 18px; height: 18px; }
+.ms-xic svg { width: 10px; height: 11px; }
+.ms-xwords { flex: 1; min-width: 0; font-size: 12px; line-height: 1.35; color: var(--muted); }
+.ms-xwords b { color: var(--egg); font-weight: 600; }
+.ms-btn.ms-xgo { flex: none; padding: 6px 8px; font-size: 8px; }
+.ms-btn.ms-xgo.egg { border-color: color-mix(in srgb, var(--egg) 70%, transparent); color: var(--egg); }
+.ms-btn.ms-xgo.egg:hover { background: color-mix(in srgb, var(--egg) 14%, var(--slot)); }
+
 /* header */
 .ms-top { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .ms-mess { width: 8px; height: 8px; border-radius: 50%; background: var(--m); box-shadow: 0 0 8px var(--m); flex: none; }

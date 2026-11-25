@@ -58,16 +58,22 @@ type lines struct {
 // saleLines are the lines for one meal. diet is "veg", "nonveg", "egg" or
 // empty; meal may carry a "#" suffix.
 func saleLines(cfg *config.Config, mess, diet, meal, date string, end time.Time, extras func() []string) lines {
+	return saleLinesFor(cfg, mess, diet, meal, "", date, end, extras)
+}
+
+func saleLinesFor(cfg *config.Config, mess, diet, meal, extra, date string, end time.Time, extras func() []string) lines {
 	var day func() string
 	if cfg != nil {
 		day = func() string { return offerDay(cfg, date) }
 	}
 	shown := diet
-	if shown == "nonveg" {
+	if extra != "" {
+		shown = ""
+	} else if shown == "nonveg" {
 		shown = "non-veg"
 	}
 	return lines{cfg: cfg, end: end, extras: extras, day: day, vals: wording.Values{
-		"meal": portalMealLabel(mess, diet, meal), "mess": mess, "diet": shown, "mealtime": baseMeal(meal),
+		"meal": portalItemLabel(mess, diet, meal, extra), "mess": mess, "diet": shown, "mealtime": baseMeal(meal),
 		"wait": durationWords(payTurn),
 	}}
 }
@@ -316,7 +322,13 @@ func priceWords[T int | string](p T) string {
 // qrCaption labels the meal QR, e.g. "kadamba lunch", so a buyer can see
 // it's the mess they paid for.
 func qrCaption(mess, meal string) string {
-	return strings.Join(strings.Fields(mess+" "+meal), " ")
+	return qrCaptionFor(mess, meal, "")
+}
+
+// qrCaptionFor labels the QR for a meal or separately sold extra, e.g.
+// "kadamba dinner egg".
+func qrCaptionFor(mess, meal, extra string) string {
+	return strings.Join(strings.Fields(mess+" "+meal+" "+strings.ToLower(strings.TrimSpace(extra))), " ")
 }
 
 // sendReply sends r's messages in order, partGap apart. It stops at the

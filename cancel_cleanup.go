@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.mau.fi/whatsmeow/types"
@@ -76,9 +77,11 @@ func (m *sellManager) forget(id int64) {
 }
 
 // sameMeal reports whether a and b sell the same thing: one date, one mess
-// and diet, and one meal, whatever slot suffix (dinner#2) either carries.
+// and diet, one extra (or none), and one meal, whatever slot suffix (dinner#2)
+// either carries.
 func sameMeal(a, b store.SellTask) bool {
-	return a.Mess != "" && a.Date == b.Date && a.Mess == b.Mess && a.Diet == b.Diet && baseMeal(a.Meal) == baseMeal(b.Meal)
+	return a.Mess != "" && a.Date == b.Date && a.Mess == b.Mess && a.Diet == b.Diet &&
+		strings.EqualFold(a.Extra, b.Extra) && baseMeal(a.Meal) == baseMeal(b.Meal)
 }
 
 // adoptTarget finds who takes e, a private reply quoting a dead post: the

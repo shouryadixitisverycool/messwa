@@ -359,7 +359,7 @@ function slotNode(l) {
 
   if (!vegOnly(l.mess) || S.tab === 'all') {
     const d = el('span', 'diet');
-    d.append(svgEl(dietMark(l.diet)));
+    d.append(svgEl(l.diet === 'extra' ? extraIcon() : dietMark(l.diet)));
     b.append(d);
   }
   if (ART[l.meal]) {
@@ -429,7 +429,7 @@ function rarity(l) {
   const parts = [];
   if (l.kind === 'exchange') parts.push('EXCHANGE');
   if (l.kind === 'buy') parts.push('BUY ORDER');
-  if (l.diet) parts.push(DIET_LABEL[l.diet].toUpperCase());
+  if (l.diet) parts.push((DIET_LABEL[l.diet] || l.diet).toUpperCase());
   parts.push(l.meal.toUpperCase());
   return { rar: parts.join(' '), c: DIET_COLOR[l.diet] || 'c7' };
 }
@@ -691,7 +691,7 @@ const pctText = (v) => (v == null ? '-' : `${Math.round(v * 100)}%`);
 // non-veg. Posts that don't say which stay out of both cards but count
 // toward the market as a whole.
 const marketDiet = (d) => (d === 'egg' ? 'nonveg' : d || '');
-const inMarket = (x, k) => !k || (x.mess === k.mess && (!k.diet || marketDiet(x.diet) === k.diet));
+const inMarket = (x, k) => x.diet !== 'extra' && (!k || (x.mess === k.mess && (!k.diet || marketDiet(x.diet) === k.diet)));
 const marketKey = (k) => `${k.mess}:${k.diet || 'all'}`;
 const marketName = (k) => cap(k.mess) + (k.diet ? ` ${DIET_LABEL[k.diet].toLowerCase()}` : '');
 

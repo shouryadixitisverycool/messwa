@@ -285,7 +285,30 @@ const ART = {
   ], { a: '#dfe4f2' }],
 };
 ART.prev = [ART.next[0].map((r) => [...r].reverse().join('')), ART.next[1]];
+// A boiled egg, for meal extras (Kadamba's dinner eggs) sold apart from the meal.
+ART.egg = [[
+  '...oo...',
+  '..owwo..',
+  '.owwwwo.',
+  '.owhwwo.',
+  'owhwwwso',
+  'owwwwwso',
+  'owwwwsso',
+  '.owwsso.',
+  '..oooo..',
+], { o: '#8a6d3b', w: '#fff3d6', h: '#ffffff', s: '#e3c48c' }];
 const icon = (name) => pix(ART[name][0], ART[name][1]);
+// extraIcon is the mark for a registered extra. Eggs are the only extra the
+// mess sells today, so every extra gets the egg.
+const extraIcon = () => icon('egg');
+// extraWord names count of an extra: "1 egg", "3 eggs", or "2× Omelette Full"
+// for multi-word items so they don't get an awkward trailing "s".
+const extraWord = (name, n) => {
+  const raw = (name || 'extra').trim();
+  if (raw.includes(' ')) return n === 1 ? `1 ${raw}` : `${n}× ${raw}`;
+  const w = raw.toLowerCase();
+  return `${n} ${n === 1 || /s$/.test(w) ? w : w + 's'}`;
+};
 
 function mealsAllIcon(meals = MEALS) {
   const sub = meals.map((m, i) => {
@@ -367,8 +390,8 @@ const messColor = (m) => (MESS[m] || {}).color || '#9aa3b5';
 const messIcon = (m) => (ART[m] ? icon(m) : pix(['xxxx', 'xxxx', 'xxxx', 'xxxx'], { x: messColor(m) }));
 const MEALS = ['breakfast', 'lunch', 'snacks', 'dinner'];
 const DIETS = ['all', 'veg', 'nonveg', 'egg'];
-const DIET_LABEL = { all: 'All', veg: 'Veg', nonveg: 'Non-veg', egg: 'Egg' };
-const DIET_COLOR = { veg: 'ca', nonveg: 'cc', egg: 'c6' };
+const DIET_LABEL = { all: 'All', veg: 'Veg', nonveg: 'Non-veg', egg: 'Egg', extra: 'Extra' };
+const DIET_COLOR = { veg: 'ca', nonveg: 'cc', egg: 'c6', extra: 'c6' };
 
 // ---------- tooltip engine ----------
 

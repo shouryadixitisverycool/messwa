@@ -198,6 +198,12 @@ func (in *Ingester) classify(text string, ts time.Time) store.Listing {
 	if in.cfg.VegOnly(l.Mess) {
 		l.Diet = "veg"
 	}
+	// Standalone extra-only posts (such as our own "sell kadamba dinner egg
+	// (extra only) 15" or a buyer's "buy kadamba dinner egg only") must not
+	// be classified as full meal asks and skew meal-price medians.
+	if t.Has("extra only", "extras only", "egg only", "eggs only", "only egg", "only eggs", "only the egg", "only the eggs", "just egg", "just eggs", "just the egg", "just the eggs", "omelette only", "only omelette", "only the omelette", "just omelette", "just the omelette") {
+		l.Diet = "extra"
+	}
 	// A bare "palash" or "See kadamb" in these groups is a sale.
 	if l.Kind == "" && l.Mess != "" {
 		l.Kind = "sell"
