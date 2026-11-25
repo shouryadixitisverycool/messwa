@@ -307,10 +307,11 @@ func (s *Store) FreeExtraSlots(ctx context.Context, date, baseMeal string, count
 
 // MainMealPromisedExtra reports whether a main-meal task on (date, baseMeal)
 // advertised extraName in a group post that still stands ("+ extras: ...").
-// Sold and handed-off tasks count with any such post. Active tasks count only
-// with posts made before editableAfter: newer ones still get edited to drop
-// the extra once it sells on its own. When true, the extra was promised with
-// the main meal and must not be sold separately.
+// Sold and handed-off tasks count with any such post. Active tasks count once
+// a buyer has replied, since editing the post can't take back what they were
+// offered, or with posts made before editableAfter, which can no longer be
+// edited to drop the extra. When true, the extra was promised with the main
+// meal and must not be sold separately.
 func (s *Store) MainMealPromisedExtra(ctx context.Context, date, baseMeal, extraName string, editableAfter time.Time) (bool, error) {
 	want := strings.ToLower(strings.Join(strings.Fields(extraName), " "))
 	if want == "" {
@@ -319,7 +320,7 @@ func (s *Store) MainMealPromisedExtra(ctx context.Context, date, baseMeal, extra
 	rows, err := s.db.QueryContext(ctx, `SELECT o.text FROM sell_task_offers o
  JOIN sell_tasks t ON t.id=o.task_id
  WHERE t.date=? AND t.meal=? AND t.extra='' AND o.state=? AND o.revoked_at=0
- AND (t.state IN (?,?) OR (t.state=? AND o.posted_at<?))`,
+ AND (t.state IN (?,?) OR (t.state=? AND (o.posted_at<? OR EXISTS (SELECT 1 FROM sell_task_buyers b WHERE b.task_id=t.id))))`,
 		date, baseMeal, OfferPosted, TaskSold, TaskHandedOff, TaskActive, editableAfter.Unix())
 	if err != nil {
 		return false, err
