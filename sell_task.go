@@ -662,6 +662,7 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, rt
 	// they're how most buyers pay. Check your UPI app after.
 	s.acceptImages = settings.AcceptPaymentImages
 	s.upi = settings.UPI
+	s.reader, s.payeeName = screenshotReader(), settings.PayeeName
 	s.assumeUnreadable = settings.AcceptUnreadablePayments && !t.Autopilot
 	queue := newOfferQueue()
 	s.joined = queue

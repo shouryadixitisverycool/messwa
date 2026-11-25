@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // upiID is a UPI ID (VPA) such as "name@okaxis": a handle, "@", and the
@@ -36,8 +37,8 @@ func ParseUPI(s string) (string, error) {
 
 // UPIPayURI is the text of a UPI QR that pays amount rupees ("30.00") to
 // the UPI ID upi, with note shown to both sides. UPI apps fill in the
-// amount, so the buyer can't pay the wrong one by mistake. An empty amount
-// leaves it to the buyer.
+// amount, but most let the buyer change it before paying, so a screenshot
+// can still show less. An empty amount leaves it to the buyer.
 func UPIPayURI(upi, amount, note string) string {
 	q := url.Values{}
 	q.Set("pa", upi)
@@ -50,4 +51,23 @@ func UPIPayURI(upi, amount, note string) string {
 	}
 	// UPI apps expect %20, not +, for spaces.
 	return "upi://pay?" + strings.ReplaceAll(q.Encode(), "+", "%20")
+}
+
+// ParsePayeeName tidies the name on a bank account, as UPI apps print it
+// under "Banking name". Empty is allowed: it turns the payee check off.
+func ParsePayeeName(s string) (string, error) {
+	s = strings.Join(strings.Fields(s), " ")
+	if len([]rune(s)) > 80 {
+		return "", fmt.Errorf("%q is too long for a name", s)
+	}
+	letters := 0
+	for _, r := range s {
+		if unicode.IsLetter(r) {
+			letters++
+		}
+	}
+	if s != "" && letters < 2 {
+		return "", fmt.Errorf("%q isn't a name", s)
+	}
+	return s, nil
 }

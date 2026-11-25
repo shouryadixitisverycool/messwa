@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
 	"encoding/binary"
@@ -465,7 +466,8 @@ func (c *mockConn) fromBuyer(b mockBuyer, text string, quote bool, image []byte,
 	case image != nil:
 		c.media[id] = image
 		bubble.Image = "media/" + id
-		msg = &waE2E.Message{ImageMessage: &waE2E.ImageMessage{Mimetype: proto.String(http.DetectContentType(image))}}
+		sum := sha256.Sum256(image)
+		msg = &waE2E.Message{ImageMessage: &waE2E.ImageMessage{Mimetype: proto.String(http.DetectContentType(image)), DirectPath: proto.String(id), FileSHA256: sum[:]}}
 	case amount != "":
 		bubble.Payment = amount
 		msg = &waE2E.Message{SendPaymentMessage: &waE2E.SendPaymentMessage{
@@ -601,6 +603,14 @@ func (c *mockConn) GetGroupInfo(_ context.Context, jid types.JID) (*types.GroupI
 
 func (c *mockConn) PNForLID(context.Context, types.JID) types.JID   { return types.EmptyJID }
 func (c *mockConn) SavedContact(context.Context, ...types.JID) bool { return false }
+
+// Download returns a buyer's image by the ID fromBuyer put in its path.
+func (c *mockConn) Download(_ context.Context, msg whatsmeow.DownloadableMessage) ([]byte, error) {
+	if data := c.mediaFor(msg.GetDirectPath()); data != nil {
+		return data, nil
+	}
+	return nil, errors.New("no such mock media")
+}
 
 // mockPortal says every meal is registered at kadamba and hands out a
 // meal QR that says it's a mock.

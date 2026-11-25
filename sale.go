@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 
 	"messwa/internal/config"
 	"messwa/internal/meals"
+	"messwa/internal/payshot"
 	"messwa/internal/portal"
 	"messwa/internal/store"
 	"messwa/internal/wa"
@@ -41,7 +43,29 @@ type saleConn interface {
 	// SavedContact reports whether any of jids, under its number or its
 	// LID, is in your address book.
 	SavedContact(ctx context.Context, jids ...types.JID) bool
+	// Download fetches and decrypts a buyer's media, such as a payment
+	// screenshot.
+	Download(ctx context.Context, msg whatsmeow.DownloadableMessage) ([]byte, error)
 }
+
+// receiptReader reads a payment screenshot; payshot.Reader is the real one.
+type receiptReader interface {
+	Read(ctx context.Context, img []byte, mime string) (payshot.Receipt, string, error)
+}
+
+// screenshotReader is the reader sales use for payment screenshots, or nil
+// without GEMINI_API_KEY, which takes any image as payment as before.
+// Tests replace it.
+var screenshotReader = sync.OnceValue(func() receiptReader {
+	if key := os.Getenv("GEMINI_API_KEY"); key != "" {
+		return &payshot.Reader{Key: key}
+	}
+	return nil
+})
+
+// screenshotTimeout bounds downloading and reading one screenshot. The
+// reader tries a few models, each for up to 20s.
+const screenshotTimeout = 75 * time.Second
 
 // waConn adapts a whatsmeow client to saleConn.
 type waConn struct{ *whatsmeow.Client }
@@ -124,7 +148,13 @@ type sale struct {
 	// upi is the UPI ID buyers pay when acceptImages is on: the pay
 	// message comes with a UPI QR for the price (see payUPI). Empty sends
 	// none. payQRAmounts remembers each buyer's QR amount for a resend.
-	upi          string
+	upi string
+	// reader, when set, reads each screenshot: only a finished payment to
+	// you counts, and the meal QR waits until the screenshots add up to
+	// the price. payeeName is the banking name it checks; empty checks
+	// only the amount. See payshot.PaidTo.
+	reader       receiptReader
+	payeeName    string
 	payQRMu      sync.Mutex
 	payQRAmounts map[types.JID]string
 
@@ -363,6 +393,13 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 	prompted := len(t.prompt) == 0
 	nudged := false
 	requestedPayments := map[string]context.CancelFunc{}
+	// With a reader, screenshots add up: paidPaise is what they showed so
+	// far, refs the payments already counted (by UTR, the app's ID, or the
+	// image's hash), reading the screenshots still being read and unclear
+	// how many times the buyer heard that an image wasn't a payment.
+	var paidPaise int64
+	refs, reading := map[string]bool{}, map[string]bool{}
+	unclear := 0
 	// finish runs with mu held. The delivery itself runs in a goroutine so
 	// the event handler doesn't hold up the rest of run's ingest.
 	finish := func(e *events.Message, amountMissing bool, paidAmount string, image bool) {
@@ -379,8 +416,13 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 		paid := store.Payment{ID: e.Info.ID, At: e.Info.Timestamp, BuyerName: e.Info.PushName}
 		if image {
 			paid.Kind = store.PaidByImage
-			s.log.Warn("buyer sent an image after the payment prompt; assuming it shows a payment, which is NOT verified. Check your UPI app",
-				"date", d.Date, "meal", d.Meal, "amount_assumed", d.Amount, "image_id", e.Info.ID)
+			if paidPaise > 0 {
+				s.log.Info("payment screenshots add up to the price; the bank hasn't confirmed it. Check your UPI app",
+					"date", d.Date, "meal", d.Meal, "amount", d.Amount, "screenshots_paise", paidPaise, "image_id", e.Info.ID)
+			} else {
+				s.log.Warn("buyer sent an image after the payment prompt; assuming it shows a payment, which is NOT verified. Check your UPI app",
+					"date", d.Date, "meal", d.Meal, "amount_assumed", d.Amount, "image_id", e.Info.ID)
+			}
 		}
 		go func() {
 			// Once a payment is claimed, cancelling the task or the meal
@@ -407,6 +449,76 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 			}
 			done <- err
 		}()
+	}
+	// sayUnclear tells the buyer an image isn't a payment, at most twice a
+	// turn. mu must be held.
+	sayUnclear := func() {
+		if unclear < 2 {
+			unclear++
+			go s.sayOnce(ctx, buyer, nil, "pay_unclear", s.lines(buyer).payUnclear())
+		}
+	}
+	// readShot reads a screenshot and acts on it: the meal QR once the
+	// screenshots cover the price, "send the rest" when they fall short,
+	// and nothing for an image that isn't a finished payment to you. It
+	// runs outside the event handler and counts as pending, so the turn
+	// waits for it.
+	readShot := func(e *events.Message) {
+		readCtx, stop := context.WithTimeout(ctx, screenshotTimeout)
+		defer stop()
+		img := e.Message.GetImageMessage()
+		rc, model, err := s.readScreenshot(readCtx, img)
+		mu.Lock()
+		defer mu.Unlock()
+		pending--
+		select {
+		case recoveryDone <- struct{}{}:
+		default:
+		}
+		if attempted || ctx.Err() != nil {
+			return
+		}
+		switch {
+		case err != nil:
+			s.note(buyer, store.EventPayUnreadable, 0, "")
+			if s.assumeUnreadable {
+				s.log.Warn("could not read the payment screenshot; accept_unreadable_payments is on, so assuming it shows the agreed price",
+					"date", d.Date, "meal", d.Meal, "image_id", e.Info.ID, "err", err)
+				finish(e, true, "", true)
+				return
+			}
+			s.log.Warn("could not read the payment screenshot; not sending the meal image. Check the buyer's chat and your UPI app",
+				"date", d.Date, "meal", d.Meal, "image_id", e.Info.ID, "err", err)
+			return
+		case !rc.IsReceipt || rc.Status == "pending" || rc.Status == "failed" || rc.AmountPaise <= 0:
+			s.log.Info("image is not a finished payment", "image_id", e.Info.ID, "receipt", rc.IsReceipt, "status", rc.Status, "amount", rc.Amount, "model", model)
+			s.note(buyer, store.EventImage, 0, "")
+			sayUnclear()
+			return
+		case !payshot.PaidTo(rc, s.upi, s.payeeName):
+			s.log.Warn("payment screenshot names someone else", "image_id", e.Info.ID, "payee", rc.PayeeName, "payee_upi", rc.PayeeUPI)
+			s.note(buyer, store.EventPayMismatch, rc.AmountPaise, "screenshot paid "+firstNonEmpty(rc.PayeeName, rc.PayeeUPI, "someone else"))
+			sayUnclear()
+			return
+		}
+		ref := firstNonEmpty(rc.UTR, rc.TxnID, fmt.Sprintf("%x", img.GetFileSHA256()))
+		if refs[ref] {
+			s.log.Info("payment screenshot already counted", "image_id", e.Info.ID)
+			return
+		}
+		refs[ref] = true
+		paidPaise += rc.AmountPaise
+		s.log.Info("payment screenshot read", "image_id", e.Info.ID, "amount", rc.Amount, "total_paise", paidPaise, "model", model)
+		if amount, ok := coveredPrice(paidPaise, d.Amount, t.amounts); ok {
+			if amount == d.Amount {
+				amount = ""
+			}
+			finish(e, false, amount, true)
+			return
+		}
+		short := paise(d.Amount) - paidPaise
+		s.note(buyer, store.EventPayMismatch, paidPaise, fmt.Sprintf("screenshots show %s of %s", rupeeText(paidPaise), rupeeText(paise(d.Amount))))
+		go s.sayOnce(ctx, buyer, nil, "pay_short", s.lines(buyer).payShort(paiseAmount(paidPaise), paiseAmount(max(short, 0)), d.Amount))
 	}
 	matchesBuyer := func(info types.MessageInfo) bool {
 		if info.IsFromMe || info.IsGroup {
@@ -462,7 +574,15 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 				s.log.Info("image did not count as payment", "image_id", e.Info.ID, "at", e.Info.Timestamp, "reason", reason.Error())
 				return
 			}
-			finish(e, false, "", true)
+			if s.reader == nil {
+				finish(e, false, "", true)
+				return
+			}
+			if !reading[e.Info.ID] {
+				reading[e.Info.ID] = true
+				pending++
+				go readShot(e)
+			}
 			return
 		}
 		if !s.acceptImages && e.Message.GetImageMessage() != nil {
@@ -635,7 +755,10 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 		}
 		for {
 			mu.Lock()
-			expired := pending == 0 && !attempted
+			// A buyer who paid part of the price keeps the turn until they
+			// send the rest or the meal ends, so their money isn't lost to
+			// the next buyer.
+			expired := pending == 0 && !attempted && (paidPaise == 0 || !time.Now().Before(s.end))
 			if expired {
 				attempted = true
 			}
@@ -643,12 +766,20 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 			if expired {
 				return errBuyerTimedOut
 			}
+			// mealEnd wakes the loop when the meal ends, for a buyer who paid
+			// part of the price. Once it has ended there is nothing to wait
+			// for but pending reads.
+			var mealEnd <-chan time.Time
+			if left := time.Until(s.end); left > 0 {
+				mealEnd = time.After(left)
+			}
 			select {
 			case err := <-done:
 				return err
 			case <-ctx.Done():
 				return waitDelivery(ctx.Err())
 			case <-recoveryDone:
+			case <-mealEnd:
 			}
 		}
 	}
@@ -967,3 +1098,31 @@ func (memoryJournal) prompting(context.Context, types.JID, string, time.Time) (b
 }
 func (memoryJournal) turnEnded(context.Context, types.JID, string) error   { return nil }
 func (memoryJournal) tellingSold(context.Context, types.JID) (bool, error) { return true, nil }
+
+// readScreenshot downloads a buyer's image and reads it as a payment
+// screenshot.
+func (s *sale) readScreenshot(ctx context.Context, img *waE2E.ImageMessage) (payshot.Receipt, string, error) {
+	data, err := s.conn.Download(ctx, img)
+	if err != nil {
+		return payshot.Receipt{}, "", fmt.Errorf("download: %w", err)
+	}
+	return s.reader.Read(ctx, data, img.GetMimetype())
+}
+
+// coveredPrice is the highest of the asked price and the other accepted
+// ones that paid paise covers.
+func coveredPrice(paid int64, asked string, others []string) (string, bool) {
+	best, bestPaise := "", int64(-1)
+	for _, a := range append([]string{asked}, others...) {
+		if p := paise(a); p > 0 && p <= paid && p > bestPaise {
+			best, bestPaise = a, p
+		}
+	}
+	return best, bestPaise > 0
+}
+
+// paiseAmount writes paise as an amount like "32.00".
+func paiseAmount(p int64) string { return fmt.Sprintf("%d.%02d", p/100, p%100) }
+
+// rupeeText writes paise for a dashboard note, like "₹32".
+func rupeeText(p int64) string { return "₹" + priceWords(paiseAmount(p)) }

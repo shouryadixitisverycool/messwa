@@ -158,6 +158,12 @@ accept_payment_images = false
 # for the screenshot. Empty sends no QR. The dashboard's BUYERS tab can also
 # read it from a picture of your UPI QR.
 upi = ""
+# Your name as UPI apps print it under "Paid to" or "Banking name". With
+# GEMINI_API_KEY set, the bot reads each payment screenshot: the meal QR
+# goes out once screenshots of finished payments to this name (or to upi)
+# add up to the price. Empty checks only the amount. See "Reading the
+# screenshot" in the README.
+payee_name = ""
 # Count a WhatsApp Pay message from the paying buyer whose amount stays
 # unreadable as a payment of the agreed price. Linked devices sometimes get
 # a payment with no amount or currency; the bot asks the phone for the full

@@ -9,7 +9,7 @@ services:
     # and the MCP server stays on loopback, where tokenless requests act as the first admin.
     network_mode: host
     env_file:
-      - path: .env          # MESSWA_SECRET_KEY; optional MESSWA_MCP_TOKEN, MESS_API_URL and MESSWA_WA_LOG
+      - path: .env          # MESSWA_SECRET_KEY; optional MESSWA_MCP_TOKEN, MESS_API_URL, MESSWA_WA_LOG and GEMINI_API_KEY
         required: false
     volumes:
       - ./config.toml:/data/config.toml:ro

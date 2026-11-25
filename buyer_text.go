@@ -248,6 +248,15 @@ func (l lines) payNumber() reply { return l.say("pay_number") }
 // when [sell] accept_payment_images is on.
 func (l lines) askScreenshot() reply { return l.say("ask_screenshot") }
 
+// payShort tells a buyer whose payment screenshots add up to less than the
+// price how much more to send. paid and short are rupee amounts ("3.00").
+func (l lines) payShort(paid, short, price string) reply {
+	return l.with("paid", priceWords(paid), "short", priceWords(short), "price", priceWords(price)).say("pay_short")
+}
+
+// payUnclear answers an image that doesn't show a finished payment to you.
+func (l lines) payUnclear() reply { return l.say("pay_unclear") }
+
 // sold tells a buyer the meal went to someone else. A task that has ended
 // may send this and nothing else; see taskGate.sendSold.
 func (l lines) sold() reply { return l.say("sold") }

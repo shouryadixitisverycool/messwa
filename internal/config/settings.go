@@ -153,6 +153,17 @@ var settings = []setting{
 			c.Sell.UPI = upi
 			return err
 		}},
+	{key: "sell.payee_name",
+		get: func(c *Config) any { return c.Sell.PayeeName },
+		set: func(c *Config, v json.RawMessage) error {
+			var s string
+			if err := strictJSON(v, &s); err != nil {
+				return err
+			}
+			name, err := ParsePayeeName(s)
+			c.Sell.PayeeName = name
+			return err
+		}},
 	boolSetting("sell.accept_unreadable_payments", func(c *Config) *bool { return &c.Sell.AcceptUnreadablePayments }),
 	boolSetting("sell.own_wording", func(c *Config) *bool { return &c.Sell.OwnWording }),
 	{key: "sell.messages",

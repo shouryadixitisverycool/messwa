@@ -32,6 +32,9 @@ type sellSettings struct {
 	// UPI is the UPI ID the pay message's QR pays, when screenshots
 	// count; see sale.upi.
 	UPI string
+	// PayeeName is your banking name, which a read payment screenshot must
+	// show; see sale.payeeName.
+	PayeeName string
 	// AcceptUnreadablePayments counts a WhatsApp Pay payment whose amount
 	// stays unreadable after recovery as the agreed price; see
 	// sale.assumeUnreadable.
@@ -135,6 +138,7 @@ func resolveSellSettings(cfg *config.Config, f sellFlags) (sellSettings, error) 
 		Repost:                   repost.FromConfig(cfg.Sell),
 		AcceptPaymentImages:      cfg.Sell.AcceptPaymentImages,
 		UPI:                      cfg.Sell.UPI,
+		PayeeName:                cfg.Sell.PayeeName,
 		AcceptUnreadablePayments: cfg.Sell.AcceptUnreadablePayments,
 	}
 	firstN := func(n int, name string) ([]string, error) {

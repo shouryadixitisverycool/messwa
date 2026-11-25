@@ -67,6 +67,12 @@ type Sell struct {
 	// on. The pay message then comes with a UPI QR that has the price
 	// filled in. Empty sends no QR.
 	UPI string `toml:"upi"`
+	// PayeeName is the name on your bank account, as UPI apps show it
+	// under "Paid to" or "Banking name". With GEMINI_API_KEY set, the bot
+	// reads each payment screenshot, and one that names this payee counts
+	// even when it shows another of your UPI IDs or none. Empty skips the
+	// payee check, so only the amount is checked.
+	PayeeName string `toml:"payee_name"`
 	// AcceptUnreadablePayments counts a WhatsApp Pay message whose amount
 	// stays unreadable after recovery as a payment of the agreed price.
 	// On by default, though the bot can't tell what, if anything, was paid.

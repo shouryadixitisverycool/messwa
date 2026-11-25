@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -117,5 +118,18 @@ func TestBuyersSetting(t *testing.T) {
 	os.WriteFile(p, []byte("[sell]\nbuyers = \"unsaved\"\n"), 0o600)
 	if _, err := Load(p); err == nil {
 		t.Fatal("unknown buyers value loaded")
+	}
+}
+
+func TestParsePayeeName(t *testing.T) {
+	for in, want := range map[string]string{"": "", "  Shourya   Dixit ": "Shourya Dixit", "SHOURYA DIXIT": "SHOURYA DIXIT"} {
+		if got, err := ParsePayeeName(in); err != nil || got != want {
+			t.Errorf("ParsePayeeName(%q) = %q, %v", in, got, err)
+		}
+	}
+	for _, in := range []string{"1", "@@", strings.Repeat("a", 81)} {
+		if _, err := ParsePayeeName(in); err == nil {
+			t.Errorf("ParsePayeeName(%q) passed", in)
+		}
 	}
 }

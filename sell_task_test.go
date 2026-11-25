@@ -65,6 +65,8 @@ type fakeConn struct {
 	// hold, when set, keeps each group post waiting until it is closed or
 	// the send's context ends, like a slow send through whatsmeow.
 	hold chan struct{}
+	// media answers Download, by direct path.
+	media map[string][]byte
 }
 
 func newFakeConn(group types.JID) *fakeConn {
@@ -147,6 +149,16 @@ func (f *fakeConn) PNForLID(_ context.Context, lid types.JID) types.JID {
 
 // SavedContact checks each JID and the number or LID lids maps it to, as
 // wa.SavedContact does.
+// Download returns the image registered under the message's direct path.
+func (f *fakeConn) Download(_ context.Context, msg whatsmeow.DownloadableMessage) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if data, ok := f.media[msg.GetDirectPath()]; ok {
+		return data, nil
+	}
+	return nil, errors.New("no such media")
+}
+
 func (f *fakeConn) SavedContact(_ context.Context, jids ...types.JID) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
