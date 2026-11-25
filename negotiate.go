@@ -139,7 +139,9 @@ func (s haggleState) store(started time.Time) store.Negotiation {
 func haggleFromStore(n store.Negotiation, maxRupees int) haggleState {
 	s := haggleState{ask: int(n.Ask / 100), rounds: n.Rounds, botMsgs: n.BotMsgs, unknowns: n.Unknowns,
 		lastOffer: int(n.LastOffer / 100), saidLowest: n.SaidLowest, passCountered: n.PassCountered, toldMeal: n.ToldMeal, nudges: n.Nudges}
-	if s.ask == 0 {
+	// An unpriced buyer keeps ask 0, so decide opens at the live max,
+	// unless a buy post saved an opening ask for them.
+	if s.ask == 0 && s.botMsgs > 0 {
 		s.ask = maxRupees
 	}
 	for _, q := range n.Quoted {
@@ -545,7 +547,7 @@ func (n *negotiation) sessionLocked(peer types.JID) *session {
 	ss := n.sessions[peer]
 	if ss == nil {
 		ss = &session{n: n, buyer: peer, inbox: make(chan buyerMsg, 32), joined: time.Now(),
-			hs: haggleState{ask: n.h.max}, repriced: make(chan struct{}, 1)}
+			repriced: make(chan struct{}, 1)}
 		n.sessions[peer] = ss
 	}
 	return ss
@@ -1544,7 +1546,7 @@ func (ss *session) quietNudge() handled {
 		ss.finishTimeOut("went quiet after the first message and a follow-up")
 		return handledEnded
 	}
-	ss.finishTimeOut("went quiet after the first message and a follow-up")
+	ss.finishTimeOut("went quiet after the first message at the lowest price")
 	n.agreeMu.Unlock()
 	return handledEnded
 }

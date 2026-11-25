@@ -5,6 +5,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"go.mau.fi/whatsmeow/types"
+
+	"messwa/internal/store"
 )
 
 func TestHaggleWalk(t *testing.T) {
@@ -309,5 +313,20 @@ func TestHaggleSavedAskBelowRaisedFloor(t *testing.T) {
 	s := h.decide(haggleState{ask: 90}, intent{kind: intentOpener}, time.Now(), false)
 	if s.next.ask != 95 {
 		t.Fatalf("opening ask = %d, want 95", s.next.ask)
+	}
+}
+
+// A buyer whose session exists before their first price opens at the max
+// as it is then, not as it was when the session was made.
+func TestUnpricedSessionOpensAtLiveMax(t *testing.T) {
+	end := time.Now().Add(4 * time.Hour)
+	n := &negotiation{sessions: map[types.JID]*session{}, h: newHaggle(70, 110, 0, false, false, end, testLines("veg", ""))}
+	ss := n.sessionLocked(buyerA)
+	n.h = n.h.withRange(70, 130)
+	if s := n.h.decide(ss.hs, intent{kind: intentOpener}, time.Now(), false); s.next.ask != 130 {
+		t.Fatalf("opening ask = %d, want 130", s.next.ask)
+	}
+	if hs := haggleFromStore(store.Negotiation{}, 110); hs.ask != 0 {
+		t.Fatalf("restored unpriced ask = %d, want 0", hs.ask)
 	}
 }
