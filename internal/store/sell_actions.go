@@ -101,6 +101,29 @@ func (s *Store) ClaimSoldNotice(ctx context.Context, id int64, peer string) (boo
 	return n == 1, err
 }
 
+// SoldReplyWindow bounds how long the bot answers late buyers after a sale.
+const SoldReplyWindow = 15 * time.Minute
+
+// ClaimNewSoldNotice records a first reply to a sold task, claiming its
+// sold message atomically so repeated replies and restarts cannot repeat it.
+func (s *Store) ClaimNewSoldNotice(ctx context.Context, id int64, peer, alt string, at time.Time) (bool, error) {
+	if alt == peer {
+		alt = ""
+	}
+	r, err := s.db.ExecContext(ctx, `INSERT INTO sell_task_buyers(task_id,peer,alt,joined_at,state)
+ SELECT ?,?,?,?,'told_sold'
+ WHERE EXISTS(SELECT 1 FROM sell_tasks WHERE id=? AND state='sold' AND ended_at>?)
+ AND NOT EXISTS(SELECT 1 FROM sell_task_buyers WHERE task_id=? AND
+  (peer=? OR alt=? OR (?!='' AND (peer=? OR alt=?))))
+ AND NOT EXISTS(SELECT 1 FROM qr_deliveries WHERE task_id=? AND (peer=? OR (?!='' AND peer=?)))
+ ON CONFLICT(task_id,peer) DO NOTHING`, id, peer, alt, at.UnixNano(), id, at.Add(-SoldReplyWindow).Unix(), id, peer, peer, alt, alt, alt, id, peer, alt, alt)
+	if err != nil {
+		return false, err
+	}
+	n, err := r.RowsAffected()
+	return n == 1, err
+}
+
 // TaskManualSale is a sale of an active task's meal that you made yourself.
 type TaskManualSale struct {
 	// Peer is the buyer's JID, or "" when you only gave a name.

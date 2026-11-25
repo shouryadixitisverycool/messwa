@@ -26,7 +26,7 @@ import (
 // sale engine deliver-qr uses. The rules below are enforced here, not left
 // to the agent that starts the task:
 //
-//   - nothing is sent unless the task is active;
+//   - ended tasks can only finish a paid QR delivery or send a sold notice;
 //   - besides the group post, messages go only to people who replied
 //     privately to that post, with [sell] accept_plain_dms DMed about it
 //     (see plain_dm.go), or with [sell] message_buy_posts posted that they
@@ -194,12 +194,13 @@ const lateWindow = 24 * time.Hour
 
 // lateReply answers a buyer who timed out of a negotiating task and
 // writes after the task stopped. A running task revives them itself (see
-// negotiation.revive). Once the task sold the meal, they hear "sold sorry"
-// once, the line everyone still talking to the bot got at the sale. After
+// negotiation.revive). Once the task sold the meal, they hear "sorry, sold"
+// once during the next 15 minutes. After
 // a cancelled, expired or failed task the bot stays quiet: the meal may
 // not be gone, and you may be selling it by hand. Nothing is sent once the
-// meal is over, or while the writer is a buyer in any active task, whose
-// own session answers them.
+// 15-minute reply window ends, or while the writer is a buyer in any
+// active task, whose own session answers them.
+// New buyers replying after a sale get a sold notice too (sold_reply.go).
 func (m *sellManager) lateReply(evt any) {
 	e, ok := evt.(*events.Message)
 	if !ok || e.Info.IsFromMe || e.Info.IsGroup {
@@ -211,12 +212,13 @@ func (m *sellManager) lateReply(evt any) {
 	if strings.TrimSpace(messageText(e.Message)) == "" {
 		return
 	}
-	go m.answerLate(e.Info)
+	go m.answerLate(e)
 }
 
-func (m *sellManager) answerLate(info types.MessageInfo) {
+func (m *sellManager) answerLate(e *events.Message) {
 	ctx, stop := context.WithTimeout(m.base, 2*time.Minute)
 	defer stop()
+	info := e.Info
 	peer := buyerPeer(ctx, m.conn, info)
 	late, active, err := m.st.TimedOutTasks(ctx, time.Now().Add(-lateWindow), peer.String(), info.Chat.ToNonAD().String())
 	if err != nil {
@@ -226,9 +228,13 @@ func (m *sellManager) answerLate(info types.MessageInfo) {
 	if active {
 		return
 	}
+	if len(late) == 0 {
+		m.answerSoldReply(ctx, e, peer)
+		return
+	}
 	for _, lb := range late {
 		t := lb.Task
-		if !negotiates(t) || !time.Now().Before(t.EndsAt) {
+		if !negotiates(t) || t.State != store.TaskSold || t.EndedAt.IsZero() || !time.Now().Before(t.EndedAt.Add(store.SoldReplyWindow)) {
 			// A fixed-price task never revives anyone, so its buyers
 			// expect nothing after their turn lapsed.
 			continue
@@ -245,8 +251,7 @@ func (m *sellManager) answerLate(info types.MessageInfo) {
 		if err != nil {
 			return
 		}
-		gate := &taskGate{m: m, id: t.ID}
-		if err := sendReply(ctx, gate.sendSold, to, saleLines(m.cfg, t.Mess, t.Diet, t.Meal, t.Date, t.EndsAt, nil).sold()); err != nil {
+		if err := m.sendLateSold(ctx, t, to); err != nil {
 			m.log.Warn("could not tell a late buyer the meal sold", "task", t.ID, "err", err)
 			return
 		}

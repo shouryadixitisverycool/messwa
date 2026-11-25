@@ -17,7 +17,7 @@ import (
 // ends, a private reply quoting one of its posts goes to another active
 // task selling the same meal at the same mess and diet, as if the buyer had
 // replied to that task's post (adoptTarget). With no such task the reply
-// gets nothing, like a reply to a post whose meal already sold.
+// gets nothing. Replies to sold posts get a sold notice instead (sold_reply.go).
 
 const (
 	// revokeWindow is how old a post may be and still be deleted for

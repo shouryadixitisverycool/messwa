@@ -623,7 +623,7 @@ func TestNegotiationNoReviveAfterSold(t *testing.T) {
 		f.conn.emit(dm(buyerA, "hello?"))
 		settle()
 		toA := texts(sentTo(f.conn.messages(), buyerA))[before:]
-		if len(toA) != 1 || toA[0] != "sold sorry" {
+		if len(toA) != 1 || toA[0] != "sorry, sold" {
 			t.Fatalf("A got %q", toA)
 		}
 		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerToldSold {
