@@ -294,6 +294,8 @@ func TestNegotiationUPIQR(t *testing.T) {
 		settle()
 		f.conn.emit(dm(buyerA, "scanner?"))
 		settle()
+		f.conn.emit(dm(buyerA, "Can you send the qr"))
+		settle()
 		f.conn.emit(dm(buyerA, "cash?"))
 		settle()
 		var got []string
@@ -328,6 +330,141 @@ func TestNegotiationUPIQR(t *testing.T) {
 			t.Fatalf("A got %q, want the meal QR last", got)
 		}
 	})
+}
+
+// TestNegotiationNoPayAppPromptReply checks that "Cannot do" or "ion have it"
+// right after a WhatsApp Pay prompt tells the buyer to pay the number when
+// screenshots count.
+func TestNegotiationNoPayAppPromptReply(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		f.cfg.Sell.AcceptPaymentImages = true
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m := f.negotiatingManager(ctx, 60)
+		if _, err := m.Start(ctx, 0, f.date, "lunch", 30, 60, ""); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		f.conn.emit(f.reply(buyerA, "price?"))
+		settle()
+		f.conn.emit(dm(buyerA, "ok"))
+		settle()
+		f.conn.emit(dm(buyerA, "Cannot do"))
+		settle()
+		want := []string{"60", "ok 60", "pay using whatsapp pay pls", "ill send the qr right after",
+			"send to my number then"}
+		if got := texts(sentTo(f.conn.messages(), buyerA)); strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Fatalf("A got %q, want %q", got, want)
+		}
+	})
+}
+
+// TestFirstMessageSendQRQuotesFirst checks that QR questions as a buyer's
+// very first reply open with the price instead of agreeing unseen.
+func TestFirstMessageSendQRQuotesFirst(t *testing.T) {
+	for _, msg := range []string{"Can you send the QR?", "Can I pay on QR?"} {
+		t.Run(msg, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "data.db")
+			synctest.Test(t, func(t *testing.T) {
+				f := newSellFixture(t, path)
+				f.cfg.Sell.AcceptPaymentImages = true
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				m := f.negotiatingManager(ctx, 60)
+				if _, err := m.Start(ctx, 0, f.date, "lunch", 30, 60, ""); err != nil {
+					t.Fatal(err)
+				}
+				synctest.Wait()
+				f.conn.emit(f.reply(buyerA, msg))
+				settle()
+				want := []string{"60"}
+				if got := texts(sentTo(f.conn.messages(), buyerA)); !slices.Equal(got, want) {
+					t.Fatalf("A got %q, want %q", got, want)
+				}
+			})
+		})
+	}
+}
+
+// TestTooMuchWithCantDoWhatsAppPayCountersLower checks that objecting to the
+// price while mentioning no WhatsApp Pay counters lower instead of agreeing.
+func TestTooMuchWithCantDoWhatsAppPayCountersLower(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		msgs []string
+	}{
+		{"single", []string{"Too much, can't do WhatsApp Pay"}},
+		{"burst", []string{"Too much", "can't do WhatsApp Pay"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "data.db")
+			synctest.Test(t, func(t *testing.T) {
+				f := newSellFixture(t, path)
+				f.cfg.Sell.AcceptPaymentImages = true
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				m := f.negotiatingManager(ctx, 60)
+				id, err := m.Start(ctx, 0, f.date, "lunch", 30, 60, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				synctest.Wait()
+				f.conn.emit(f.reply(buyerA, "price?"))
+				settle()
+				for _, msg := range tc.msgs {
+					f.conn.emit(dm(buyerA, msg))
+				}
+				settle()
+				if b := buyerState(t, f, id, buyerA); b.State != store.BuyerNegotiating {
+					t.Fatalf("A = %+v, want still negotiating after price objection", b)
+				}
+				got := texts(sentTo(f.conn.messages(), buyerA))
+				if len(got) < 2 || strings.Contains(strings.Join(got, " "), "whatsapp pay") {
+					t.Fatalf("A got %q, want lower counter without payment prompt", got)
+				}
+			})
+		})
+	}
+}
+
+// TestMultiMealAcceptanceParks checks that accepting or requesting QR for
+// multiple meals ("I'll take both", ["for both?", "send qr"]) parks instead of
+// starting a single-meal payment turn.
+func TestMultiMealAcceptanceParks(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		msgs []string
+	}{
+		{"take both", []string{"I'll take both"}},
+		{"for both then send qr", []string{"for both?", "send qr"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "data.db")
+			synctest.Test(t, func(t *testing.T) {
+				f := newSellFixture(t, path)
+				f.cfg.Sell.AcceptPaymentImages = true
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				m := f.negotiatingManager(ctx, 60)
+				id, err := m.Start(ctx, 0, f.date, "lunch", 30, 60, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				synctest.Wait()
+				f.conn.emit(f.reply(buyerA, "price?"))
+				settle()
+				for _, msg := range tc.msgs {
+					f.conn.emit(dm(buyerA, msg))
+				}
+				settle()
+				if b := buyerState(t, f, id, buyerA); b.State != store.BuyerParked {
+					t.Fatalf("A = %+v, want parked for multi-meal request", b)
+				}
+			})
+		})
+	}
 }
 
 // TestAutopilotTakesScreenshot: autopilot counts a screenshot as payment

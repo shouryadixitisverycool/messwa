@@ -109,3 +109,153 @@ func TestHolderWhoRepeatsPriceKeepsTurn(t *testing.T) {
 		}
 	})
 }
+
+// Rejecting the agreed price by number ("Won't buy at 60") drops the turn
+// instead of treating 60 as repeating the agreed price.
+func TestHolderWhoRejectsAgreedPriceLosesTurn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m := f.negotiatingManager(ctx, 60)
+		id, _, err := m.StartNow(ctx, 0, f.date, "lunch", 30, 60, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		f.conn.emit(f.reply(buyerB, "price?"))
+		settle()
+		f.conn.emit(dm(buyerB, "ok"))
+		settle()
+		f.conn.emit(dm(buyerB, "Won't buy at 60"))
+		settle()
+		if b := buyerState(t, f, id, buyerB); b.State != store.BuyerParked {
+			t.Fatalf("B = %+v, want parked after rejecting agreed price", b)
+		}
+	})
+}
+
+// "Can't do, too much" during a payment turn is a price objection (backOut),
+// not a missing-payment-app prompt.
+func TestHolderCantDoTooMuchBacksOut(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		f.cfg.Sell.AcceptPaymentImages = true
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m := f.negotiatingManager(ctx, 60)
+		id, _, err := m.StartNow(ctx, 0, f.date, "lunch", 30, 60, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		f.conn.emit(f.reply(buyerB, "price?"))
+		settle()
+		f.conn.emit(dm(buyerB, "ok"))
+		settle()
+		f.conn.emit(dm(buyerB, "Can't do, too much"))
+		settle()
+		if b := buyerState(t, f, id, buyerB); b.State != store.BuyerParked {
+			t.Fatalf("B = %+v, want parked after price objection", b)
+		}
+		for _, msg := range texts(sentTo(f.conn.messages(), buyerB)) {
+			if msg == "send to my number then" {
+				t.Fatalf("B was told to pay number instead of backing out")
+			}
+		}
+	})
+}
+
+// A burst with a price objection followed by an apology ("too much",
+// "i do not have sorry") releases the turn instead of sending payment info.
+func TestHolderTooMuchThenApologyReleasesTurn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		f.cfg.Sell.AcceptPaymentImages = true
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m := f.negotiatingManager(ctx, 60)
+		id, _, err := m.StartNow(ctx, 0, f.date, "lunch", 30, 60, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		f.conn.emit(f.reply(buyerB, "price?"))
+		settle()
+		f.conn.emit(dm(buyerB, "ok"))
+		settle()
+		f.conn.emit(dm(buyerB, "too much"))
+		f.conn.emit(dm(buyerB, "i do not have sorry"))
+		settle()
+		if b := buyerState(t, f, id, buyerB); b.State != store.BuyerParked {
+			t.Fatalf("B = %+v, want parked after too much + apology", b)
+		}
+		for _, msg := range texts(sentTo(f.conn.messages(), buyerB)) {
+			if msg == "send to my number then" {
+				t.Fatalf("B was told to pay number instead of releasing turn")
+			}
+		}
+	})
+}
+
+// "less balance, can i pay later" after agreeing is a pay-other request, not
+// a price objection that backs out or drops the buyer on autopilot.
+func TestHolderLessBalancePayLaterDoesNotBackOut(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m := f.negotiatingManager(ctx, 60)
+		id, _, err := m.StartNow(ctx, 0, f.date, "lunch", 30, 60, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		f.conn.emit(f.reply(buyerB, "price?"))
+		settle()
+		f.conn.emit(dm(buyerB, "ok"))
+		settle()
+		f.conn.emit(dm(buyerB, "less balance, can i pay later"))
+		settle()
+		if b := buyerState(t, f, id, buyerB); b.State != store.BuyerOffered {
+			t.Fatalf("B = %+v, want still holding turn (not backed out)", b)
+		}
+	})
+}
+
+// A multi-meal request during an active payment turn releases the turn for the
+// next buyer instead of leaving it open.
+func TestHolderMultiMealReleasesTurn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m := f.negotiatingManager(ctx, 60)
+		id, _, err := m.StartNow(ctx, 0, f.date, "lunch", 30, 60, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		f.conn.emit(f.reply(buyerB, "price?"))
+		settle()
+		f.conn.emit(dm(buyerB, "ok"))
+		settle()
+		f.conn.emit(f.reply(buyerC, "60"))
+		settle()
+		f.conn.emit(dm(buyerB, "120 for both?"))
+		settle()
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		if b := buyerState(t, f, id, buyerB); b.State != store.BuyerParked {
+			t.Fatalf("B = %+v, want parked after multi-meal request", b)
+		}
+		if c := buyerState(t, f, id, buyerC); c.State != store.BuyerOffered {
+			t.Fatalf("C = %+v, want asked to pay after B released turn", c)
+		}
+	})
+}

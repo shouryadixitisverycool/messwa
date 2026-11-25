@@ -23,7 +23,13 @@ func TestOfferTopicAsksAbout(t *testing.T) {
 	kadambaLunch := newOfferTopic(config.Default(), "kadamba", "lunch", "")
 	for text, want := range map[string]bool{
 		"price?":                         true,
+		"Avl?":                           true,
+		"Hw mch?":                        true,
+		"Hwmuch":                         true,
 		"How much?":                      true,
+		"What amount do I owe you?":      false,
+		"dont need":                      false,
+		"donot need":                     false,
 		"kitne ka hai":                   true,
 		"is the kadamba lunch available": true,
 		"kadamb?":                        true,

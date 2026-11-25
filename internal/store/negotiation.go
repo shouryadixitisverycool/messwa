@@ -26,6 +26,7 @@ var sellBuyerColumns = []string{
 	"said_lowest INTEGER NOT NULL DEFAULT 0",
 	"pass_countered INTEGER NOT NULL DEFAULT 0", // the buyer passed once and got a lower price
 	"told_meal INTEGER NOT NULL DEFAULT 0",      // the buyer asked for another meal and heard which one this is
+	"confirmed INTEGER NOT NULL DEFAULT 0",      // asked once to confirm a bare "ok" after a large floor gap
 	"nudges INTEGER NOT NULL DEFAULT 0",         // follow-ups to a buyer quiet since the first message; see Negotiation.Nudges
 	"started_at INTEGER",                        // first bot message
 	"agreed TEXT NOT NULL DEFAULT ''",
@@ -59,6 +60,9 @@ type Negotiation struct {
 	// ToldMeal: the buyer named another meal and the bot said which meal
 	// it sells. Naming another meal again ends the haggle.
 	ToldMeal bool
+	// Confirmed: the bot asked once to confirm a bare "ok" after a large
+	// gap between the buyer's offer and the floor.
+	Confirmed bool
 	// Nudges counts the follow-ups sent to a buyer who stayed quiet after
 	// the bot's first message: 1 after "yes or no?", 2 after the lower
 	// price that ends their session.
@@ -134,10 +138,10 @@ func (s *Store) ClaimNegotiationMessage(ctx context.Context, id int64, peer stri
 		return false, err
 	}
 	r, err := tx.ExecContext(ctx, `UPDATE sell_task_buyers SET state=CASE WHEN state='queued' THEN 'negotiating' ELSE state END,
- ask=?,rounds=?,bot_msgs=?,unknowns=?,last_offer=?,quoted=?,said_lowest=?,pass_countered=?,told_meal=?,nudges=?,started_at=coalesce(started_at,?)
+ ask=?,rounds=?,bot_msgs=?,unknowns=?,last_offer=?,quoted=?,said_lowest=?,pass_countered=?,told_meal=?,confirmed=?,nudges=?,started_at=coalesce(started_at,?)
  WHERE task_id=? AND peer=? AND bot_msgs=? AND state IN ('queued','negotiating','agreed') AND `+activeTask+`
  AND `+poolHonoured,
-		append([]any{n.Ask, n.Rounds, n.BotMsgs, n.Unknowns, n.LastOffer, joinPaise(n.Quoted), n.SaidLowest, n.PassCountered, n.ToldMeal, n.Nudges, n.StartedAt.Unix(),
+		append([]any{n.Ask, n.Rounds, n.BotMsgs, n.Unknowns, n.LastOffer, joinPaise(n.Quoted), n.SaidLowest, n.PassCountered, n.ToldMeal, n.Confirmed, n.Nudges, n.StartedAt.Unix(),
 			id, peer, sent, id}, honouredArgs(id, peer, n.Ask)...)...)
 	if err != nil {
 		return false, err
@@ -209,10 +213,10 @@ func (s *Store) AgreeSellTaskBuyer(ctx context.Context, id int64, peer, amount s
 	if err != nil || !found {
 		return false, err
 	}
-	r, err := tx.ExecContext(ctx, `UPDATE sell_task_buyers SET state='agreed',agreed=?,agreed_at=?,ask=?,rounds=?,bot_msgs=?,unknowns=?,last_offer=?,quoted=?,said_lowest=?,pass_countered=?,told_meal=?,nudges=?
+	r, err := tx.ExecContext(ctx, `UPDATE sell_task_buyers SET state='agreed',agreed=?,agreed_at=?,ask=?,rounds=?,bot_msgs=?,unknowns=?,last_offer=?,quoted=?,said_lowest=?,pass_countered=?,told_meal=?,confirmed=?,nudges=?
  WHERE task_id=? AND peer=? AND state IN ('queued','negotiating') AND `+activeTask+`
  AND `+honoured,
-		append([]any{amount, at.UnixNano(), n.Ask, n.Rounds, n.BotMsgs, n.Unknowns, n.LastOffer, joinPaise(n.Quoted), n.SaidLowest, n.PassCountered, n.ToldMeal, n.Nudges,
+		append([]any{amount, at.UnixNano(), n.Ask, n.Rounds, n.BotMsgs, n.Unknowns, n.LastOffer, joinPaise(n.Quoted), n.SaidLowest, n.PassCountered, n.ToldMeal, n.Confirmed, n.Nudges,
 			id, peer, id}, honouredArgs(id, peer, paise)...)...)
 	if err != nil {
 		return false, err

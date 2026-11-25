@@ -43,6 +43,8 @@ func TestBuyerPassed(t *testing.T) {
 		// Typos and padding buyers sent in a live run.
 		"Not intrested", "not intersted", "Not interseted", "nt interested",
 		"sorry not interested anymore", "Not interested bro 🙏", "nvm", "No need",
+		"Sorry got one", "Bought already", "i got it already", "Sorry donot want", "I purchased another one",
+		"I don’t want it", "Won’t buy",
 	} {
 		if !buyerPassed(&waE2E.Message{Conversation: proto.String(text)}) {
 			t.Errorf("%q was not read as a decline", text)
@@ -50,7 +52,8 @@ func TestBuyerPassed(t *testing.T) {
 	}
 	for _, text := range []string{
 		"Don't cancel, I paid", "interested", "I'm interested", "not interesting",
-		"How much?", "25?", "not interested in paying 30, 25?", "no", "paid",
+		"How much?", "25?", "not interested in paying 30, 25?", "no", "paid", "ok got it",
+		"got one?", "bought?", "I bought it", "Won't buy 60",
 	} {
 		if buyerPassed(&waE2E.Message{Conversation: proto.String(text)}) {
 			t.Errorf("%q was read as a decline", text)

@@ -60,11 +60,18 @@ func editDistance(a, b string) int {
 // dropped. A message with anything else in it ("don't cancel, I paid")
 // is not a pass, because a buyer who passes loses the turn and a payment
 // they send after that gets no QR.
-var passPhrases = squeezedSet("pass", "cancel", "no thanks", "no thank you",
-	"not interested", "not needed", "not required", "nvm", "never mind", "nevermind", "no need")
+var passPhrases = squeezedSet("pass", "cancel", "no thanks", "no thank you", "no thnx", "no thanx",
+	"not interested", "not needed", "not required", "nvm", "never mind", "nevermind", "no need",
+	"dont want", "don't want", "do not want", "donot want", "dont need", "don't need", "do not need", "donot need",
+	"wont buy", "won't buy", "will not buy", "not buying",
+	"got one", "already got", "alrdy got", "got already",
+	"bought already", "bought another", "bought another one", "bought elsewhere",
+	"bought from other", "bought from someone", "bought from someone else",
+	"got from other", "got from someone", "got from someone else",
+	"purchased another", "purchased another one")
 
 // passFiller may surround a pass: "sorry bro not interested anymore".
-var passFiller = squeezedSet("sorry", "sry", "anymore", "now", "ok", "okay")
+var passFiller = squeezedSet("sorry", "sry", "anymore", "now", "ok", "okay", "mb")
 
 // squeezedSet holds entries squeezed word by word, as passMessage reads
 // messages: "sorry" is stored as "sory".
@@ -81,9 +88,15 @@ func squeezedSet(entries ...string) map[string]bool {
 }
 
 // passMessage reports whether text, as a whole, declines the meal.
+// Questions ("got one?") and messages naming a price ("won't buy 60") do not
+// match here: those belong to the negotiation / backout handlers.
 func passMessage(text string) bool {
+	if strings.ContainsAny(text, "?0123456789") {
+		return false
+	}
+	norm := strings.ReplaceAll(strings.ToLower(text), "’", "'")
 	var words []string
-	for _, w := range wordRe.FindAllString(strings.ToLower(text), -1) {
+	for _, w := range wordRe.FindAllString(norm, -1) {
 		w = squeeze(strings.Trim(w, "'"))
 		if w == "" || filler.words[w] || passFiller[w] {
 			continue
