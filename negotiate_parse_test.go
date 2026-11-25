@@ -442,6 +442,15 @@ func TestCombineIntents(t *testing.T) {
 	if got := combineIntents([]string{"for both?", "send qr"}); got.kind != intentPayOther || !got.multi || !got.upi {
 		t.Errorf("combineIntents(for both?, send qr) = %+v, want pay_other+multi+upi", got)
 	}
+	if got := combineIntents([]string{"I bought mine for 50", "I want another for a friend"}); got.kind != intentOpener {
+		t.Errorf("combineIntents(bought mine, want another) = %+v, want opener", got)
+	}
+	if got := combineIntents([]string{"I bought mine for 50", "I'll take another for 40"}); got.kind != intentOffer || got.offer != 40 {
+		t.Errorf("combineIntents(bought mine, take another for 40) = %+v, want offer 40", got)
+	}
+	if got := combineIntents([]string{"I bought mine for 50", "I want another for a friend", "nvm"}); got.kind != intentPass {
+		t.Errorf("combineIntents(bought mine, want another, nvm) = %+v, want pass", got)
+	}
 	if got := combineIntents([]string{"Too much", "can't do WhatsApp Pay"}); got.kind != intentPayOther || !got.lower || !got.upi {
 		t.Errorf("combineIntents(Too much, can't do WhatsApp Pay) = %+v, want pay_other+lower+upi", got)
 	}

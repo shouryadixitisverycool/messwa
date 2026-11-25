@@ -258,6 +258,9 @@ func (h haggle) decide(st haggleState, in intent, now time.Time, competing bool)
 		next.toldMeal = true
 		return say(a, h.l.otherMeal(a, priced))
 	}
+	if in.multi && in.kind != intentPass && in.kind != intentPaid {
+		return step{next: next, park: "asked for multiple meals; check the chat"}
+	}
 	switch in.kind {
 	case intentPass:
 		k, ok := h.passCounter(st)
@@ -281,15 +284,9 @@ func (h haggle) decide(st haggleState, in intent, now time.Time, competing bool)
 	case intentPayOther:
 		return step{next: st, park: "wants to pay some way other than WhatsApp Pay"}
 	case intentAccept:
-		if in.multi {
-			return step{next: next, park: "asked for multiple meals; check the chat"}
-		}
 		return agree(a)
 	case intentOK:
 		if priced {
-			if in.multi {
-				return step{next: next, park: "asked for multiple meals; check the chat"}
-			}
 			if st.saidLowest && st.lastOffer > 0 && st.lastOffer*4 < a*3 && a-st.lastOffer > 20 && !st.confirmed {
 				next.confirmed = true
 				return say(a, h.l.restate(a))
@@ -298,9 +295,6 @@ func (h haggle) decide(st haggleState, in intent, now time.Time, competing bool)
 		}
 		return opening()
 	case intentOffer:
-		if in.multi {
-			return step{next: next, park: "asked for multiple meals; check the chat"}
-		}
 		c := in.offer
 		next.lastOffer = c
 		switch {
