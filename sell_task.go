@@ -481,6 +481,10 @@ func (m *sellManager) startWithExtraChecked(ctx context.Context, userID int64, d
 		return 0, errors.New("no group to post the offer in; add the mess groups to config.toml")
 	}
 	if extra != "" && verifyCapacity {
+		// Same lock order as StartExtras: a scheduled egg joining a
+		// fixed-price pool must not land halfway through a SetPrices.
+		m.pricesMu.Lock()
+		defer m.pricesMu.Unlock()
 		m.extrasMu.Lock()
 		defer m.extrasMu.Unlock()
 	}

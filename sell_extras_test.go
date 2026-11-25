@@ -518,3 +518,34 @@ func TestStartExtrasBlockedByActiveMainMealWithOldPost(t *testing.T) {
 		}
 	})
 }
+
+// Once a buyer replied to a fresh main-meal post offering Egg, editing the
+// post can't take the egg back from them, so it can't sell on its own.
+func TestStartExtrasBlockedByMainMealBuyerOnFreshPost(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	synctest.Test(t, func(t *testing.T) {
+		f := newSellFixture(t, path)
+		f.cfg.Sell.MentionExtras = true
+		ep := &fakeExtraPortal{
+			fakeMealPortal: fakeMealPortal{mess: "kadamba-nonveg"},
+			extras: []portal.ExtraRegistration{
+				{ID: "e1", Date: f.date, Meal: "lunch", Mess: "kadamba-nonveg", Name: "Egg", Rate: "1500"},
+			},
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		m := f.manager(ctx)
+		m.portalFor = func(context.Context, int64) (mealPortal, error) { return ep, nil }
+
+		if _, err := m.Start(ctx, 0, f.date, "lunch", 50, 50, ""); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		f.conn.emit(f.reply(buyerA, "lunch?"))
+		synctest.Wait()
+
+		if _, err := m.StartExtras(ctx, 0, f.date, "lunch", "Egg", 1, 15, 15, time.Time{}, true, false); err == nil {
+			t.Fatal("expected StartExtras to fail while a main-meal buyer holds a post offering Egg")
+		}
+	})
+}
