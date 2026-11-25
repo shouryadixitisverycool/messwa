@@ -248,26 +248,27 @@ func contains(ss []string, s string) bool {
 var (
 	atPrice     = regexp.MustCompile(`@\s*(\d{1,4})`)
 	rupeePrice  = regexp.MustCompile(`(?:rs\.?|₹|inr)\s*(\d{1,4})|(\d{1,4})\s*(?:rs\b|/-|₹|rupees)`)
-	clockTime   = regexp.MustCompile(`\b\d{1,2}:\d{2}\b`)
+	clockTime   = regexp.MustCompile(`\b\d{1,2}:\d{2}(?:\s*[ap]\.?m\b\.?)?`)
 	quantityPat = regexp.MustCompile(`\bx\s?([2-9])\b|\b([2-9])\s?x\b`)
 )
 
 // Price returns the asking price, if the post states one: "@30", "rs 30",
 // "30/-", or a lone number like "Sell bakul veg 20".
 func Price(t Text) (int, bool) {
+	// A clock time like "12:30" or "@12:30pm" is never the price.
+	raw, tokens := t.raw, t.tokens
+	if clockTime.MatchString(raw) {
+		raw = clockTime.ReplaceAllString(raw, " ")
+		tokens = strings.Fields(Normalize(raw))
+	}
 	for _, re := range []*regexp.Regexp{atPrice, rupeePrice} {
-		if m := re.FindStringSubmatch(t.raw); m != nil {
+		if m := re.FindStringSubmatch(raw); m != nil {
 			for _, g := range m[1:] {
 				if v, err := strconv.Atoi(g); err == nil {
 					return v, true
 				}
 			}
 		}
-	}
-	// A clock time like "12:30" is not a lone price.
-	tokens := t.tokens
-	if clockTime.MatchString(t.raw) {
-		tokens = strings.Fields(Normalize(clockTime.ReplaceAllString(t.raw, " ")))
 	}
 	for _, tok := range tokens {
 		if v, err := strconv.Atoi(tok); err == nil && v >= 5 && v <= 1000 {

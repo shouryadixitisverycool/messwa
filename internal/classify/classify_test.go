@@ -111,8 +111,13 @@ func TestQuantityAndNoise(t *testing.T) {
 	if _, ok := Price(Prepare("Sell yukthar dinner x3")); ok {
 		t.Error("x3 is a quantity, not a price")
 	}
-	if p, ok := Price(Prepare("WTB Bakul lunch at 12:30")); ok {
-		t.Errorf("12:30 is a time, not a price %d", p)
+	for _, s := range []string{"WTB Bakul lunch at 12:30", "WTB Bakul lunch @12:30", "WTB Bakul lunch at 12:30pm", "need lunch 1:15 p.m."} {
+		if p, ok := Price(Prepare(s)); ok {
+			t.Errorf("%q: a time is not a price, got %d", s, p)
+		}
+	}
+	if p, ok := Price(Prepare("sell bakul lunch @40 by 12:30pm")); !ok || p != 40 {
+		t.Errorf("@40 with a time = %d, %v", p, ok)
 	}
 	if p, ok := Price(Prepare("sell bakul lunch 12:30 40")); !ok || p != 40 {
 		t.Errorf("price after a time = %d, %v", p, ok)
