@@ -258,7 +258,8 @@ func Price(t Text) (int, bool) {
 	// A clock time like "12:30" or "@12:30pm" is never the price.
 	raw, tokens := t.raw, t.tokens
 	if clockTime.MatchString(raw) {
-		raw = clockTime.ReplaceAllString(raw, " ")
+		// A separator, not a space, so "@" or "2 ₹" can't match across it.
+		raw = clockTime.ReplaceAllString(raw, " | ")
 		tokens = strings.Fields(Normalize(raw))
 	}
 	for _, re := range []*regexp.Regexp{atPrice, rupeePrice} {
