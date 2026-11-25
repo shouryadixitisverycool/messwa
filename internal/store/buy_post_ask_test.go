@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-// The price named in a reply to a buy post counts as a quote, so the
-// opening still claims after the floor rises above it.
-func TestBuyPostAskIsAQuote(t *testing.T) {
+// A buy-post ask the pool's floor allows doesn't let the leader sell below
+// its own floor: saving it records no quote.
+func TestBuyPostAskIsNotAQuote(t *testing.T) {
 	ctx := t.Context()
 	s, err := Open(filepath.Join(t.TempDir(), "data.db"))
 	if err != nil {
@@ -16,21 +16,31 @@ func TestBuyPostAskIsAQuote(t *testing.T) {
 	}
 	defer s.Close()
 	now := time.Now()
-	id, err := s.CreateSellTask(ctx, SellTask{Date: "2026-11-11", Meal: "lunch", Mess: "bakul", Diet: "nonveg",
-		MinPaise: 8000, MaxPaise: 11000, CreatedAt: now, EndsAt: now.Add(time.Hour)})
-	if err != nil {
-		t.Fatal(err)
+	create := func(meal string, lo, hi int64) int64 {
+		t.Helper()
+		id, err := s.CreateSellTask(ctx, SellTask{Date: "2026-11-11", Meal: meal, Mess: "bakul", Diet: "nonveg",
+			MinPaise: lo * 100, MaxPaise: hi * 100, CreatedAt: now, EndsAt: now.Add(time.Hour)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
 	}
-	if ok, err := s.AddSellTaskBuyer(ctx, id, "poster", "", now); err != nil || !ok {
+	leader := create("lunch", 70, 80)
+	create("lunch#2", 50, 60)
+	if ok, err := s.AddSellTaskBuyer(ctx, leader, "poster", "", now); err != nil || !ok {
 		t.Fatal(ok, err)
 	}
-	if err := s.SetBuyPostAsk(ctx, id, "poster", 9000); err != nil {
+	if err := s.SetBuyPostAsk(ctx, leader, "poster", 5500); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.SetSellTaskPrices(ctx, id, 9500, 11000); err != nil {
-		t.Fatal(err)
+	if ok, err := s.BuyerPriceHonoured(ctx, leader, "poster", 5500); err != nil || ok {
+		t.Fatalf("leader with a 70 floor honours 55 = %v, %v", ok, err)
 	}
-	if ok, err := s.ClaimNegotiationMessage(ctx, id, "poster", 0, Negotiation{Ask: 9000, Quoted: []int64{9000}, BotMsgs: 1, StartedAt: now}); err != nil || !ok {
-		t.Fatalf("claim at the quoted 90 = %v, %v", ok, err)
+	// The pool may still quote it.
+	if ok, err := s.ClaimNegotiationMessage(ctx, leader, "poster", 0, Negotiation{Ask: 5500, Quoted: []int64{5500}, BotMsgs: 1, StartedAt: now}); err != nil || !ok {
+		t.Fatalf("pool opening at 55 = %v, %v", ok, err)
+	}
+	if ok, err := s.BuyerPriceHonoured(ctx, leader, "poster", 5500); err != nil || ok {
+		t.Fatalf("after the opening, leader honours 55 = %v, %v", ok, err)
 	}
 }

@@ -439,10 +439,10 @@ type prefixScan struct {
 
 func (p prefixScan) Scan(dest ...any) error { return p.row.Scan(append(p.extra, dest...)...) }
 
-// SetBuyPostAsk persists the opening ask before outreach is queued. The
-// reply to the post already names it, so it counts as a quote: the buyer
-// may pay it, and a later floor raise doesn't block it.
+// SetBuyPostAsk persists the opening ask before outreach is queued. It is
+// not a quote: the default reply to the post names no price, and in a pool
+// the ask may be below this task's own floor.
 func (s *Store) SetBuyPostAsk(ctx context.Context, id int64, peer string, ask int64) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE sell_task_buyers SET ask=?,quoted=? WHERE task_id=? AND peer=? AND state='queued' AND bot_msgs=0`, ask, joinPaise([]int64{ask}), id, peer)
+	_, err := s.db.ExecContext(ctx, `UPDATE sell_task_buyers SET ask=? WHERE task_id=? AND peer=? AND state='queued' AND bot_msgs=0`, ask, id, peer)
 	return err
 }

@@ -695,9 +695,7 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, rt
 				return false
 			}
 			n.mu.Lock()
-			// Nothing was sent yet, so this is their only quote.
-			hs := &n.sessionLocked(peer).hs
-			hs.ask, hs.quoted = price, []int{price}
+			n.sessionLocked(peer).hs.ask = price
 			n.mu.Unlock()
 			return true
 		}
