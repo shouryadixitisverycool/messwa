@@ -373,7 +373,7 @@ type msgWords struct {
 
 const (
 	subHundredTok = `(?:(?:twenty|thirty|forty|fourty|fifty|sixty|seventy|eighty|ninety)(?:\s+(?:one|two|three|four|five|six|seven|eight|nine))?|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|one|two|three|four|five|six|seven|eight|nine)`
-	numTok        = `(?:(?:(?:100|200|(?:(?:one|two|three|four|five|six|seven|eight|nine)\s+)?hundred)(?:\s+(?:and\s+)?` + subHundredTok + `)?)|(?:\d{1,3}(?:\.\d+)?)|(?:(?:twenty|thirty|forty|fourty|fifty|sixty|seventy|eighty|ninety)(?:\s+(?:one|two|three|four|five|six|seven|eight|nine))?|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen))`
+	numTok        = `(?:(?:\d{1,3}\.\d+)|(?:(?:100|200|(?:(?:one|two|three|four|five|six|seven|eight|nine)\s+)?hundred)(?:\s+(?:and\s+)?` + subHundredTok + `)?)|(?:\d{1,3})|(?:(?:twenty|thirty|forty|fourty|fifty|sixty|seventy|eighty|ninety)(?:\s+(?:one|two|three|four|five|six|seven|eight|nine))?|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen))`
 )
 
 var (
