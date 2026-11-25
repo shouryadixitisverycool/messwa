@@ -301,6 +301,8 @@ func TestParseBuyer(t *testing.T) {
 		{"for 2 hundred", intentOffer, 200, false},
 		{"can you do it for one hundred?", intentOffer, 100, false},
 		{"Can't pay 60.50", intentLower, 0, false},
+		{"Can't pay 100.50", intentLower, 0, false},
+		{"200.50 is too much", intentLower, 0, false},
 		{"60.50 is too much", intentLower, 0, false},
 		{"60.50 is too much, 45?", intentOffer, 45, false},
 		{"one hundred fifty is too much", intentLower, 0, false},
