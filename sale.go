@@ -400,6 +400,9 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 	// how many times the buyer heard that an image wasn't a payment.
 	var paidPaise int64
 	refs, reading := map[string]bool{}, map[string]bool{}
+	// shotsReading counts screenshots still being read. While any is, the
+	// buyer may have paid part, so later messages still count.
+	shotsReading := 0
 	unclear := 0
 	// dropLater remembers a drop that came while a payment was being
 	// handled: it ends the turn once that payment turns out not to count.
@@ -475,6 +478,7 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 		mu.Lock()
 		defer mu.Unlock()
 		pending--
+		shotsReading--
 		select {
 		case recoveryDone <- struct{}{}:
 		default:
@@ -514,12 +518,15 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 		// One payment can come as different images: a crop, a retake, the
 		// same receipt forwarded. Any shared key means it was counted.
 		keys := receiptKeys(rc, img.GetFileSHA256())
-		if slices.ContainsFunc(keys, func(k string) bool { return refs[k] }) {
-			s.log.Info("payment screenshot already counted", "image_id", e.Info.ID)
-			return
-		}
+		seen := slices.ContainsFunc(keys, func(k string) bool { return refs[k] })
+		// A duplicate still teaches its other keys, so a third view that
+		// shares only those is caught too.
 		for _, k := range keys {
 			refs[k] = true
+		}
+		if seen {
+			s.log.Info("payment screenshot already counted", "image_id", e.Info.ID)
+			return
 		}
 		paidPaise += rc.AmountPaise
 		s.log.Info("payment screenshot read", "image_id", e.Info.ID, "amount", rc.Amount, "total_paise", paidPaise, "model", model)
@@ -573,7 +580,7 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 		stopRecovery := requestedPayments[e.Info.ID]
 		// A buyer who paid part of the price may send the rest until the
 		// meal ends; imagePaymentRejection checks that bound.
-		if queued && paidPaise == 0 && (!e.Info.Timestamp.Before(payUntil) || (stopRecovery == nil && !time.Now().Before(payUntil))) {
+		if queued && paidPaise == 0 && shotsReading == 0 && (!e.Info.Timestamp.Before(payUntil) || (stopRecovery == nil && !time.Now().Before(payUntil))) {
 			return
 		}
 		if queued && pending == 0 && !e.Info.Timestamp.Before(armedAt) && buyerPassed(e.Message) {
@@ -597,6 +604,7 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 			if !reading[e.Info.ID] {
 				reading[e.Info.ID] = true
 				pending++
+				shotsReading++
 				go readShot(e)
 			}
 			return
@@ -612,7 +620,18 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 			}
 			return
 		}
-		paidAmount, reason := paymentMatch(e, append([]string{d.Amount}, t.amounts...), armedAt, s.end, time.Now())
+		accepted := append([]string{d.Amount}, t.amounts...)
+		// After screenshots that fell short, a WhatsApp Pay payment of the
+		// rest completes the price.
+		rest := ""
+		if paidPaise > 0 && paidPaise < paise(d.Amount) {
+			rest = paiseAmount(paise(d.Amount) - paidPaise)
+			accepted = append(accepted, rest)
+		}
+		paidAmount, reason := paymentMatch(e, accepted, armedAt, s.end, time.Now())
+		if reason == nil && paidAmount == rest {
+			paidAmount = ""
+		}
 		if !errors.Is(reason, errTruncatedPayment) && stopRecovery != nil {
 			stopRecovery()
 		}

@@ -340,3 +340,78 @@ func TestScreenshotDropDuringRead(t *testing.T) {
 		synctest.Wait()
 	})
 }
+
+// TestScreenshotDuplicateLearnsKeys catches a third view of one payment
+// that shares a key only with the second, which was itself a duplicate.
+func TestScreenshotDuplicateLearnsKeys(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		utrOnly := paidShot(20, "Shourya Dixit", "111111111111")
+		both := paidShot(20, "Shourya Dixit", "111111111111")
+		both.TxnID = "T26111"
+		txnOnly := paidShot(20, "Shourya Dixit", "")
+		txnOnly.TxnID = "T26111"
+		f, _ := screenshotFixture(t, map[string]payshot.Receipt{"utr": utrOnly, "both": both, "txn": txnOnly}, nil)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		f.startPaying(ctx, buyerA)
+		f.shot(buyerA, "utr")
+		f.shot(buyerA, "both")
+		f.shot(buyerA, "txn")
+		want := append(slices.Clone(screenshotPrompt), "got 20, 15 more pls")
+		if got := texts(sentTo(f.conn.messages(), buyerA)); !slices.Equal(got, want) {
+			t.Fatalf("A got %q, want %q", got, want)
+		}
+		cancel()
+		synctest.Wait()
+	})
+}
+
+// TestScreenshotTopUpWhileReading takes a top-up sent after the two
+// minutes while the first screenshot is still being read.
+func TestScreenshotTopUpWhileReading(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f, r := screenshotFixture(t, map[string]payshot.Receipt{
+			"rs3":  paidShot(3, "Shourya Dixit", "1"),
+			"rs32": paidShot(32, "Shourya Dixit", "2"),
+		}, nil)
+		r.gates = map[string]chan struct{}{"rs3": make(chan struct{})}
+		// A read that times out mustn't stand in for the payment here.
+		f.cfg.Sell.AcceptUnreadablePayments = false
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		f.startPaying(ctx, buyerA)
+		f.conn.emit(f.reply(buyerB, "me too"))
+		synctest.Wait()
+		time.Sleep(90 * time.Second)
+		f.shot(buyerA, "rs3")
+		// The two minutes end while ₹3 is still being read.
+		time.Sleep(40 * time.Second)
+		f.shot(buyerA, "rs32")
+		close(r.gates["rs3"])
+		synctest.Wait()
+		if got := texts(sentTo(f.conn.messages(), buyerA)); got[len(got)-1] != "[QR]" {
+			t.Fatalf("A got %q, want the meal QR", got)
+		}
+	})
+}
+
+// TestScreenshotThenWhatsAppPay completes the price with a WhatsApp Pay
+// payment of the rest after a short screenshot, at the full price.
+func TestScreenshotThenWhatsAppPay(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f, _ := screenshotFixture(t, map[string]payshot.Receipt{"rs3": paidShot(3, "Shourya Dixit", "1")}, nil)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		f.startPaying(ctx, buyerA)
+		f.shot(buyerA, "rs3")
+		f.conn.emit(paymentOf(buyerA, "pay-32", "32.00", time.Now()))
+		synctest.Wait()
+		if got := texts(sentTo(f.conn.messages(), buyerA)); got[len(got)-1] != "[QR]" {
+			t.Fatalf("A got %q, want the meal QR", got)
+		}
+		ds, err := f.st.Deliveries(ctx)
+		if err != nil || len(ds) != 1 || ds[0].Amount != "35.00" {
+			t.Fatalf("ledger = %+v, %v", ds, err)
+		}
+	})
+}

@@ -138,6 +138,7 @@ func TestPaidTo(t *testing.T) {
 		{Receipt{PayeeName: "SHOURYA DIXIT", PayeeUPI: "959919322@upi"}, name, true, "misread UPI ID, right name"},
 		{Receipt{PayeeUPI: "XXXXXX9322@upi"}, name, true, "your UPI ID, no name"},
 		{Receipt{PayeeName: "Someone Else", PayeeUPI: "someone@ybl"}, name, false, "someone else"},
+		{Receipt{PayeeName: "Someone Else", PayeeUPI: "XXXXXX9322@upi"}, name, false, "someone else, masked ID ending like yours"},
 		{Receipt{PayeeName: "Someone Else"}, "", true, "no name set"},
 	} {
 		if got := PaidTo(c.rc, upi, c.name); got != c.want {
