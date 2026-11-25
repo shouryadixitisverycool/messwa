@@ -456,10 +456,16 @@ func TestScreenshotCropBeforeFull(t *testing.T) {
 		if got := texts(sentTo(f.conn.messages(), buyerA)); !slices.Equal(got, want) {
 			t.Fatalf("A got %q, want %q", got, want)
 		}
-		// A separate payment from the same minute, with its own UTR, counts.
+		// After a crop, another receipt at the same amount and minute may be
+		// a third view of the same payment, so it doesn't count: the buyer
+		// is asked for the rest rather than the meal going for ₹20.
 		f.shot(buyerA, "other")
-		if got := texts(sentTo(f.conn.messages(), buyerA)); got[len(got)-1] != "[QR]" {
-			t.Fatalf("A got %q, want the meal QR for ₹40", got)
+		for _, m := range texts(sentTo(f.conn.messages(), buyerA)) {
+			if m == "[QR]" {
+				t.Fatal("meal QR sent on a receipt that may repeat the crop")
+			}
 		}
+		cancel()
+		synctest.Wait()
 	})
 }
