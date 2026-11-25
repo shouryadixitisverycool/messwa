@@ -38,20 +38,11 @@ func TestNudgeQuietBuyerThenDropAndTimeOut(t *testing.T) {
 		defer cancel()
 		_, id := quietA(t, f, ctx)
 
-		time.Sleep(nudgeAfter)
-		synctest.Wait()
-		if got := texts(sentTo(f.conn.messages(), buyerA)); strings.Join(got, "|") != "60|yes or no?" {
-			t.Fatalf("A got %q", got)
-		}
-		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerNegotiating || b.Nudges != 1 || b.Ask != 6000 {
-			t.Fatalf("A = %+v after the nudge", b)
-		}
-
 		// Still quiet: one lower price, the usual 40, and the bot stops
 		// waiting on them.
 		time.Sleep(nudgeAfter)
 		synctest.Wait()
-		if got := texts(sentTo(f.conn.messages(), buyerA)); strings.Join(got, "|") != "60|yes or no?|can do 40 if you want it" {
+		if got := texts(sentTo(f.conn.messages(), buyerA)); strings.Join(got, "|") != "60|40" {
 			t.Fatalf("A got %q", got)
 		}
 		b := buyerState(t, f, id, buyerA)
@@ -59,14 +50,14 @@ func TestNudgeQuietBuyerThenDropAndTimeOut(t *testing.T) {
 			t.Fatalf("A = %+v after the drop", b)
 		}
 		evs := eventsFor(t, f, id, buyerA)
-		if n := len(slices.DeleteFunc(slices.Clone(evs), func(k string) bool { return k != store.EventNudged })); n != 2 {
+		if n := len(slices.DeleteFunc(slices.Clone(evs), func(k string) bool { return k != store.EventNudged })); n != 1 {
 			t.Fatalf("events = %q", evs)
 		}
 
 		// Nothing more while they stay quiet.
 		time.Sleep(f.silence())
 		synctest.Wait()
-		if got := sentTo(f.conn.messages(), buyerA); len(got) != 3 {
+		if got := sentTo(f.conn.messages(), buyerA); len(got) != 2 {
 			t.Fatalf("A got %q", texts(got))
 		}
 
@@ -74,7 +65,7 @@ func TestNudgeQuietBuyerThenDropAndTimeOut(t *testing.T) {
 		f.conn.emit(dm(buyerA, "ok"))
 		settle()
 		toA := texts(sentTo(f.conn.messages(), buyerA))
-		if len(toA) != 6 || toA[3] != "ok 40" {
+		if len(toA) != 5 || toA[2] != "ok 40" {
 			t.Fatalf("A got %q", toA)
 		}
 		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerOffered || b.Amount != "40.00" {
@@ -90,13 +81,13 @@ func TestNudgeNoNegotiates(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		_, id := quietA(t, f, ctx)
-		time.Sleep(nudgeAfter)
+		time.Sleep(nudgeAfter / 2)
 		synctest.Wait()
 
 		// "no" to "yes or no?" gets the pass counter, not a goodbye.
 		f.conn.emit(dm(buyerA, "no"))
 		settle()
-		if got := texts(sentTo(f.conn.messages(), buyerA)); strings.Join(got, "|") != "60|yes or no?|how about 40" {
+		if got := texts(sentTo(f.conn.messages(), buyerA)); strings.Join(got, "|") != "60|how about 40" {
 			t.Fatalf("A got %q", got)
 		}
 		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerNegotiating || !b.PassCountered {
@@ -105,7 +96,7 @@ func TestNudgeNoNegotiates(t *testing.T) {
 		// They spoke, so no more nudges: the usual silence applies.
 		time.Sleep(2 * nudgeAfter)
 		synctest.Wait()
-		if got := sentTo(f.conn.messages(), buyerA); len(got) != 3 {
+		if got := sentTo(f.conn.messages(), buyerA); len(got) != 2 {
 			t.Fatalf("A got %q", texts(got))
 		}
 	})
@@ -118,7 +109,7 @@ func TestNudgeYesAgrees(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		_, id := quietA(t, f, ctx)
-		time.Sleep(nudgeAfter)
+		time.Sleep(nudgeAfter / 2)
 		synctest.Wait()
 		f.conn.emit(dm(buyerA, "yes"))
 		settle()
@@ -173,7 +164,7 @@ func TestNudgeResumesAfterRestart(t *testing.T) {
 		// The restart doesn't nudge again; a minute later comes the drop.
 		time.Sleep(nudgeAfter)
 		synctest.Wait()
-		if got := texts(sentTo(f.conn.messages(), buyerA)); strings.Join(got, "|") != "60|yes or no?|can do 40 if you want it" {
+		if got := texts(sentTo(f.conn.messages(), buyerA)); strings.Join(got, "|") != "60|40" {
 			t.Fatalf("A got %q", got)
 		}
 		if b := buyerState(t, f, id, buyerA); b.State != store.BuyerTimedOut {

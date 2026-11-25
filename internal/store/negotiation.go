@@ -438,3 +438,9 @@ type prefixScan struct {
 }
 
 func (p prefixScan) Scan(dest ...any) error { return p.row.Scan(append(p.extra, dest...)...) }
+
+// SetBuyPostAsk persists the opening ask before outreach is queued.
+func (s *Store) SetBuyPostAsk(ctx context.Context, id int64, peer string, ask int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE sell_task_buyers SET ask=? WHERE task_id=? AND peer=? AND state='queued' AND bot_msgs=0`, ask, id, peer)
+	return err
+}

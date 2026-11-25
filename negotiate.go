@@ -48,10 +48,8 @@ const (
 	maxOfferFactor  = 3 // an offer above 3x max_price goes to you instead of being agreed
 )
 
-// nudgeAfter is how long a buyer may stay quiet after the bot's first
-// message before it asks "yes or no?", and again after that before it
-// drops the price once and times them out. A reply to either revives them.
-var nudgeAfter = time.Minute
+// nudgeAfter is the silence before one bare lower price and no further follow-ups.
+var nudgeAfter = 2 * time.Minute
 
 var errSoldDirect = errors.New("a buyer paid before their turn and got the meal")
 
@@ -183,7 +181,7 @@ func (h haggle) passCounter(st haggleState) (int, bool) {
 }
 
 // quietDrop is the lower price a buyer hears after staying quiet through
-// the bot's first message and the nudge: the same price passCounter would
+// the bot's first message: the same price passCounter would
 // give, but a later pass still gets its own counter. It reports false when
 // the ask is already at the floor.
 func (h haggle) quietDrop(st haggleState) (int, bool) {
@@ -206,7 +204,7 @@ func (h haggle) quietDrop(st haggleState) (int, bool) {
 func (h haggle) decide(st haggleState, in intent, now time.Time, competing bool) step {
 	priced := st.botMsgs > 0
 	a := min(st.ask, h.max)
-	if !priced {
+	if st.ask <= 0 {
 		a = h.max
 	}
 	w := min(h.walk(now, competing), a)
@@ -1494,10 +1492,8 @@ func (ss *session) nudgeDue() bool {
 	return ss.state == sessionNegotiating && !ss.heard && hs.nudges < 2 && hs.botMsgs == 1+hs.nudges
 }
 
-// quietNudge follows up on a buyer who stayed quiet after the bot's first
-// message. The first time it asks "yes or no?" at the same price. The
-// second time it offers one lower price and times them out, so a late
-// reply revives them at that price.
+// quietNudge sends one bare lower price, then ends the silent session.
+// A later buyer reply can revive it at that price.
 func (ss *session) quietNudge() handled {
 	n := ss.n
 	n.agreeMu.Lock()
@@ -1514,17 +1510,7 @@ func (ss *session) quietNudge() handled {
 	n.mu.Unlock()
 	next := hs
 	next.quoted = slices.Clone(hs.quoted)
-	next.nudges++
-	if hs.nudges == 0 {
-		text := n.lines(ss.buyer).nudge(min(hs.ask, n.prices().max))
-		ok := ss.claimSayLocked(next)
-		n.agreeMu.Unlock()
-		if !ok || !ss.sendClaimed(next.ask, next.rounds, text) {
-			return handledEnded
-		}
-		n.event(ss.buyer, store.EventNudged, next.ask, "quiet after the first message; asked if they're buying")
-		return handledReplied
-	}
+	next.nudges = 2 // terminal, including sessions restored from the old two-follow-up policy
 	k, ok := n.prices().quietDrop(hs)
 	if ok {
 		was := min(hs.ask, n.prices().max)

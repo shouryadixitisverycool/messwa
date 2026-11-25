@@ -130,6 +130,18 @@ func buyPostMatches(l store.Listing, date, mess, diet string) bool {
 // messageBuyPost queues l's poster after a private reply to their post. It
 // reports whether the reply went out.
 func (m *sellManager) messageBuyPost(ctx context.Context, t store.SellTask, s *sale, gate *taskGate, queue *offerQueue, rule store.SoldRule, l store.Listing) bool {
+	// Use the live range, including edits made since the task started.
+	live, err := m.st.GetSellTask(ctx, t.ID)
+	if err != nil || live == nil {
+		return false
+	}
+	price := int(live.MaxPaise / 100)
+	if l.Price >= 0 {
+		price = min(price, l.Price+10)
+		if int64(price)*100 < live.MinPaise {
+			return false
+		}
+	}
 	peer, alt := m.posterJIDs(ctx, l)
 	if peer.IsEmpty() || queue.has(peer) {
 		return false
@@ -165,13 +177,16 @@ func (m *sellManager) messageBuyPost(ctx context.Context, t store.SellTask, s *s
 	if !ok {
 		return false
 	}
-	text := s.lines(types.EmptyJID).forBuyer(l.SellerName).have(int(t.MaxPaise / 100))[0]
+	text := s.lines(types.EmptyJID).forBuyer(l.SellerName).have(price)[0]
 	sent := false
 	chat := peer
 	if !alt.IsEmpty() {
 		chat = alt
 	}
 	queue.addAfter(peer, chat, l.SellerName, func() bool {
+		if queue.opening != nil && !queue.opening(peer, price) {
+			return false
+		}
 		_, err := gate.send(ctx, peer, quotedReply(text, post))
 		if err != nil {
 			m.log.Warn("could not message someone with a buy post", "task", t.ID, "buyer", peer, "err", err)

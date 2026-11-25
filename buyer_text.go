@@ -181,10 +181,9 @@ func (l lines) counter(price, was, round int) reply {
 // message.
 func (l lines) nudge(price int) reply { return l.say("nudge", "price", fmt.Sprint(price)) }
 
-// quietDrop is the lower price a buyer gets when they stay quiet after
-// the nudge too. The bot stops waiting on them after it.
+// quietDrop sends only the lower number after silence, including with custom wording.
 func (l lines) quietDrop(price, was int) reply {
-	return l.say("quiet_drop", "price", fmt.Sprint(price), "was", priceWords(was))
+	return reply{fmt.Sprint(price)}
 }
 
 // lowest is the floor.

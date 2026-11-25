@@ -79,11 +79,13 @@ func postGroupOffer(ctx context.Context, c *wa.Client, log *slog.Logger, group, 
 }
 
 type offerQueue struct {
-	mu     sync.Mutex
-	buyers []types.JID
-	seen   map[types.JID]bool
-	ready  chan struct{}
-	closed bool
+	// opening seeds a buy poster's price before they enter the negotiation.
+	opening func(types.JID, int) bool
+	mu      sync.Mutex
+	buyers  []types.JID
+	seen    map[types.JID]bool
+	ready   chan struct{}
+	closed  bool
 	// names holds each buyer's WhatsApp push name from their first reply.
 	names map[types.JID]string
 	// join, when set, records a new buyer before they are queued, with the

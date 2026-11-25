@@ -689,6 +689,17 @@ func (m *sellManager) runTask(ctx context.Context, t store.SellTask, s *sale, rt
 	if negotiates(t) {
 		n = newNegotiation(ctx, m, t, s, gate, queue)
 		rt.neg.Store(n)
+		queue.opening = func(peer types.JID, price int) bool {
+			if err := m.st.SetBuyPostAsk(ctx, t.ID, peer.String(), int64(price)*100); err != nil {
+				m.log.Warn("could not save buy post price", "task", t.ID, "err", err)
+				return false
+			}
+			n.mu.Lock()
+			n.sessionLocked(peer).hs.ask = price
+			n.mu.Unlock()
+			return true
+		}
+
 		// A range edit made while the task was starting reached the store
 		// but not n.
 		if err := n.refreshRange(ctx); err != nil {
@@ -1031,6 +1042,11 @@ func (m *sellManager) restore(ctx context.Context, t store.SellTask, queue *offe
 		case store.BuyerQueued:
 			alt, _ := types.ParseJID(b.Alt)
 			if !gate.turnsAway(ctx, peer, alt) {
+				if n != nil && b.Ask > 0 {
+					n.mu.Lock()
+					n.sessionLocked(peer).hs = haggleFromStore(b.Negotiation, n.h.max)
+					n.mu.Unlock()
+				}
 				queue.restore(peer, true)
 				continue
 			}

@@ -213,3 +213,51 @@ func TestPoolMessagesBuyPostOnceAcrossLeaderChange(t *testing.T) {
 		}
 	})
 }
+
+func TestBuyPostPriceCap(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		posted, floor, ceiling int
+		want                   string
+	}{
+		{"cap", 80, 80, 110, "90"}, {"ceiling", 80, 70, 85, "85"},
+		{"below floor", 80, 95, 110, ""}, {"no price", -1, 80, 110, "110"},
+		{"fixed too high", 80, 110, 110, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "data.db")
+			synctest.Test(t, func(t *testing.T) {
+				f := newSellFixture(t, path)
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				now := time.Now()
+				slot, err := findSlot(f.cfg, f.date, "lunch")
+				if err != nil {
+					t.Fatal(err)
+				}
+				l := store.Listing{Seller: buyerA.String(), Kind: "buy", Meal: "lunch", MealSource: "named", MealDate: f.date, MealEnd: slot.End, Mess: "bakul", Price: tc.posted, Qty: 1, Text: "buy bakul lunch", Norm: "buy bakul lunch", FirstSeen: now, LastSeen: now}
+				if err := f.st.CreateListing(ctx, &l); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.st.AddPost(ctx, store.Post{Chat: f.group.String(), ID: "priced-buy", ListingID: l.ID, Sender: buyerA.String(), TS: now, Text: l.Text}); err != nil {
+					t.Fatal(err)
+				}
+				m := f.negotiatingManager(ctx, 90)
+				if _, err := m.Start(ctx, 0, f.date, "lunch", tc.floor, tc.ceiling, ""); err != nil {
+					t.Fatal(err)
+				}
+				settle()
+				got := texts(sentTo(f.conn.messages(), buyerA))
+				if tc.want == "" {
+					if len(got) != 0 {
+						t.Fatalf("got %q, wanted no outreach", got)
+					}
+					return
+				}
+				if len(got) < 2 || got[1] != tc.want {
+					t.Fatalf("got %q, wanted opening %s", got, tc.want)
+				}
+			})
+		})
+	}
+}

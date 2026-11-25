@@ -1029,7 +1029,7 @@ After two counters the next one is its lowest. A buyer still below that after th
 
 **Buyers who need you.** The bot stops talking to a buyer, without ending the task, when they send two messages it can't read in a row (it restates its price once first), stay below its lowest, ask to pay some other way a second time, say they paid but no WhatsApp Pay payment arrives within a minute, or reach the limit of 6 replies (a two-message reply counts once). `sell_task_status` lists them under `needs_you` with why, a `wa.me` link, the bot's last price and their last offer. To sell to one of them yourself, cancel the task and use `deliver-qr -peer`. Lowering the floor also lists buyers whose offer it now meets; see [Changing prices](#changing-prices).
 
-**A buyer who goes quiet** after the bot's first message gets two follow-ups. After a minute of silence the bot asks `yes or no?` (or `are you buying?`, `interested?`) at the same price. `yes` agrees to it, and `no` counts as a pass, so it gets the one lower price above. After another quiet minute the bot offers one lower price, worked out like the pass counter (`can do 40 if you want it`), and times them out straight away. If they reply later, the bot picks them up again at that lower price (see below). A buyer who writes anything after the first message gets no follow-ups, and the silence below applies instead. Both follow-ups show in the task's events as `nudged` and count toward the 6-reply limit.
+**A buyer who goes quiet** after the first price gets one lower price as a bare number after two minutes, then times out with no further follow-ups. A later reply resumes negotiation at that price. A buyer who writes after the first price gets no silence follow-up. At the floor, nothing more is sent. The discount is recorded as `nudged` and counts toward the reply limit.
 
 A negotiation times out when the buyer has been quiet for `[sell] negotiation_silence` (10 minutes by default, 1 to 30) after the bot's last message, or after six minutes in all, or the silence if that's longer. At most 10 buyers negotiate at once; the rest wait their turn. Nothing is reserved for a quiet buyer, but they hold one of those 10 slots and count as competition, which slows the price drop.
 
@@ -1107,3 +1107,5 @@ WhatsApp download availability. Missing media is shown as unavailable. Earlier
 conversations cannot be recovered from the event log. Conversation data and
 attachments use the existing seller-account access boundary and are kept in the
 account database. Backups of that database therefore contain private sale chats.
+
+Buy posts naming a price X are offered at most X + 10, capped at the current sale maximum. If X + 10 is below the minimum, the bot skips that poster. Posts without a price use the maximum.

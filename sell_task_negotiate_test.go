@@ -1239,7 +1239,7 @@ func TestNegotiationPausedTimersFrozenDuringTurn(t *testing.T) {
 		// Once the remaining half of nudgeAfter passes, the nudge fires.
 		time.Sleep(nudgeAfter / 2)
 		synctest.Wait()
-		if toB := texts(sentTo(f.conn.messages(), buyerB)); !slices.Equal(toB, []string{"60", "yes or no?"}) {
+		if toB := texts(sentTo(f.conn.messages(), buyerB)); !slices.Equal(toB, []string{"60", "40"}) {
 			t.Fatalf("B got %q after unpause", toB)
 		}
 	})
