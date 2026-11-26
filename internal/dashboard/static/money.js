@@ -364,7 +364,12 @@ function renderRecap() {
   // Rebuilding the slides drops focus and restarts their animations, so only
   // do it when the week changed. The price plot and regulars redraw anyway.
   const key = JSON.stringify(w);
-  if (card.dataset.key === key) { renderPrices(); renderHeads(); return; }
+  if (card.dataset.key === key) {
+    renderPrices();
+    renderHeads();
+    recapFit();
+    return;
+  }
   card.dataset.key = key;
 
   const track = $('recapTrack');
@@ -382,7 +387,15 @@ function renderRecap() {
     b.addEventListener('click', () => track.scrollTo({ left: s.offsetLeft - track.offsetLeft, behavior: MONEY_STILL() ? 'auto' : 'smooth' }));
     dots.append(b);
   });
+  recapFit();
+}
+
+// recapFit refits the card after a redraw and drops a tip whose target the
+// redraw replaced. loadRecap calls renderRecap outside render(), which
+// would otherwise do the second part.
+function recapFit() {
   recapDot();
+  if (tipFor && !tipFor.isConnected) hideTip();
 }
 
 // recapDot marks the slide on screen and fits the card to it, so a short
@@ -459,7 +472,7 @@ function friendPills(box) {
       open ? () => openSell(f.date, friendCell(f)) : null,
       `${who}, ${word}`);
     p.style.setProperty('--m', messColor(f.mess));
-    p.dataset.k = `f${f.date}|${f.meal}|${f.friend || ''}`;
+    p.dataset.k = `f${f.date}|${f.slot || f.meal}`;
     box.append(p);
   }
 }
