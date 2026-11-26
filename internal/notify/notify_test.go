@@ -61,9 +61,9 @@ type fakeWebPush struct {
 	texts   []string
 }
 
-func (p *fakeWebPush) Name() string               { return "web_push" }
+func (p *fakeWebPush) Name() string                { return "web_push" }
 func (p *fakeWebPush) Enabled(*config.Config) bool { return p.enabled }
-func (p *fakeWebPush) SupportsKind(string) bool   { return true }
+func (p *fakeWebPush) SupportsKind(string) bool    { return true }
 func (p *fakeWebPush) Send(_ context.Context, b Batch) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
