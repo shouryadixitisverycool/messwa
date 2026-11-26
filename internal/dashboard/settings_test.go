@@ -183,3 +183,46 @@ func TestSettingsMessages(t *testing.T) {
 		t.Fatalf("live messages = %v, want only the counter (the nudge matches the default)", live)
 	}
 }
+
+func TestSettingsAlertsAPI(t *testing.T) {
+	st := newTestStore(t)
+	cfg := config.Default()
+	cfg.ApplySaved(nil)
+	d := startDashboard(t, cfg, st, mcpserver.New(cfg, st, nil), NewHub())
+	member := d.as(t, accounts.Member)
+
+	var got settingsState
+	if res := member.get(t, "/api/settings", &got); res.StatusCode != 200 {
+		t.Fatalf("GET = %d", res.StatusCode)
+	}
+	if got.Values["alerts.whatsapp"] != false || got.Defaults["alerts.whatsapp"] != false {
+		t.Fatalf("alerts.whatsapp = %v / %v, want false", got.Values["alerts.whatsapp"], got.Defaults["alerts.whatsapp"])
+	}
+	if got.Values["alerts.quiet_start"] != "00:00" || got.Values["alerts.quiet_end"] != "07:00" {
+		t.Fatalf("quiet hours = %v..%v", got.Values["alerts.quiet_start"], got.Values["alerts.quiet_end"])
+	}
+
+	res := member.send(t, "PUT", "/api/settings", map[string]any{"values": map[string]any{
+		"alerts.whatsapp":     true,
+		"alerts.kinds":        []string{"refund", "blocked"},
+		"alerts.quiet_start":  "23:00",
+		"alerts.quiet_end":    "07:30",
+		"alerts.max_per_hour": 10,
+	}})
+	res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("member save alerts = %d, want 200", res.StatusCode)
+	}
+	live := cfg.Live().Alerts
+	if !live.WhatsApp || !slices.Equal(live.Kinds, []string{"refund", "blocked"}) || live.QuietStart != "23:00" || live.QuietEnd != "07:30" || live.MaxPerHour != 10 {
+		t.Fatalf("live alerts = %+v", live)
+	}
+
+	bad := member.send(t, "PUT", "/api/settings", map[string]any{"values": map[string]any{
+		"alerts.kinds": []string{"bogus"},
+	}})
+	bad.Body.Close()
+	if bad.StatusCode != 400 {
+		t.Fatalf("bad alert kind = %d, want 400", bad.StatusCode)
+	}
+}

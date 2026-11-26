@@ -7,17 +7,20 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
+	"google.golang.org/protobuf/proto"
 	"messwa/internal/accounts"
 	"messwa/internal/config"
 	"messwa/internal/dashboard"
 	"messwa/internal/ingest"
 	"messwa/internal/mcpserver"
+	"messwa/internal/notify"
 	"messwa/internal/store"
 	"messwa/internal/wa"
 	"rsc.io/qr"
@@ -34,12 +37,21 @@ type deviceAccounts struct {
 	acc      *accounts.Accounts
 	hub      *dashboard.Hub
 	users    map[int64]*deviceAccount
+	// extraChannels builds additional notify.Channel instances (such as Web Push)
+	// registered on every per-account Dispatcher.
+	extraChannels []func(userID int64, cfg *config.Config, st *store.Store) notify.Channel
 }
 type deviceAccount struct {
 	id int64
-	// started and unlinking are guarded by deviceAccounts.mu.
-	started   bool
-	unlinking bool
+	// started, notifierStarted, notifierDone and unlinking are guarded by deviceAccounts.mu.
+	started         bool
+	notifierStarted bool
+	notifierDone    chan struct{}
+	unlinking       bool
+
+	// notifier is lock-free so callbacks fired while a.mu is held (such as
+	// sell.Cancel inside Unlink) can wake it without re-entering a.mu.
+	notifier atomic.Pointer[notify.Dispatcher]
 
 	mu      sync.Mutex
 	ctx     context.Context
@@ -84,6 +96,7 @@ func accountConfig(ctx context.Context, cfg *config.Config, st *store.Store, id 
 		c.MCP.SellTasks = cfg.Live().MCP.NewUserSellTasks
 		c.Sell = config.Default().Sell
 		c.Sales = config.Sales{}
+		c.Alerts = config.Default().Alerts
 	}
 	if err = config.EnsureDir(dir); err != nil {
 		return nil, err
@@ -128,11 +141,13 @@ func (m *deviceAccounts) server(ctx context.Context, id int64) (*mcpserver.Serve
 	if err != nil {
 		return nil, err
 	}
-	cfg.ApplySaved(config.Settings(saved))
+	accountLog := m.log.With("user_id", id)
+	for k, skipErr := range cfg.ApplySaved(config.Settings(saved)) {
+		accountLog.Warn("ignoring saved account setting; it no longer fits config.toml", "key", k, "err", skipErr)
+	}
 	if err = st.AssignLegacyTasks(ctx, id); err != nil {
 		return nil, err
 	}
-	accountLog := m.log.With("user_id", id)
 	c, err := wa.Open(m.ctx, cfg, accountLog)
 	if err != nil {
 		return nil, err
@@ -143,11 +158,23 @@ func (m *deviceAccounts) server(ctx context.Context, id int64) (*mcpserver.Serve
 	in.OnChange(m.hub.Notify)
 	client := wa.NewRuntime(accountCtx, c, in, st)
 	a.client = client
-	// The usage page's live view shows who is offline.
+	wakeNotifier := func() {
+		if n := a.notifier.Load(); n != nil {
+			n.Wake()
+		}
+	}
+	// The usage page's live view shows who is offline, and the notifier wakes
+	// on connection state changes (re-enabling offline items on reconnect).
 	client.AddEventHandler(func(evt any) {
 		switch evt.(type) {
-		case *events.Connected, *events.Disconnected, *events.LoggedOut:
+		case *events.Connected:
 			m.hub.Notify()
+			if n := a.notifier.Load(); n != nil {
+				n.ChannelOnline(notify.ChannelWhatsApp)
+			}
+		case *events.Disconnected, *events.LoggedOut:
+			m.hub.Notify()
+			wakeNotifier()
 		}
 	})
 	send := func(ctx context.Context, to types.JID, msg *waE2E.Message, extra ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error) {
@@ -158,8 +185,8 @@ func (m *deviceAccounts) server(ctx context.Context, id int64) (*mcpserver.Serve
 		if err != nil {
 			return whatsmeow.SendResponse{}, err
 		}
-		if user == nil || user.Disabled {
-			return whatsmeow.SendResponse{}, fmt.Errorf("account disabled")
+		if user == nil || !user.IsActive() {
+			return whatsmeow.SendResponse{}, fmt.Errorf("account unavailable")
 		}
 		var resp whatsmeow.SendResponse
 		err = client.Do(func(c *wa.Client) error {
@@ -176,7 +203,10 @@ func (m *deviceAccounts) server(ctx context.Context, id int64) (*mcpserver.Serve
 			}
 			return proxyPortal{stateDir: cfg.StateDir, real: func(ctx context.Context) (mealPortal, error) { return m.acc.Portal(ctx, id) }, friends: st.FriendMeal}, nil
 		}, newOwnGroupLog(accountCtx, cfg, st, client))
-	sell.notify = m.hub.Notify
+	sell.notify = func() {
+		m.hub.Notify()
+		wakeNotifier()
+	}
 	a.sell = sell
 	a.srv = mcpserver.New(cfg, st, client)
 	a.srv.SetAccounts(m.acc)
@@ -188,6 +218,34 @@ func (m *deviceAccounts) server(ctx context.Context, id int64) (*mcpserver.Serve
 	if m.readOnly {
 		a.srv.Device = nil
 		a.srv.SetSellTasks(nil)
+	} else {
+		n := notify.NewDispatcher(notify.DispatcherConfig{
+			UserID: id,
+			Store:  st,
+			Config: func() *config.Config { return a.srv.Config().Live() },
+			Source: func(ctx context.Context) ([]notify.Item, error) {
+				user, err := m.acc.User(ctx, id)
+				if err != nil || user == nil || !user.IsActive() {
+					return nil, err
+				}
+				return attentionToNotifyItems(a.srv.Attention(ctx, id))
+			},
+			BaseURL: func() string { return m.cfg.Dash.BaseURL() },
+			Log:     accountLog,
+			Now:     m.clock,
+		})
+		n.Register(notify.NewWhatsAppChannel(waAlertSender{
+			accountCtx: accountCtx,
+			acc:        m.acc,
+			userID:     id,
+			client:     client,
+		}))
+		for _, build := range m.extraChannels {
+			if ch := build(id, cfg, st); ch != nil {
+				n.Register(ch)
+			}
+		}
+		a.notifier.Store(n)
 	}
 	ready = true
 	a.id = id
@@ -195,6 +253,73 @@ func (m *deviceAccounts) server(ctx context.Context, id int64) (*mcpserver.Serve
 	go reloadSettings(accountCtx, m.log, a.srv)
 	m.settle(a, u)
 	return a.srv, nil
+}
+
+type waAlertSender struct {
+	accountCtx context.Context
+	acc        *accounts.Accounts
+	userID     int64
+	client     *wa.Runtime
+}
+
+// SendSelfText checks account status, resolves the account's own non-AD JID,
+// and sends within a single wa.Runtime lease so unlinking and relinking a
+// different phone number cannot redirect an alert to the previous number.
+func (s waAlertSender) SendSelfText(ctx context.Context, text string) error {
+	if err := s.accountCtx.Err(); err != nil {
+		return err
+	}
+	user, err := s.acc.User(ctx, s.userID)
+	if err != nil {
+		return err
+	}
+	if user == nil || !user.IsActive() {
+		return fmt.Errorf("%w: account unavailable", notify.ErrChannelUnavailable)
+	}
+	return s.client.Do(func(c *wa.Client) error {
+		if !c.LoggedIn() || !c.WA.IsConnected() {
+			return fmt.Errorf("%w: WhatsApp disconnected", notify.ErrChannelUnavailable)
+		}
+		jidStr, altStr, _ := c.Self(ctx)
+		var selfJID types.JID
+		for _, raw := range []string{jidStr, altStr} {
+			if raw == "" {
+				continue
+			}
+			if j, err := types.ParseJID(raw); err == nil && !j.IsEmpty() && j.User != "" {
+				selfJID = j.ToNonAD()
+				break
+			}
+		}
+		if selfJID.IsEmpty() {
+			return fmt.Errorf("%w: WhatsApp not linked", notify.ErrChannelUnavailable)
+		}
+		_, err := c.WA.SendMessage(ctx, selfJID, &waE2E.Message{Conversation: proto.String(text)})
+		return err
+	})
+}
+
+func attentionToNotifyItems(items []mcpserver.AttentionItem, err error) ([]notify.Item, error) {
+	if err != nil {
+		return nil, err
+	}
+	out := make([]notify.Item, len(items))
+	for i, it := range items {
+		out[i] = notify.Item{
+			ID:         it.ID,
+			Kind:       it.Kind,
+			Title:      it.Title,
+			Detail:     it.Detail,
+			Date:       it.Date,
+			Meal:       it.Meal,
+			Task:       it.Task,
+			Account:    it.Account,
+			Resolvable: it.Resolvable,
+			Rule:       it.Rule,
+			Buyer:      it.Buyer,
+		}
+	}
+	return out, nil
 }
 
 // settle brings a user's WhatsApp client in line with their sign-up status.
@@ -206,6 +331,15 @@ func (m *deviceAccounts) server(ctx context.Context, id int64) (*mcpserver.Serve
 func (m *deviceAccounts) settle(a *deviceAccount, u *accounts.User) {
 	if m.readOnly {
 		return
+	}
+	if n := a.notifier.Load(); u.IsActive() && n != nil && !a.notifierStarted {
+		a.notifierStarted = true
+		done := make(chan struct{})
+		a.notifierDone = done
+		go func() {
+			defer close(done)
+			n.Run(a.ctx)
+		}()
 	}
 	switch {
 	case u.IsActive() && !a.started && a.client.LoggedIn():
@@ -401,6 +535,9 @@ func (m *deviceAccounts) close() {
 	for _, a := range m.users {
 		if a.stop != nil {
 			a.stop()
+		}
+		if a.notifierDone != nil {
+			<-a.notifierDone
 		}
 		a.client.Close()
 		if a.st != m.st {
