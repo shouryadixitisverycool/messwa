@@ -11,28 +11,7 @@
 .sales .head-meta b { color: var(--text); font-weight: 600; }
 .sales .head-meta .gold { color: var(--gold); }
 .sales .head-meta .red { color: #ff6b5b; }
-.saved-row .dim { color: var(--dim); }
 .notice b { color: var(--text); font-weight: 600; }
-
-/* ---------- saved this month ---------- */
-
-.saved { margin: 2px 2px 18px; }
-.saved-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 7px; }
-.saved-k { font: 700 10px Pixel; letter-spacing: .5px; color: var(--muted); }
-.saved-v { font: 400 16px/16px Pixel; color: #80ff20; text-shadow: 2px 0 0 #000, -2px 0 0 #000, 0 2px 0 #000, 0 -2px 0 #000; white-space: nowrap; }
-.saved-v small { font-size: 8px; color: var(--muted); text-shadow: none; margin-left: 4px; }
-.xp-bar { position: relative; height: 12px; border-radius: 2px; background: #0c0f08; border: 1px solid #000; box-shadow: 0 0 0 1px #2a3320; overflow: hidden; }
-.xp-bar i { position: absolute; top: 0; bottom: 0; left: 0; width: 0; }
-.xp-bar .earned { background: linear-gradient(180deg, #c8ff7a 0, #80ff20 30%, #46a800 100%); }
-.xp-bar .could {
-  background: repeating-linear-gradient(135deg, rgba(255, 197, 61, .55) 0 3px, rgba(255, 197, 61, .12) 3px 6px);
-  box-shadow: inset 0 0 0 1px rgba(255, 197, 61, .5);
-}
-.xp-bar::after { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(90deg, transparent 0 calc(10% - 2px), rgba(0, 0, 0, .75) calc(10% - 2px) 10%); pointer-events: none; }
-.saved-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; margin-top: 7px; font-size: 12.5px; color: var(--muted); }
-.saved-row b { color: var(--text); font-weight: 600; }
-.saved-row .g { color: var(--gold); }
-.saved-row .x { color: #80ff20; }
 
 /* ---------- ledger ---------- */
 
@@ -83,36 +62,10 @@
 .panel .rar { margin-top: 7px; font: 700 11.5px Pixel; letter-spacing: .6px; }
 .lore { color: #c08ad8; font-style: italic; }
 
-.slegend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); }
-.slegend span { display: flex; align-items: center; gap: 6px; font: 700 8px Pixel; color: var(--muted); letter-spacing: .3px; text-transform: uppercase; }
-.sw { position: relative; width: 16px; height: 16px; border-radius: 4px; background: var(--slot); border: 1px solid #2a3140; }
-.sw.s::after { content: "₹"; position: absolute; inset: 0; display: grid; place-items: center; font: 700 10px var(--sans); color: var(--gold); }
-.sw.r::after { content: ""; position: absolute; left: 2px; right: 5px; bottom: 2px; height: 2px; border-radius: 1px; background: var(--gold); }
-.sw.a::after { content: ""; position: absolute; inset: 4px; border: 1.5px solid var(--muted); border-radius: 2px; transform: rotate(-14deg); }
-.sw.w { border-color: #ff6b5b; }
-.sw.u { background: transparent; border-style: dashed; }
-
-/* ---------- regulars ---------- */
-
-.heads { display: grid; grid-template-columns: repeat(auto-fill, var(--s)); gap: var(--gap); }
-.heads .slot > svg { position: absolute; left: 50%; top: 46%; width: 44%; height: 44%; transform: translate(-50%, -50%); filter: drop-shadow(2px 2px 0 rgba(0, 0, 0, .45)); }
-.heads .pip { position: absolute; left: 6px; top: 6px; width: 6px; height: 6px; border-radius: 1px; background: var(--m); box-shadow: 0 0 6px var(--m); }
-.heads .slot.tiered { border-color: color-mix(in srgb, var(--m) 45%, transparent); }
-.rbody { display: flex; gap: 16px; margin-top: 14px; align-items: flex-start; }
-.rbody .panel { flex: 1; min-width: 0; }
-.tiers { width: 240px; display: flex; flex-direction: column; gap: 7px; padding-top: 4px; }
-.tier { display: flex; justify-content: space-between; font: 700 9px Pixel; letter-spacing: .4px; }
-.tier span { color: var(--dim); }
-.tiers p { margin: 6px 0 0; font-size: 11.5px; color: var(--dim); }
 .empty-note { padding: 18px 4px 6px; color: var(--dim); font-size: 13px; }
 
 /* ---------- price check ---------- */
 
-.pleg { display: flex; gap: 12px; font-size: 11.5px; white-space: nowrap; }
-.pleg i { display: inline-block; vertical-align: -1px; margin-right: 5px; }
-.pleg .b { width: 14px; height: 10px; border-radius: 3px; background: rgba(232, 236, 243, .16); }
-.pleg .t { width: 2px; height: 11px; background: var(--text); opacity: .8; }
-.pleg .d { width: 8px; height: 8px; border-radius: 50%; background: var(--gold); }
 .pplot svg { width: 100%; height: auto; overflow: visible; }
 .pplot text { font-family: var(--sans); }
 .pplot .px { font: 700 9px Pixel; }
@@ -120,25 +73,14 @@
 .pplot .dot { cursor: default; }
 .pplot .dot:hover circle + circle { stroke: var(--text); }
 
-/* ---------- earnings ---------- */
-
-.ecards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: calc(var(--gap) * 2); }
-.ecards .card { cursor: default; }
-.ecards .spark { grid-template-columns: repeat(var(--n), minmax(0, 1fr)); }
-.ecards .bk i { left: 12%; right: 12%; background: var(--m); }
-.ecards .bk:hover i { filter: brightness(1.25); }
-.ecards .card-diet { display: inline-flex; align-items: center; gap: 5px; margin-left: 10px; font: 600 11px var(--sans); letter-spacing: 0; color: var(--muted); vertical-align: middle; }
-.ecards .card-head .card-diet svg { width: 12px; height: 12px; }
-
 @media (max-width: 760px) {
   /* Seven columns plus the meal icons must fit the phone's width. */
   .app.sales { --s: min(52px, calc((100vw - 96px) / 7)); }
   .lgrid { grid-template-columns: 20px repeat(7, var(--s)); }
   .dh { font-size: 7px; letter-spacing: 0; }
   .cell .stamp { font-size: 6px; letter-spacing: 0; padding: 1px 3px 2px; }
-  .ledger, .rbody { flex-direction: column; }
-  .lside, .tiers { width: 100%; }
-  .ecards { grid-template-columns: minmax(0, 1fr); }
+  .ledger { flex-direction: column; }
+  .lside { width: 100%; }
   .app.sales .price, .lgrid .price { font-size: 16px; }
 }
 
@@ -167,25 +109,7 @@
 /* Autopilot on a ledger cell. */
 .auto-tag { position: absolute; top: 3px; right: 4px; font-size: 9px; line-height: 1; color: #5aa9ff; }
 
-/* ---------- friends' meals ---------- */
-
-.fr-add { margin-left: auto; padding: 8px 12px; }
-.friends { display: grid; gap: 6px; }
-.friend {
-  display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 12px; align-items: center; width: 100%;
-  padding: 8px 12px; border-radius: 11px; background: var(--slot); border: 1px solid #1e2431; color: var(--text); font: inherit; text-align: left;
-}
-button.friend { cursor: pointer; }
-.friend.live { border-color: color-mix(in srgb, var(--gold) 45%, transparent); }
-.friend.live:hover, .friend.live:focus-visible { background: var(--slot-hi); border-color: color-mix(in srgb, var(--m) 65%, transparent); outline: none; }
-.fr-ic svg { width: 28px; height: 28px; display: block; }
-.fr-what { display: grid; gap: 2px; min-width: 0; }
-.fr-what b { font-size: 13.5px; }
-.fr-what span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fr-right { display: grid; justify-items: end; gap: 3px; }
-.fr-right .pill { margin: 0; font-size: 8px; }
-.fr-amt { color: var(--gold); font-size: 13px; font-weight: 600; }
-.fr-buyer { color: var(--dim); font-size: 11px; }
+/* ---------- the friend's meal form ---------- */
 
 .sell-form fieldset.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; border: 0; }
 .chips legend { width: 100%; margin-bottom: 6px; padding: 0; color: var(--muted); font-size: 12px; }
@@ -239,17 +163,6 @@ button.friend { cursor: pointer; }
 .sw.p { border: 2px solid var(--gold); background: color-mix(in srgb, var(--gold) 12%, var(--slot)); }
 .sw.x { border-color: #ff6b5b; box-shadow: 0 0 6px rgba(255, 107, 91, .45); }
 
-.side-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 22px; }
-.cal-multi {
-  display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 7px; cursor: pointer;
-  background: var(--slot); border: 1px solid var(--line); color: var(--muted); font: 700 7px Pixel; letter-spacing: .4px; text-transform: uppercase;
-}
-.cal-multi[hidden] { display: none; }
-.cal-multi i { width: 9px; height: 9px; border-radius: 2px; border: 1px solid currentColor; }
-.cal-multi:hover { color: var(--text); background: var(--slot-hi); }
-.cal-multi.on { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 60%, transparent); }
-.cal-multi.on i { background: var(--gold); border-color: var(--gold); box-shadow: inset 0 0 0 2px #141923; }
-.cal-multi:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 
 /* The panel, with a meal or a pick open in it. */
 .panel.calm { background: linear-gradient(rgba(16, 0, 16, .95), rgba(16, 0, 16, .95)) padding-box, linear-gradient(180deg, #3a1a90, #1c0a55) border-box; }

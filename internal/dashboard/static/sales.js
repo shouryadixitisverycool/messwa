@@ -9,7 +9,6 @@ let skew = 0;           // server clock minus ours, seconds
 let lastOK = 0;
 let failed = false;
 let streaming = false;
-let pickedBuyer = '';   // buyer key in the regulars inspector
 
 const now = () => Date.now() / 1000 + skew;
 const tz = () => (D && D.tz) || 'Asia/Kolkata';
@@ -142,72 +141,15 @@ function render() {
     if (here) here.textContent = 'My meals';
     document.title = 'My meals · messwa';
   }
-  for (const id of ['regSec', 'pcSec', 'earnSec']) $(id).hidden = !D.owner;
   for (const e of document.querySelectorAll('.own')) e.hidden = !D.owner;
-  renderSaved();
+  renderMoney();
   renderCalendar();
   if (typeof refreshRecurringRulesView === 'function') refreshRecurringRulesView();
-  if (D.owner) {
-    renderFriends();
-    renderRegulars();
-    renderPrices();
-    renderEarnings();
-  }
   // A re-render replaces whatever the tooltip was attached to.
   if (tipFor && !tipFor.isConnected) hideTip();
 }
 
-// ---------- saved this month ----------
-
-function renderSaved() {
-  const M = D.month;
-  const monthName = fmt(M.start, { month: 'long' });
-  const scale = M.fee > 0 ? M.fee : M.earned + M.potential;
-  const ew = scale ? Math.min(1, M.earned / scale) : 0;
-  const cw = scale ? Math.min(1 - ew, M.potential / scale) : 0;
-  $('xpEarned').style.setProperty('width', `${ew * 100}%`);
-  const could = $('xpCould');
-  could.style.setProperty('left', `${ew * 100}%`);
-  could.style.setProperty('width', `${cw * 100}%`);
-
-  if (!D.owner) {
-    // Members don't sell through messwa, so this is only what went to waste.
-    $('savedK').textContent = `Wasted in ${monthName}`;
-    $('savedV').replaceChildren(rupees(Math.round(M.potential)));
-    const row = $('savedRow');
-    const left = el('span');
-    left.append(el('b', '', `${M.wasted} meal${M.wasted === 1 ? '' : 's'}`), ' ended unsold and uneaten');
-    const right = el('span');
-    if (M.wasted) right.append(`worth about ${rupees(Math.round(M.potential))} at the median ask`);
-    if (M.unpriced) right.append(` (${M.unpriced} with no asks to go on)`);
-    row.replaceChildren(left, right);
-    return;
-  }
-  $('savedK').textContent = `Saved in ${monthName}`;
-  const v = $('savedV');
-  v.replaceChildren(rupees(M.earned));
-  if (M.fee > 0) v.append(el('small', '', `${Math.round((M.earned / M.fee) * 100)}% of ${rupees(M.fee)}`));
-
-  const row = $('savedRow');
-  const left = el('span');
-  const xs = M.extras_sold || 0;
-  if (M.sold || !xs) left.append(el('b', '', `${M.sold} meal${M.sold === 1 ? '' : 's'}`));
-  if (M.sold && xs) left.append(' + ');
-  if (xs) left.append(el('b', '', `${xs} extra${xs === 1 ? '' : 's'}`));
-  left.append(' sold');
-  if (M.fee > 0) left.append(` against a ${rupees(M.fee)} mess bill`);
-  else if (M.bill) left.append(el('span', 'dim', '. The portal shows no mess bill this month'));
-  else left.append(el('span', 'dim', '. Couldn\'t read your mess bill from the portal to measure it against'));
-  const right = el('span');
-  if (M.wasted) {
-    right.append(el('span', 'g', `+${rupees(Math.round(M.potential))}`),
-      ` more if the ${M.wasted} wasted meal${M.wasted === 1 ? '' : 's'} had sold at the median ask`);
-    if (M.unpriced) right.append(` (${M.unpriced} with no asks to go on)`);
-  } else if (!D.portal) {
-    right.append(el('span', 'x', 'Nothing wasted this month'));
-  }
-  row.replaceChildren(left, right);
-}
+// ---------- the jar's tooltip ----------
 
 function savedTip() {
   const M = D.month;
@@ -251,7 +193,7 @@ function cellNode(date, c) {
     const p = el('div', 'price range');
     p.append(el('span', 'r', '₹'), t.min === t.max ? String(t.min) : `${t.min}-${t.max}`);
     if (c.diet) n.append(span('diet', dietMark(c.diet)));
-    n.append(span('messg', messIcon(c.mess)), p, el('div', 'glint'), el('span', 'sell-tag', 'SELLING'));
+    n.append(span('messg', messIcon(c.mess)), p, el('div', 'glint'), el('span', 'live-dot'));
     if (t.autopilot) n.append(el('span', 'auto-tag', '✈'));
   } else if (c.state === 'scheduled') {
     const sc = c.schedule;
@@ -267,8 +209,6 @@ function cellNode(date, c) {
     const g = el('div', 'ghost');
     g.append(svgEl(messIcon(c.mess)));
     n.append(g);
-    if (c.state === 'ate') n.append(el('span', 'stamp', 'ATE'));
-    if (c.state === 'wasted') n.append(el('span', 'stamp', 'WASTED'));
     if (c.sellable) n.append(el('span', 'sell-tag', 'SELL'));
   }
   if (c.extras && c.extras.length) n.append(extrasBadge(c));
@@ -424,48 +364,7 @@ const openSell = (date, c, view) => SELL.open(date, c, view);
 // Friends' meals are sold through your WhatsApp from their QR. They're
 // listed here and nowhere else on the page, so they never count as yours.
 
-const FRIEND_LOOK = {
-  scheduled: ['SCHEDULED', 'ce'], selling: ['SELLING', 'c6'], armed: ['ARMED', 'ce'], sending: ['PAID · SENDING', 'c6'], sold: ['SOLD', 'ca'],
-  handoff: ['HANDED OFF', 'c6'], ended: ['ENDED UNSOLD', 'c8'],
-};
 const { friendCell } = SELL;
-
-function renderFriends() {
-  const box = $('friends');
-  box.replaceChildren();
-  const fs = D.friends.slice().reverse();
-  const live = fs.filter((f) => f.task).length, sold = fs.filter((f) => f.state === 'sold');
-  $('frMeta').replaceChildren(el('b', '', String(live)), ' selling · ', el('b', '', String(sold.length)),
-    ` sold for ${rupees(sum(sold.map((f) => f.amount)))} · not in your totals`);
-  if (!fs.length) {
-    box.append(el('div', 'empty-note', 'Selling a meal for a friend? Add it with their QR. It posts and haggles like yours, and its money stays out of your numbers.'));
-    return;
-  }
-  for (const f of fs) {
-    const open = f.task || f.schedule;
-    const row = el(open ? 'button' : 'div', 'friend' + (open ? ' live' : ''));
-    row.style.setProperty('--m', messColor(f.mess));
-    if (open) {
-      row.type = 'button';
-      row.setAttribute('aria-label', f.task ? `Manage the sale of ${f.friend || 'a friend'}'s ${f.meal}: mark sold, edit prices or stop`
-        : `Manage the scheduled sale of ${f.friend || 'a friend'}'s ${f.meal}, going up at ${hm(f.schedule.at)}`);
-      row.addEventListener('click', () => openSell(f.date, friendCell(f)));
-    }
-    const ic = el('span', 'fr-ic');
-    ic.append(svgEl(messIcon(f.mess)));
-    const what = el('div', 'fr-what');
-    const nm = el('b', '', `${messName(f.mess)}${f.diet ? ` ${DIET_LABEL[f.diet].toLowerCase()}` : ''} ${f.meal}`);
-    nm.style.setProperty('color', messColor(f.mess));
-    what.append(nm, el('span', '', `${f.friend ? `for ${f.friend} · ` : ''}${dayWord(f.date)}${f.start ? `, ${hm(f.start)}-${hm(f.end)}` : ''}${f.extras && f.extras.length ? ` · + ${f.extras.join(', ')}` : ''}`));
-    const [word, cls] = FRIEND_LOOK[f.state] || [f.state.toUpperCase(), 'c8'];
-    const right = el('div', 'fr-right');
-    const price = f.task ? priceText(f.task) : f.schedule ? priceText(f.schedule) : f.amount ? rupees(f.amount) : '';
-    right.append(el('span', 'pill ' + cls, f.schedule ? `${word} ${hm(f.schedule.at)}` : word), el('span', 'fr-amt', price));
-    if (f.buyer && (f.state === 'sold' || f.state === 'armed' || f.state === 'sending' || f.state === 'handoff')) right.append(el('span', 'fr-buyer', fmtPhone(f.buyer)));
-    row.append(ic, what, right);
-    box.append(row);
-  }
-}
 
 function openFriendForm() {
   hideTip();
@@ -643,48 +542,6 @@ function buyers() {
     .sort((a, b) => b.n - a.n || b.spent - a.spent);
 }
 
-function renderRegulars() {
-  const bs = buyers();
-  const heads = $('heads');
-  heads.replaceChildren();
-  $('regMeta').replaceChildren(el('b', '', String(bs.length)), ` buyer${bs.length === 1 ? '' : 's'} · `,
-    el('b', '', String(bs.filter((b) => b.n > 1).length)), ' came back · all time');
-  const body = heads.nextElementSibling;
-  body.hidden = !bs.length;
-  if (!bs.length) {
-    heads.append(el('div', 'empty-note', 'No sales yet. Meals you sell with deliver-qr show up here.'));
-    return;
-  }
-  if (!bs.some((b) => b.key === pickedBuyer)) pickedBuyer = bs[0].key;
-  for (const b of bs.slice(0, 40)) {
-    const t = tierOf(b.n);
-    const n = el('div', 'slot item' + (t.min > 1 ? ' tiered' : '') + (b.key === pickedBuyer ? ' active' : ''));
-    n.style.setProperty('--m', t.color);
-    n.append(svgEl(face(b.key)), el('span', 'pip'));
-    if (b.n > 1) n.append(el('span', 'qty', String(b.n)));
-    n.addEventListener('pointerenter', () => {
-      if (pickedBuyer === b.key) return;
-      pickedBuyer = b.key;
-      for (const x of heads.children) x.classList.toggle('active', x === n);
-      fillLines($('rinsp'), buyerLines(b));
-    });
-    heads.append(n);
-  }
-  fillLines($('rinsp'), buyerLines(bs.find((b) => b.key === pickedBuyer)));
-
-  const tiers = $('tiers');
-  tiers.replaceChildren();
-  TIERS.slice().reverse().forEach((t, i, all) => {
-    const next = all[i + 1];
-    const range = !next ? `${t.min}+` : next.min - 1 === t.min ? String(t.min) : `${t.min}-${next.min - 1}`;
-    const row = el('div', 'tier', t.name);
-    row.style.setProperty('color', t.color);
-    row.append(el('span', '', `${range} meal${range === '1' ? '' : 's'}`));
-    tiers.append(row);
-  });
-  tiers.append(el('p', '', 'The number on a head is meals bought from you.'));
-}
-
 function buyerLines(b) {
   const t = tierOf(b.n);
   const usual = new Map();
@@ -747,7 +604,7 @@ function renderPrices() {
   if (hi - lo < 20) { lo = Math.max(0, lo - 10); hi = lo + 30; }
   const W = narrow ? Math.max(260, box.clientWidth) : 860;
   const x0 = narrow ? 14 : 136, x1 = narrow ? W - 14 : W - 168;
-  const top = narrow ? 8 : 22, rowH = narrow ? 64 : 40, H = top + rows.length * rowH + (narrow ? 10 : 16);
+  const top = narrow ? 8 : 22, rowH = narrow ? 50 : 40, H = top + rows.length * rowH + (narrow ? 10 : 16);
   const X = (v) => x0 + ((v - lo) / (hi - lo)) * (x1 - x0);
   const step = [5, 10, 20, 25, 50, 100].find((s) => (hi - lo) / s <= (narrow ? 4 : 6)) || 100;
   const ticks = [];
@@ -760,7 +617,7 @@ function renderPrices() {
   const verdicts = [];
   rows.forEach(({ meal, diet, m, ms }, i) => {
     // ly is the label line, y the bar's middle. They share a line on desktop.
-    const ly = top + i * rowH + (narrow ? 8 : 6), y = narrow ? ly + 28 : ly;
+    const ly = top + i * rowH + (narrow ? 8 : 6), y = narrow ? ly + 24 : ly;
     svg += icon(meal).replace('<svg ', `<svg x="2" y="${ly - 6}" width="12" height="12" `)
       + dietMark(diet).replace('<svg ', `<svg x="18" y="${ly - 6}" width="12" height="12" `)
       + `<text class="px" x="36" y="${ly + 4}" fill="#8b94a7">${meal.toUpperCase()}</text>`;
@@ -802,107 +659,15 @@ function renderPrices() {
   }
 }
 
-// ---------- earnings per mess ----------
-
-function renderEarnings() {
-  const box = $('cards');
-  box.replaceChildren();
-  const mine = recentSales();
-  const days = [];
-  for (let d = D.recent; d <= D.today; d = addDays(d, 1)) days.push(d);
-  // A card per mess and diet you sold something in. Extras sold apart from
-  // their meal get a card of their own, so an egg never drags down a meal's
-  // median.
-  const names = D.messes.map((m) => m.name);
-  const messOf = (s) => (names.includes(s.mess) ? s.mess : '');
-  const keyOf = (mess, diet) => `${mess}|${diet}`;
-  const dietOf = (s) => (s.extra ? 'extra' : priceDiet(s.diet));
-  const dietName = (d) => (d === 'extra' ? 'Extras' : DIET_LABEL[d]);
-  const cards = [];
-  for (const m of [...D.messes, { name: '' }]) {
-    const sold = mine.filter((s) => messOf(s) === m.name);
-    for (const diet of ['veg', 'nonveg', 'egg', 'extra']) {
-      if (sold.some((s) => dietOf(s) === diet)) cards.push({ mess: m.name, diet });
-    }
-  }
-  if (!cards.length) {
-    box.append(el('div', 'empty-note', 'No sales in the last 4 weeks.'));
-    return;
-  }
-  const per = new Map(cards.map((k) => [keyOf(k.mess, k.diet), days.map(() => 0)]));
-  for (const s of mine) per.get(keyOf(messOf(s), dietOf(s)))[days.indexOf(s.date)] += s.amount;
-  const mx = Math.max(1, ...[...per.values()].flat());
-  const totals = cards.map((k) => sum(per.get(keyOf(k.mess, k.diet))));
-  const best = Math.max(...totals);
-  const top = totals.filter((t) => t === best).length === 1 && best > 0 ? totals.indexOf(best) : -1;
-  const week = weekDates();
-  const w0 = days.indexOf(week[0]), w1 = days.indexOf(week[6]);
-
-  cards.forEach(({ mess: m, diet }, ci) => {
-    const list = mine.filter((s) => messOf(s) === m && dietOf(s) === diet);
-    const c = el('div', 'card');
-    c.style.setProperty('--m', messColor(m));
-    const head = el('div', 'card-head');
-    head.append(svgEl(messIcon(m)));
-    const nm = el('span', 'card-name', messName(m));
-    nm.style.setProperty('color', messColor(m));
-    const dt = span('card-diet', diet === 'extra' ? extraIcon() : dietMark(diet));
-    dt.append(dietName(diet));
-    nm.append(dt);
-    head.append(nm);
-    if (ci === top) head.append(el('span', 'verdict hot', 'TOP EARNER'));
-    const kpis = el('div', 'kpis');
-    const kpi = (v, label) => { const k = el('div', 'kpi'); k.append(el('b', v == null ? 'none' : '', v == null ? '-' : v), el('span', '', label)); return k; };
-    const med = median(list.map((s) => s.amount));
-    kpis.append(kpi(String(list.length), diet === 'extra' ? 'EXTRAS SOLD' : 'MEALS SOLD'), kpi(rupees(totals[ci]), 'EARNED'), kpi(med == null ? null : rupees(Math.round(med)), 'MEDIAN PRICE'));
-    const spark = el('div', 'spark');
-    spark.style.setProperty('--n', days.length);
-    if (w1 >= 0 || w0 >= 0) {
-      const band = el('div', 'band');
-      const a = Math.max(0, w0 < 0 ? 0 : w0), b = w1 < 0 ? days.length - 1 : w1;
-      band.style.setProperty('left', `${(a / days.length) * 100}%`);
-      band.style.setProperty('width', `${((b - a + 1) / days.length) * 100}%`);
-      band.style.setProperty('right', 'auto');
-      spark.append(band);
-    }
-    per.get(keyOf(m, diet)).forEach((v, i) => {
-      const bk = el('div', 'bk');
-      if (v) {
-        const bar = el('i');
-        bar.style.setProperty('height', `${Math.max(6, (v / mx) * 100)}%`);
-        bk.append(bar);
-      }
-      const ds = list.filter((s) => s.date === days[i]);
-      tip(bk, () => [
-        [{ t: `${messName(m)} ${dietName(diet).toLowerCase()}, ${fmtDay(days[i])}`, c: 'nm', color: messColor(m) }],
-        ...(ds.length ? ds.map((s) => [{ t: `${cap(saleWhat(s))} `, c: 'c7' }, { t: rupees(s.amount), c: 'c6' }, { t: ` · ${s.name || fmtPhone(s.phone) || 'Unknown buyer'}`, c: 'c8' }]) : [[{ t: 'No sales', c: 'c8' }]]),
-        ds.length > 1 ? [{ t: 'Total ', c: 'c7' }, { t: rupees(v), c: 'cf' }] : null,
-      ].filter((x) => x !== null));
-      spark.append(bk);
-    });
-    const axis = el('div', 'axis');
-    axis.append(el('span', '', fmtShort(days[0])), el('span', '', fmtShort(days[Math.floor(days.length / 2)])), el('span', '', 'today'));
-    c.append(head, kpis, spark, axis);
-    box.append(c);
-  });
-}
-
 // ---------- boot ----------
 
-$('ledIcon').append(svgEl(icon('coin')));
-$('frIcon').append(svgEl(icon('coin')));
-$('frAdd').addEventListener('click', () => { if (D) openFriendForm(); });
-$('regIcon').append(svgEl(icon('paper')));
-$('pcIcon').append(svgEl(icon('chart')));
-$('cardIcon').append(svgEl(icon('chart')));
-tip($('xpBar'), () => (D ? savedTip() : []));
 // The phone layout draws at the box's pixel width, so redraw when the box
 // resizes, not only when it crosses into or out of the narrow layout.
 new ResizeObserver(() => {
-  if (!D || !D.owner || !(pricesNarrow || pricesTooNarrow())) return;
+  if (!D || !D.owner || !$('pplot') || !(pricesNarrow || pricesTooNarrow())) return;
   renderPrices();
   if (tipFor && !tipFor.isConnected) hideTip();
-}).observe($('pplot'));
+}).observe($('recapTrack'));
 addEventListener('keydown', (e) => {
   if (!modal.hidden) { if (e.key === 'Escape') closeModal(); return; }
   if (!D || e.metaKey || e.ctrlKey || e.altKey) return;

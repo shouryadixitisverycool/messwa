@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="shell.css">
 <link rel="stylesheet" href="sales.css">
+<link rel="stylesheet" href="money.css">
 <script src="common.js" defer></script>
 <script src="shell.js" defer></script>
 <link rel="stylesheet" href="attention.css">
@@ -19,9 +20,10 @@
 <script src="sales.js" defer></script>
 <script src="ledger.js" defer></script>
 <script src="recurring.js" defer></script>
+<script src="money.js" defer></script>
 </head>
 <body data-page="money">
-<div class="app sales">
+<div class="app sales money">
   <div class="page-head">
     <h1 class="page-title" id="title">Money</h1>
     <span class="live" id="live"><i></i><span id="liveText">connecting</span></span>
@@ -29,93 +31,46 @@
 
   <p class="notice" id="notice" hidden></p>
 
-  <section class="chest" aria-label="Sales ledger">
-    <div class="chest-head">
-      <span class="head-icon" id="ledIcon"></span>
-      <span class="head-name" id="ledName">Sales ledger</span>
-      <span class="head-meta" id="ledMeta"></span>
-      <span class="pager">
-        <button class="sell-btn pg-today" id="pgToday" type="button" hidden>This week</button>
-        <button class="pg" id="pgPrev" type="button" aria-label="Earlier week">&lsaquo;</button>
-        <button class="pg" id="pgNext" type="button" aria-label="Later week">&rsaquo;</button>
-      </span>
-    </div>
-    <div class="saved" id="saved">
-      <div class="saved-top"><span class="saved-k" id="savedK">Saved this month</span><span class="saved-v" id="savedV"></span></div>
-      <div class="xp-bar" id="xpBar"><i class="earned" id="xpEarned"></i><i class="could" id="xpCould"></i></div>
-      <div class="saved-row" id="savedRow"></div>
+  <div class="money-top">
+    <section class="mcard jar" id="jar" aria-label="This month">
+      <div class="jar-art" id="jarArt"></div>
+      <div class="jar-num">
+        <span class="jar-k" id="jarK"></span>
+        <span class="jar-v" id="jarV"></span>
+        <span class="jar-of" id="jarOf"></span>
+        <div class="jar-spark" id="jarSpark" role="img"></div>
+      </div>
+    </section>
+    <section class="mcard recap" id="recap" hidden aria-label="Weekly recap">
+      <div class="recap-head">
+        <span class="recap-week" id="recapWeek"></span>
+        <button class="mnav" id="recapOlder" type="button" aria-label="Earlier week">&lsaquo;</button>
+        <button class="mnav" id="recapNewer" type="button" aria-label="Later week">&rsaquo;</button>
+      </div>
+      <div class="recap-track" id="recapTrack"></div>
+      <div class="recap-dots" id="recapDots"></div>
+    </section>
+  </div>
+
+  <div class="pills" id="pills" hidden role="group" aria-label="Recurring rules and friends' meals"></div>
+  <p class="sell-err" id="ruleListError" role="alert"></p>
+
+  <section class="mcard week" aria-label="Meals by week">
+    <div class="week-head">
+      <button class="mnav" id="pgPrev" type="button" aria-label="Earlier week">&lsaquo;</button>
+      <span class="week-meta" id="ledMeta"></span>
+      <button class="mnav" id="pgNext" type="button" aria-label="Later week">&rsaquo;</button>
+      <button class="mpill small" id="pgToday" type="button" hidden>This week</button>
+      <button class="mpill small cal-multi" id="calMulti" type="button" aria-pressed="false" hidden title="Taps add meals to the pick instead of opening one">Pick several</button>
     </div>
     <div class="ledger">
       <div class="lgrid" id="lgrid" role="group" aria-label="Meals by day"></div>
       <div class="lside">
-        <div class="side-top">
-          <span class="side-k" id="sideK">This week</span>
-          <button class="cal-multi" id="calMulti" type="button" aria-pressed="false" hidden title="Taps add meals to the pick instead of opening one"><i></i>Pick several</button>
-        </div>
+        <span class="side-k" id="sideK">This week</span>
         <div class="panel" id="insp" aria-live="polite"></div>
       </div>
     </div>
-    <div class="slegend">
-      <span class="own"><i class="sw s"></i>Sold</span>
-      <span class="own"><i class="sw r"></i>Armed, awaiting pay</span>
-      <span class="own"><i class="sw l"></i>Selling</span>
-      <span class="own"><i class="sw q"></i>Scheduled</span>
-      <span><i class="sw a"></i>Ate it</span>
-      <span><i class="sw w"></i>Wasted</span>
-      <span><i class="sw u"></i>Registered</span>
-      <span class="own"><i class="sw p"></i>Picked</span>
-      <span class="own"><i class="sw x"></i>Needs a look</span>
-    </div>
-  </section>
-
-  <section class="chest own" id="ruleSec" hidden aria-label="Recurring rules">
-    <div class="chest-head">
-      <span class="head-icon" id="ruleIcon"></span>
-      <span class="head-name">Recurring rules</span>
-      <span class="head-meta" id="ruleMeta"></span>
-      <button class="sell-btn gold fr-add" id="ruleNew" type="button">+ New rule</button>
-    </div>
-    <div class="friends rule-list" id="ruleList"></div>
-    <p class="sell-err" id="ruleListError" role="alert"></p>
-  </section>
-
-  <section class="chest own" id="friendSec" hidden aria-label="Friends' meals">
-    <div class="chest-head">
-      <span class="head-icon" id="frIcon"></span>
-      <span class="head-name">Friends' meals</span>
-      <span class="head-meta" id="frMeta"></span>
-      <button class="sell-btn gold fr-add" id="frAdd" type="button">+ Sell a friend's meal</button>
-    </div>
-    <div class="friends" id="friends"></div>
-  </section>
-
-  <section class="chest" id="regSec" aria-label="Regular buyers">
-    <div class="chest-head">
-      <span class="head-icon" id="regIcon"></span>
-      <span class="head-name">Regulars</span>
-      <span class="head-meta" id="regMeta"></span>
-    </div>
-    <div class="heads" id="heads"></div>
-    <div class="rbody"><div class="panel" id="rinsp"></div><div class="tiers" id="tiers"></div></div>
-  </section>
-
-  <section class="chest" id="pcSec" aria-label="Your prices against the market">
-    <div class="chest-head">
-      <span class="head-icon" id="pcIcon"></span>
-      <span class="head-name">Price check</span>
-      <span class="head-meta">last 4 weeks</span>
-      <span class="pleg"><span><i class="b"></i>market middle half</span><span><i class="t"></i>median ask</span><span><i class="d"></i>your sale</span></span>
-    </div>
-    <div class="pplot" id="pplot"></div>
-  </section>
-
-  <section class="chest" id="earnSec" aria-label="Earnings per mess">
-    <div class="chest-head">
-      <span class="head-icon" id="cardIcon"></span>
-      <span class="head-name">Earnings</span>
-      <span class="head-meta">₹ per day over 4 weeks</span>
-    </div>
-    <div class="ecards" id="cards"></div>
+    <div class="lfilter" id="lfilter" role="group" aria-label="Show only"></div>
   </section>
 </div>
 
@@ -126,7 +81,7 @@
   <div class="sheet sell-sheet rule-sheet" role="dialog" aria-modal="true" aria-labelledby="ruleTitle">
     <div class="sell-head">
       <h2 id="ruleTitle">New rule</h2>
-      <div class="sub" id="ruleSub">Sells matching registered meals up to four weeks ahead.</div>
+      <div class="sub" id="ruleSub"></div>
     </div>
     <form id="ruleForm" class="sell-form" novalidate>
       <fieldset class="plan-fieldset rule-fields" id="ruleFields">
@@ -175,7 +130,7 @@
         <p class="sell-note" id="rulePreviewText" role="status"></p>
       </div>
       <div class="rule-delete" id="ruleDeleteBox" hidden>
-        <p class="sell-note">Stops the rule. Meals already selling carry on, and its waiting meals stay scheduled unless you remove them. Removed meals stay out of every rule until you allow them again from the ledger.</p>
+        <p class="sell-note">Meals already selling carry on. Removed ones stay out of rules until you allow them from the week grid.</p>
         <label class="rsw"><span class="rsw-t"><b>Remove its waiting meals</b></span><input id="ruleRemoveWaiting" type="checkbox" role="switch"><i aria-hidden="true"></i></label>
         <div class="sell-acts"><button type="button" class="sell-btn" id="ruleDeleteBack">BACK</button><button type="button" class="sell-btn red" id="ruleDelete">DELETE RULE</button></div>
       </div>
