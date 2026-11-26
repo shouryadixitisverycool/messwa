@@ -139,3 +139,63 @@ func TestNeedsRestart(t *testing.T) {
 		t.Fatal("SameValue")
 	}
 }
+
+func TestAlertSettingsAndPublicURL(t *testing.T) {
+	c := Default()
+	if c.Alerts.WhatsApp {
+		t.Fatal("alerts.whatsapp should default to false")
+	}
+	if strings.Join(c.Alerts.Kinds, ",") != "refund,blocked,schedule,delivery,post" {
+		t.Fatalf("default alert kinds = %v", c.Alerts.Kinds)
+	}
+	if c.Alerts.QuietStart != "00:00" || c.Alerts.QuietEnd != "07:00" || c.Alerts.MaxPerHour != DefaultAlertsPerHour {
+		t.Fatalf("default alerts = %+v", c.Alerts)
+	}
+
+	n, err := c.WithSettings(Settings{
+		"alerts.whatsapp":     raw(true),
+		"alerts.kinds":        raw([]string{" Refund ", "blocked", "refund", "whatsapp"}),
+		"alerts.quiet_start":  raw("23:30"),
+		"alerts.quiet_end":    raw("06:30"),
+		"alerts.max_per_hour": raw(12),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !n.Alerts.WhatsApp || strings.Join(n.Alerts.Kinds, ",") != "refund,blocked,whatsapp" || n.Alerts.QuietStart != "23:30" || n.Alerts.QuietEnd != "06:30" || n.Alerts.MaxPerHour != 12 {
+		t.Fatalf("updated alerts = %+v", n.Alerts)
+	}
+
+	// Disabling quiet hours with empty strings is allowed.
+	if _, err := c.WithSettings(Settings{"alerts.quiet_start": raw(""), "alerts.quiet_end": raw("")}); err != nil {
+		t.Fatalf("empty quiet hours refused: %v", err)
+	}
+
+	for name, s := range map[string]Settings{
+		"unknown kind":         {"alerts.kinds": raw([]string{"refund", "nope"})},
+		"half quiet hours":     {"alerts.quiet_start": raw("23:00"), "alerts.quiet_end": raw("")},
+		"bad quiet_start":      {"alerts.quiet_start": raw("25:00")},
+		"bad quiet_end":        {"alerts.quiet_end": raw("nope")},
+		"max_per_hour zero":    {"alerts.max_per_hour": raw(0)},
+		"max_per_hour too big": {"alerts.max_per_hour": raw(61)},
+	} {
+		if _, err := c.WithSettings(s); err == nil {
+			t.Errorf("%s: expected error", name)
+		}
+	}
+
+	// BaseURL prefers PublicURL and trims trailing slash.
+	d := Dash{Listen: "127.0.0.1:8767"}
+	if d.BaseURL() != "http://127.0.0.1:8767" {
+		t.Fatalf("BaseURL fallback = %q", d.BaseURL())
+	}
+	d.PublicURL = "https://mess.example.com/"
+	if d.BaseURL() != "https://mess.example.com" {
+		t.Fatalf("BaseURL public = %q", d.BaseURL())
+	}
+	bad := Default()
+	bad.Dash.PublicURL = "not-a-url"
+	if err := bad.validate(); err == nil {
+		t.Fatal("invalid dashboard.public_url accepted")
+	}
+}

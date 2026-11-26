@@ -99,7 +99,7 @@ func Open(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	os.Chmod(path, 0o600)
-	if _, err := db.Exec(conversationSchema + recurringSchema + attentionSchema + schema + logSchema + deliverySchema + priceSchema + accountSchema + factSchema + sellTaskSchema + sellScheduleSchema + sellEventSchema + settingsSchema + friendMealSchema + galaSchema); err != nil {
+	if _, err := db.Exec(conversationSchema + recurringSchema + attentionSchema + alertSchema + schema + logSchema + deliverySchema + priceSchema + accountSchema + factSchema + sellTaskSchema + sellScheduleSchema + sellEventSchema + settingsSchema + friendMealSchema + galaSchema); err != nil {
 		return nil, fmt.Errorf("schema: %w", err)
 	}
 	if _, err := db.Exec(`INSERT OR IGNORE INTO account_ids SELECT id FROM users`); err != nil {
@@ -653,6 +653,9 @@ func (s *Store) Prune(ctx context.Context, dmBefore, listingsBefore time.Time) e
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at < ?`, time.Now().Unix()); err != nil {
+		return err
+	}
+	if err := s.pruneAlertSends(ctx, time.Now().Add(-24*time.Hour)); err != nil {
 		return err
 	}
 	return s.pruneLog(ctx, listingsBefore)

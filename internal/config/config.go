@@ -34,6 +34,7 @@ type Config struct {
 	Dash    Dash     `toml:"dashboard"`
 	Sales   Sales    `toml:"sales"`
 	Sell    Sell     `toml:"sell"`
+	Alerts  Alerts   `toml:"alerts"`
 
 	loc *time.Location
 	// pretend, when set, replaces loc: see SetLocation.
@@ -106,6 +107,10 @@ type Dash struct {
 	// sellers' phone numbers, so it must be loopback or a private address
 	// like a LAN or Tailscale IP; run refuses anything else.
 	Listen string `toml:"listen"`
+	// PublicURL is the base URL of the dashboard (for example,
+	// "https://mess.example.com"), used to build links in alert messages.
+	// When empty, alert links fall back to "http://" + Listen.
+	PublicURL string `toml:"public_url"`
 	// BeeperDB is Beeper Desktop or Server's index.db. When set, the
 	// dashboard links each copy of a post to that message in Beeper. It is
 	// only ever opened read-only.
@@ -200,6 +205,7 @@ func Default() *Config {
 			// amount; the 17 Nov dinner buyer paid and got no QR.
 			AcceptUnreadablePayments: true,
 		},
+		Alerts: defaultAlerts(),
 	}
 }
 
@@ -221,6 +227,12 @@ func (c *Config) validate() error {
 		}
 	}
 	if err := c.validateSell(); err != nil {
+		return err
+	}
+	if err := c.validateDash(); err != nil {
+		return err
+	}
+	if err := c.validateAlerts(); err != nil {
 		return err
 	}
 	return validateSeasons(c.Seasons)

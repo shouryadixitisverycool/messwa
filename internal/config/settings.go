@@ -194,6 +194,42 @@ var settings = []setting{
 	secondsSetting("dms.retention", time.Hour, false, func(c *Config) *duration { return &c.DMs.Retention }),
 	boolSetting("hide_snacks", func(c *Config) *bool { return &c.HideSnacks }),
 	intSetting("sales.monthly_fee", 0, func(c *Config) *int { return &c.Sales.MonthlyFee }),
+	boolSetting("alerts.whatsapp", func(c *Config) *bool { return &c.Alerts.WhatsApp }),
+	{key: "alerts.kinds",
+		get: func(c *Config) any { return nonNil(c.Alerts.Kinds) },
+		set: func(c *Config, v json.RawMessage) error {
+			var in []string
+			if err := strictJSON(v, &in); err != nil {
+				return err
+			}
+			kinds, err := ParseAlertKinds(in)
+			if err != nil {
+				return err
+			}
+			c.Alerts.Kinds = kinds
+			return nil
+		}},
+	{key: "alerts.quiet_start",
+		get: func(c *Config) any { return c.Alerts.QuietStart },
+		set: func(c *Config, v json.RawMessage) error {
+			var s string
+			if err := strictJSON(v, &s); err != nil {
+				return err
+			}
+			c.Alerts.QuietStart = strings.TrimSpace(s)
+			return nil
+		}},
+	{key: "alerts.quiet_end",
+		get: func(c *Config) any { return c.Alerts.QuietEnd },
+		set: func(c *Config, v json.RawMessage) error {
+			var s string
+			if err := strictJSON(v, &s); err != nil {
+				return err
+			}
+			c.Alerts.QuietEnd = strings.TrimSpace(s)
+			return nil
+		}},
+	intSetting("alerts.max_per_hour", MinAlertsPerHour, func(c *Config) *int { return &c.Alerts.MaxPerHour }),
 	{key: "seasons",
 		get: func(c *Config) any { return nonNil(c.Seasons) },
 		set: func(c *Config, v json.RawMessage) error {

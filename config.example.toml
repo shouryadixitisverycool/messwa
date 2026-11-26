@@ -60,10 +60,30 @@ new_user_sell_tasks = false
 # so messwa only listens on loopback or a private address such as a LAN or
 # Tailscale IP.
 listen = "127.0.0.1:8767"
+# Optional. Base URL used in outbound alert links (e.g. "https://mess.example.com").
+# When empty, alert links fall back to "http://" + listen.
+# public_url = "https://mess.example.com"
 # Optional. Beeper Desktop or Server's index.db, opened read-only. With it,
 # a browser that picked Beeper in SETTINGS gets each copy of a post as a
 # link to that message in Beeper Desktop.
 # beeper_db = "/home/you/.beeper/profiles/server/server/index.db"
+
+[alerts]
+# Send short attention alerts to your own WhatsApp number from your linked
+# device when something needs you (refunds, blocked sales, failed posts).
+# Off by default; each user enables it in their own settings.
+whatsapp = false
+# Which attention kinds trigger alerts. Valid kinds: refund, blocked, schedule,
+# delivery, post, rule, whatsapp. "whatsapp" (link offline) cannot be sent over
+# a dead WhatsApp link and is left out by default.
+kinds = ["refund", "blocked", "schedule", "delivery", "post"]
+# Quiet hours in 24-hour HH:MM local time. Non-refund alerts wait until quiet
+# hours end; refunds always go through. Leave both empty to turn quiet hours off.
+quiet_start = "00:00"
+quiet_end = "07:00"
+# Maximum alert messages sent per hour per channel (1 to 60). Items appearing
+# within a short window are batched into one message.
+max_per_hour = 6
 
 [sales]
 # The sales page measures your sales against this month's bill from the mess
