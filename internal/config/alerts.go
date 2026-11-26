@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"slices"
 	"strings"
@@ -151,13 +152,26 @@ func (c *Config) validateDash() error {
 }
 
 // BaseURL returns the dashboard base URL without a trailing slash, preferring
-// PublicURL and falling back to "http://" + Listen. Returns "" if neither is set.
+// PublicURL and falling back to "http://" + Listen when Listen is a reachable
+// non-loopback address (e.g. LAN or Tailscale). Loopback listen addresses
+// return "" so phone alerts never carry broken 127.0.0.1 links.
 func (d Dash) BaseURL() string {
 	if u := strings.TrimRight(strings.TrimSpace(d.PublicURL), "/"); u != "" {
 		return u
 	}
-	if l := strings.TrimSpace(d.Listen); l != "" {
-		return "http://" + l
+	l := strings.TrimSpace(d.Listen)
+	if l == "" {
+		return ""
 	}
-	return ""
+	host, _, err := net.SplitHostPort(l)
+	if err != nil {
+		return ""
+	}
+	if strings.EqualFold(host, "localhost") {
+		return ""
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return ""
+	}
+	return "http://" + l
 }

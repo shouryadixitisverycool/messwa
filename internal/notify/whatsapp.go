@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/types"
 
 	"messwa/internal/config"
 	"messwa/internal/wa"
@@ -15,12 +14,12 @@ import (
 // ChannelWhatsApp is the registered channel name for WhatsApp self-alerts.
 const ChannelWhatsApp = "whatsapp"
 
-// WhatsAppSender is the minimal WhatsApp capability needed to send a
-// self-alert message to the user's own number.
+// WhatsAppSender sends a text message to the user's own linked WhatsApp
+// account. Implementations should check connectivity, resolve the account's own
+// non-AD JID, and send within a single client lease so unlinking and relinking
+// another phone number cannot redirect an alert to the previous number.
 type WhatsAppSender interface {
-	Connected() bool
-	SelfJID(ctx context.Context) (types.JID, error)
-	SendText(ctx context.Context, to types.JID, text string) error
+	SendSelfText(ctx context.Context, text string) error
 }
 
 // WhatsAppChannel sends attention alerts to the user's own WhatsApp number
@@ -39,13 +38,11 @@ type WhatsAppSender interface {
 //     trigger sell-task handlers.
 //   - Protocol caveat: because WhatsApp treats DeviceSentMessage as a message
 //     authored by the user on another linked device (fromMe=true), the primary
-//     mobile app typically syncs it into "Message Yourself" without firing an
-//     audible/banner push notification. This is a WhatsApp protocol limitation
-//     when sending from the user's own linked account (including to a 1-person
-//     group, which is also fromMe=true). Sending to the user's own JID is
-//     therefore the right WhatsApp delivery target, and the channel-agnostic
-//     Dispatcher is designed so a Web Push channel can plug in alongside it for
-//     OS-level push notifications and offline-WhatsApp coverage.
+//     mobile app may sync it into "Message Yourself" without firing an audible
+//     or banner push notification. Sending to the user's own JID is the right
+//     WhatsApp target (a 1-person group is also fromMe=true), and the
+//     channel-agnostic Dispatcher lets a Web Push channel plug in alongside it
+//     for OS-level push notifications and offline-WhatsApp coverage.
 type WhatsAppChannel struct {
 	sender WhatsAppSender
 }
@@ -81,18 +78,10 @@ func (c *WhatsAppChannel) SendText(ctx context.Context, _ int64, text string) er
 	if text == "" {
 		return nil
 	}
-	if c.sender == nil || !c.sender.Connected() {
-		return fmt.Errorf("%w: WhatsApp disconnected", ErrChannelUnavailable)
+	if c.sender == nil {
+		return fmt.Errorf("%w: WhatsApp sender not configured", ErrChannelUnavailable)
 	}
-	selfJID, err := c.sender.SelfJID(ctx)
-	if err != nil {
-		return fmt.Errorf("%w: resolve own WhatsApp JID: %v", ErrChannelUnavailable, err)
-	}
-	selfJID = selfJID.ToNonAD()
-	if selfJID.IsEmpty() || selfJID.User == "" {
-		return fmt.Errorf("%w: WhatsApp not linked", ErrChannelUnavailable)
-	}
-	if err := c.sender.SendText(ctx, selfJID, text); err != nil {
+	if err := c.sender.SendSelfText(ctx, text); err != nil {
 		if isUnavailableErr(err) {
 			return fmt.Errorf("%w: %v", ErrChannelUnavailable, err)
 		}

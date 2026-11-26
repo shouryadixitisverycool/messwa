@@ -61,7 +61,8 @@ new_user_sell_tasks = false
 # Tailscale IP.
 listen = "127.0.0.1:8767"
 # Optional. Base URL used in outbound alert links (e.g. "https://mess.example.com").
-# When empty, alert links fall back to "http://" + listen.
+# When empty, alert links fall back to "http://" + listen only for non-loopback
+# addresses (LAN/Tailscale) and are omitted for loopback addresses.
 # public_url = "https://mess.example.com"
 # Optional. Beeper Desktop or Server's index.db, opened read-only. With it,
 # a browser that picked Beeper in SETTINGS gets each copy of a post as a
@@ -69,9 +70,12 @@ listen = "127.0.0.1:8767"
 # beeper_db = "/home/you/.beeper/profiles/server/server/index.db"
 
 [alerts]
-# Send short attention alerts to your own WhatsApp number from your linked
-# device when something needs you (refunds, blocked sales, failed posts).
-# Off by default; each user enables it in their own settings.
+# Send short attention alerts to your own WhatsApp number ("Message Yourself")
+# from your linked device when something needs you (refunds, blocked sales,
+# failed posts). Off by default; each user enables it in their own settings.
+# Note: WhatsApp treats companion-sent self-messages as fromMe sync messages,
+# so your phone may place them at the top of "Message Yourself" without a push
+# banner or sound.
 whatsapp = false
 # Which attention kinds trigger alerts. Valid kinds: refund, blocked, schedule,
 # delivery, post, rule, whatsapp. "whatsapp" (link offline) cannot be sent over

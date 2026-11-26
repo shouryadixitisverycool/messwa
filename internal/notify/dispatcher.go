@@ -25,6 +25,8 @@ const (
 	NoBatch = -1
 
 	maxFailedAttempts = 3
+	sendTimeout       = 30 * time.Second
+	commitTimeout     = 2 * time.Second
 )
 
 var failedBackoff = []time.Duration{
@@ -67,10 +69,15 @@ type Dispatcher struct {
 
 	wake chan struct{}
 
-	mu       sync.Mutex
-	channels []Channel
-	pending  map[string]map[string]pendingItem
-	recapFn  WeeklyRecapFunc
+	mu              sync.Mutex
+	channels        []Channel
+	pending         map[string]map[string]pendingItem
+	nextEligible    map[string]time.Time
+	sourceBackoff   time.Time
+	onlineSeq       map[string]uint64
+	offlineTriedSeq map[string]map[string]uint64
+	sentMem         map[string]map[string]bool
+	recapFn         WeeklyRecapFunc
 
 	// stepMu serializes Step and SendWeeklyRecap so concurrent wakes cannot
 	// double-send the same batch.
@@ -98,17 +105,21 @@ func NewDispatcher(c DispatcherConfig) *Dispatcher {
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	return &Dispatcher{
-		userID:       c.UserID,
-		store:        c.Store,
-		cfgFn:        c.Config,
-		source:       c.Source,
-		baseURL:      c.BaseURL,
-		log:          log,
-		now:          now,
-		batchWindow:  bw,
-		pollInterval: pi,
-		wake:         make(chan struct{}, 1),
-		pending:      map[string]map[string]pendingItem{},
+		userID:          c.UserID,
+		store:           c.Store,
+		cfgFn:           c.Config,
+		source:          c.Source,
+		baseURL:         c.BaseURL,
+		log:             log,
+		now:             now,
+		batchWindow:     bw,
+		pollInterval:    pi,
+		wake:            make(chan struct{}, 1),
+		pending:         map[string]map[string]pendingItem{},
+		nextEligible:    map[string]time.Time{},
+		onlineSeq:       map[string]uint64{},
+		offlineTriedSeq: map[string]map[string]uint64{},
+		sentMem:         map[string]map[string]bool{},
 	}
 }
 
@@ -147,6 +158,18 @@ func (d *Dispatcher) Wake() {
 	}
 }
 
+// ChannelOnline notifies the dispatcher that channelName has (re)connected.
+// Items previously recorded as store.AlertOffline for that channel become
+// eligible once on this reconnect so brief disconnects or startup races do not
+// permanently suppress unresolved alerts, without retry-storming while offline.
+func (d *Dispatcher) ChannelOnline(channelName string) {
+	d.mu.Lock()
+	d.onlineSeq[channelName]++
+	delete(d.nextEligible, channelName)
+	d.mu.Unlock()
+	d.Wake()
+}
+
 // Run polls attention items until ctx is cancelled. Errors are logged and never
 // crash the loop.
 func (d *Dispatcher) Run(ctx context.Context) {
@@ -167,9 +190,6 @@ func (d *Dispatcher) Run(ctx context.Context) {
 			flushC = nil
 		}
 		if wait, ok := d.nextFlushIn(); ok {
-			if wait < 10*time.Millisecond {
-				wait = 10 * time.Millisecond
-			}
 			flushTimer = time.NewTimer(wait)
 			flushC = flushTimer.C
 		}
@@ -202,28 +222,47 @@ func (d *Dispatcher) Run(ctx context.Context) {
 	}
 }
 
+// nextFlushIn returns how long Run should wait to flush a buffered batch or
+// retry a rate-limited channel. It never returns a near-zero spin duration for
+// items that are already overdue after the Step that just ran.
 func (d *Dispatcher) nextFlushIn() (time.Duration, bool) {
-	if d.batchWindow <= 0 {
-		return 0, false
-	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	now := d.now()
+	if now.Before(d.sourceBackoff) {
+		return d.sourceBackoff.Sub(now), true
+	}
 	var earliest time.Time
-	for _, buf := range d.pending {
+	for name, buf := range d.pending {
+		if len(buf) == 0 {
+			continue
+		}
+		var oldest time.Time
 		for _, p := range buf {
-			due := p.firstSeen.Add(d.batchWindow)
-			if earliest.IsZero() || due.Before(earliest) {
-				earliest = due
+			if oldest.IsZero() || p.firstSeen.Before(oldest) {
+				oldest = p.firstSeen
 			}
+		}
+		due := oldest.Add(d.batchWindow)
+		if ne := d.nextEligible[name]; ne.After(due) {
+			due = ne
+		}
+		// Only schedule a dedicated flush timer for future due times. Items
+		// with due <= now right after Step were held back by an unexpected
+		// condition and will be retried on the regular pollInterval ticker.
+		if !due.After(now) {
+			continue
+		}
+		if earliest.IsZero() || due.Before(earliest) {
+			earliest = due
 		}
 	}
 	if earliest.IsZero() {
 		return 0, false
 	}
 	wait := earliest.Sub(now)
-	if wait < 0 {
-		wait = 0
+	if wait < 10*time.Millisecond {
+		wait = 10 * time.Millisecond
 	}
 	return wait, true
 }
@@ -235,6 +274,9 @@ func (d *Dispatcher) Step(ctx context.Context) error {
 	d.stepMu.Lock()
 	defer d.stepMu.Unlock()
 
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if d.source == nil || d.cfgFn == nil || d.store == nil {
 		return nil
 	}
@@ -258,15 +300,24 @@ func (d *Dispatcher) Step(ctx context.Context) error {
 		d.mu.Lock()
 		for _, ch := range channels {
 			clear(d.pending[ch.Name()])
+			delete(d.nextEligible, ch.Name())
 		}
 		d.mu.Unlock()
 		return nil
 	}
 
+	now := d.now()
 	items, err := d.source(ctx)
 	if err != nil {
+		d.mu.Lock()
+		d.sourceBackoff = now.Add(d.pollInterval)
+		d.mu.Unlock()
 		return err
 	}
+	d.mu.Lock()
+	d.sourceBackoff = time.Time{}
+	d.mu.Unlock()
+
 	current := make(map[string]Item, len(items))
 	for _, it := range items {
 		if it.ID != "" {
@@ -274,7 +325,6 @@ func (d *Dispatcher) Step(ctx context.Context) error {
 		}
 	}
 
-	now := d.now()
 	localNow := now
 	if loc := cfg.Location(); loc != nil {
 		localNow = now.In(loc)
@@ -290,6 +340,9 @@ func (d *Dispatcher) Step(ctx context.Context) error {
 	}
 
 	for _, ch := range channels {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		d.stepChannel(ctx, ch, cfg, current, now, quiet, maxPerHour, baseURL)
 	}
 	return nil
@@ -309,17 +362,24 @@ func (d *Dispatcher) stepChannel(
 	if !ch.Enabled(cfg) {
 		d.mu.Lock()
 		clear(d.pending[name])
+		delete(d.nextEligible, name)
 		d.mu.Unlock()
 		return
 	}
 
 	delivered, err := d.store.AlertDeliveries(ctx, d.userID, name)
 	if err != nil {
-		d.log.Warn("load alert deliveries", "user", d.userID, "channel", name, "err", err)
+		if ctx.Err() == nil {
+			d.log.Warn("load alert deliveries", "user", d.userID, "channel", name, "err", err)
+			d.setNextEligible(name, now.Add(d.pollInterval))
+		}
 		return
 	}
 
 	d.mu.Lock()
+	onlineSeq := d.onlineSeq[name]
+	triedSeq := d.offlineTriedSeq[name]
+	sentMem := d.sentMem[name]
 	buf := d.pending[name]
 	if buf == nil {
 		buf = map[string]pendingItem{}
@@ -330,7 +390,7 @@ func (d *Dispatcher) stepChannel(
 	// quiet hours since the last step.
 	for id, p := range buf {
 		cur, ok := current[id]
-		if !ok || !itemEligible(cur, cfg, ch, quiet, delivered, now) {
+		if !ok || !itemEligible(cur, cfg, ch, quiet, delivered, sentMem, onlineSeq, triedSeq, now) {
 			delete(buf, id)
 			continue
 		}
@@ -340,7 +400,7 @@ func (d *Dispatcher) stepChannel(
 
 	// Buffer newly eligible items.
 	for id, cur := range current {
-		if !itemEligible(cur, cfg, ch, quiet, delivered, now) {
+		if !itemEligible(cur, cfg, ch, quiet, delivered, sentMem, onlineSeq, triedSeq, now) {
 			continue
 		}
 		if _, exists := buf[id]; !exists {
@@ -349,6 +409,7 @@ func (d *Dispatcher) stepChannel(
 	}
 
 	if len(buf) == 0 {
+		delete(d.nextEligible, name)
 		d.mu.Unlock()
 		return
 	}
@@ -367,14 +428,26 @@ func (d *Dispatcher) stepChannel(
 		return
 	}
 
-	sentCount, err := d.store.CountAlertSendsSince(ctx, d.userID, name, now.Add(-time.Hour))
+	windowStart := now.Add(-time.Hour)
+	sentCount, err := d.store.CountAlertSendsSince(ctx, d.userID, name, windowStart)
 	if err != nil {
-		d.log.Warn("count recent alert sends", "user", d.userID, "channel", name, "err", err)
+		if ctx.Err() == nil {
+			d.log.Warn("count recent alert sends", "user", d.userID, "channel", name, "err", err)
+			d.setNextEligible(name, now.Add(d.pollInterval))
+		}
 		return
 	}
 	if sentCount >= maxPerHour {
+		nextAt := now.Add(d.pollInterval)
+		if oldestSend, err := d.store.OldestAlertSendSince(ctx, d.userID, name, windowStart); err == nil && !oldestSend.IsZero() {
+			if unlockAt := oldestSend.Add(time.Hour + time.Second); unlockAt.After(now) {
+				nextAt = unlockAt
+			}
+		}
+		d.setNextEligible(name, nextAt)
 		return
 	}
+	d.clearNextEligible(name)
 
 	sortItems(ready)
 	ids := make([]string, len(ready))
@@ -382,21 +455,36 @@ func (d *Dispatcher) stepChannel(
 		ids[i] = it.ID
 	}
 
-	err = ch.Send(ctx, Batch{
+	sendCtx, cancelSend := context.WithTimeout(ctx, sendTimeout)
+	err = ch.Send(sendCtx, Batch{
 		UserID:  d.userID,
 		Items:   ready,
 		BaseURL: baseURL,
 	})
+	cancelSend()
+
+	if err != nil && ctx.Err() != nil {
+		// Parent context was cancelled during shutdown; do not pollute
+		// alert_deliveries with a spurious failed attempt.
+		return
+	}
 
 	switch {
 	case err == nil:
-		if recErr := d.store.RecordAlertSentBatch(ctx, d.userID, name, ids, now); recErr != nil {
+		// Mark sent in memory first so a transient SQLite failure after
+		// transport success cannot cause this process to double-send.
+		d.markSentMem(name, ids)
+		commitCtx, cancelCommit := context.WithTimeout(context.WithoutCancel(ctx), commitTimeout)
+		if recErr := d.store.RecordAlertSentBatch(commitCtx, d.userID, name, ids, now); recErr != nil {
 			d.log.Error("record sent alert batch", "user", d.userID, "channel", name, "err", recErr)
 		}
+		cancelCommit()
 		d.clearPending(name, ids)
 	case errors.Is(err, ErrChannelUnavailable):
 		// Record offline state so a fallback channel (e.g. Web Push) can cover
-		// these items, and clear pending to avoid retry-storming.
+		// these items, and record onlineSeq so we don't retry-storm until
+		// ChannelOnline signals a reconnect.
+		d.markOfflineTried(name, ids, onlineSeq)
 		if recErr := d.store.RecordAlertOutcome(ctx, d.userID, name, ids, store.AlertOffline, err.Error(), time.Time{}, now); recErr != nil {
 			d.log.Error("record offline alert outcome", "user", d.userID, "channel", name, "err", recErr)
 		}
@@ -422,6 +510,44 @@ func (d *Dispatcher) stepChannel(
 	}
 }
 
+func (d *Dispatcher) setNextEligible(channel string, at time.Time) {
+	d.mu.Lock()
+	d.nextEligible[channel] = at
+	d.mu.Unlock()
+}
+
+func (d *Dispatcher) clearNextEligible(channel string) {
+	d.mu.Lock()
+	delete(d.nextEligible, channel)
+	d.mu.Unlock()
+}
+
+func (d *Dispatcher) markSentMem(channel string, ids []string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	m := d.sentMem[channel]
+	if m == nil {
+		m = map[string]bool{}
+		d.sentMem[channel] = m
+	}
+	for _, id := range ids {
+		m[id] = true
+	}
+}
+
+func (d *Dispatcher) markOfflineTried(channel string, ids []string, seq uint64) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	m := d.offlineTriedSeq[channel]
+	if m == nil {
+		m = map[string]uint64{}
+		d.offlineTriedSeq[channel] = m
+	}
+	for _, id := range ids {
+		m[id] = seq
+	}
+}
+
 func (d *Dispatcher) clearPending(channel string, ids []string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -431,7 +557,17 @@ func (d *Dispatcher) clearPending(channel string, ids []string) {
 	}
 }
 
-func itemEligible(it Item, cfg *config.Config, ch Channel, quiet bool, delivered map[string]store.AlertDelivery, now time.Time) bool {
+func itemEligible(
+	it Item,
+	cfg *config.Config,
+	ch Channel,
+	quiet bool,
+	delivered map[string]store.AlertDelivery,
+	sentMem map[string]bool,
+	onlineSeq uint64,
+	triedSeq map[string]uint64,
+	now time.Time,
+) bool {
 	if !cfg.Alerts.AllowsKind(it.Kind) || !ch.SupportsKind(it.Kind) {
 		return false
 	}
@@ -439,13 +575,20 @@ func itemEligible(it Item, cfg *config.Config, ch Channel, quiet bool, delivered
 	if quiet && it.Kind != "refund" {
 		return false
 	}
+	if sentMem[it.ID] {
+		return false
+	}
 	rec, exists := delivered[it.ID]
 	if !exists {
 		return true
 	}
 	switch rec.Status {
-	case store.AlertSent, store.AlertOffline:
+	case store.AlertSent:
 		return false
+	case store.AlertOffline:
+		// Do not retry while offline; allow one retry after a subsequent
+		// ChannelOnline reconnect event.
+		return onlineSeq > 0 && onlineSeq > triedSeq[it.ID]
 	case store.AlertFailed:
 		if rec.Attempts >= maxFailedAttempts {
 			return false

@@ -350,27 +350,58 @@ func (c *Config) WithSettings(saved Settings) (*Config, error) {
 // group_count above the groups it now lists, is skipped and returned in
 // skipped with why, so one stale key can't stop messwa starting.
 func (c *Config) ApplySaved(saved Settings) (skipped map[string]error) {
-	keep := Settings{}
-	for _, k := range SettingKeys() {
-		v, ok := saved[k]
-		if !ok {
-			continue
-		}
-		keep[k] = v
-		if _, err := c.WithSettings(keep); err != nil {
-			delete(keep, k)
-			if skipped == nil {
-				skipped = map[string]error{}
-			}
-			skipped[k] = err
-		}
-	}
-	for k := range saved {
-		if _, ok := findSetting(k); !ok && !retired[k] {
+	known := Settings{}
+	for k, v := range saved {
+		if _, ok := findSetting(k); ok {
+			known[k] = v
+		} else if !retired[k] {
 			if skipped == nil {
 				skipped = map[string]error{}
 			}
 			skipped[k] = fmt.Errorf("unknown setting")
+		}
+	}
+	// Fast path: when all known saved keys validate together (including paired
+	// settings such as alerts.quiet_start + alerts.quiet_end), apply them in
+	// one shot instead of testing one key at a time against defaults.
+	keep := known
+	if _, err := c.WithSettings(known); err != nil {
+		keep = Settings{}
+		handled := map[string]bool{}
+		// Paired settings whose validity depends on both keys being applied
+		// together (for example turning quiet hours off with "" + "").
+		pairs := [][2]string{
+			{"alerts.quiet_start", "alerts.quiet_end"},
+		}
+		for _, pair := range pairs {
+			v0, ok0 := known[pair[0]]
+			v1, ok1 := known[pair[1]]
+			if ok0 && ok1 {
+				keep[pair[0]], keep[pair[1]] = v0, v1
+				if _, err := c.WithSettings(keep); err != nil {
+					delete(keep, pair[0])
+					delete(keep, pair[1])
+				} else {
+					handled[pair[0]], handled[pair[1]] = true, true
+				}
+			}
+		}
+		for _, k := range SettingKeys() {
+			if handled[k] {
+				continue
+			}
+			v, ok := known[k]
+			if !ok {
+				continue
+			}
+			keep[k] = v
+			if _, err := c.WithSettings(keep); err != nil {
+				delete(keep, k)
+				if skipped == nil {
+					skipped = map[string]error{}
+				}
+				skipped[k] = err
+			}
 		}
 	}
 	file := *c

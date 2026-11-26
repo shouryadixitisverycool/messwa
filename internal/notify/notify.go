@@ -78,4 +78,5 @@ type DeliveryStore interface {
 	RecordAlertSentBatch(ctx context.Context, userID int64, channel string, itemIDs []string, at time.Time) error
 	RecordAlertOutcome(ctx context.Context, userID int64, channel string, itemIDs []string, status store.AlertStatus, detail string, retryAfter, at time.Time) error
 	CountAlertSendsSince(ctx context.Context, userID int64, channel string, since time.Time) (int, error)
+	OldestAlertSendSince(ctx context.Context, userID int64, channel string, since time.Time) (time.Time, error)
 }

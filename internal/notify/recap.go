@@ -109,7 +109,13 @@ func (d *Dispatcher) SendWeeklyRecap(ctx context.Context) error {
 				return nil
 			}
 		}
-		if err := t.tx.SendText(ctx, d.userID, text); err != nil {
+		sendCtx, cancelSend := context.WithTimeout(ctx, sendTimeout)
+		err = t.tx.SendText(sendCtx, d.userID, text)
+		cancelSend()
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			if errors.Is(err, ErrChannelUnavailable) {
 				_ = d.store.RecordAlertOutcome(ctx, d.userID, name, []string{itemID}, store.AlertOffline, err.Error(), time.Time{}, now)
 				continue
@@ -117,9 +123,11 @@ func (d *Dispatcher) SendWeeklyRecap(ctx context.Context) error {
 			d.log.Warn("send weekly recap failed", "user", d.userID, "channel", name, "err", err)
 			continue
 		}
-		if err := d.store.RecordAlertSentBatch(ctx, d.userID, name, []string{itemID}, now); err != nil {
+		commitCtx, cancelCommit := context.WithTimeout(context.WithoutCancel(ctx), commitTimeout)
+		if err := d.store.RecordAlertSentBatch(commitCtx, d.userID, name, []string{itemID}, now); err != nil {
 			d.log.Error("record sent weekly recap", "user", d.userID, "channel", name, "err", err)
 		}
+		cancelCommit()
 	}
 	return nil
 }

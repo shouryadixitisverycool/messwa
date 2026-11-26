@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.mau.fi/whatsmeow"
@@ -42,20 +43,24 @@ type deviceAccounts struct {
 }
 type deviceAccount struct {
 	id int64
-	// started, notifierStarted and unlinking are guarded by deviceAccounts.mu.
+	// started, notifierStarted, notifierDone and unlinking are guarded by deviceAccounts.mu.
 	started         bool
 	notifierStarted bool
+	notifierDone    chan struct{}
 	unlinking       bool
 
-	mu       sync.Mutex
-	ctx      context.Context
-	stop     context.CancelFunc
-	client   *wa.Runtime
-	srv      *mcpserver.Server
-	st       *store.Store
-	sell     *sellManager
-	notifier *notify.Dispatcher
-	pairing  bool
+	// notifier is lock-free so callbacks fired while a.mu is held (such as
+	// sell.Cancel inside Unlink) can wake it without re-entering a.mu.
+	notifier atomic.Pointer[notify.Dispatcher]
+
+	mu      sync.Mutex
+	ctx     context.Context
+	stop    context.CancelFunc
+	client  *wa.Runtime
+	srv     *mcpserver.Server
+	st      *store.Store
+	sell    *sellManager
+	pairing bool
 	// pairStart, stopPair and done belong to the running pairing session;
 	// done closes when it ends. code is the phone-number pairing code for
 	// it, when one was asked for.
@@ -136,11 +141,13 @@ func (m *deviceAccounts) server(ctx context.Context, id int64) (*mcpserver.Serve
 	if err != nil {
 		return nil, err
 	}
-	cfg.ApplySaved(config.Settings(saved))
+	accountLog := m.log.With("user_id", id)
+	for k, skipErr := range cfg.ApplySaved(config.Settings(saved)) {
+		accountLog.Warn("ignoring saved account setting; it no longer fits config.toml", "key", k, "err", skipErr)
+	}
 	if err = st.AssignLegacyTasks(ctx, id); err != nil {
 		return nil, err
 	}
-	accountLog := m.log.With("user_id", id)
 	c, err := wa.Open(m.ctx, cfg, accountLog)
 	if err != nil {
 		return nil, err
@@ -152,18 +159,20 @@ func (m *deviceAccounts) server(ctx context.Context, id int64) (*mcpserver.Serve
 	client := wa.NewRuntime(accountCtx, c, in, st)
 	a.client = client
 	wakeNotifier := func() {
-		a.mu.Lock()
-		n := a.notifier
-		a.mu.Unlock()
-		if n != nil {
+		if n := a.notifier.Load(); n != nil {
 			n.Wake()
 		}
 	}
 	// The usage page's live view shows who is offline, and the notifier wakes
-	// on connection state changes.
+	// on connection state changes (re-enabling offline items on reconnect).
 	client.AddEventHandler(func(evt any) {
 		switch evt.(type) {
-		case *events.Connected, *events.Disconnected, *events.LoggedOut:
+		case *events.Connected:
+			m.hub.Notify()
+			if n := a.notifier.Load(); n != nil {
+				n.ChannelOnline(notify.ChannelWhatsApp)
+			}
+		case *events.Disconnected, *events.LoggedOut:
 			m.hub.Notify()
 			wakeNotifier()
 		}
@@ -225,15 +234,18 @@ func (m *deviceAccounts) server(ctx context.Context, id int64) (*mcpserver.Serve
 			Log:     accountLog,
 			Now:     m.clock,
 		})
-		n.Register(notify.NewWhatsAppChannel(waAlertSender{client: client, send: send}))
+		n.Register(notify.NewWhatsAppChannel(waAlertSender{
+			accountCtx: accountCtx,
+			acc:        m.acc,
+			userID:     id,
+			client:     client,
+		}))
 		for _, build := range m.extraChannels {
 			if ch := build(id, cfg, st); ch != nil {
 				n.Register(ch)
 			}
 		}
-		a.mu.Lock()
-		a.notifier = n
-		a.mu.Unlock()
+		a.notifier.Store(n)
 	}
 	ready = true
 	a.id = id
@@ -244,30 +256,47 @@ func (m *deviceAccounts) server(ctx context.Context, id int64) (*mcpserver.Serve
 }
 
 type waAlertSender struct {
-	client *wa.Runtime
-	send   func(context.Context, types.JID, *waE2E.Message, ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error)
+	accountCtx context.Context
+	acc        *accounts.Accounts
+	userID     int64
+	client     *wa.Runtime
 }
 
-func (s waAlertSender) Connected() bool {
-	return s.client.LoggedIn() && s.client.IsConnected()
-}
-
-func (s waAlertSender) SelfJID(ctx context.Context) (types.JID, error) {
-	jidStr, altStr, _ := s.client.Self(ctx)
-	for _, raw := range []string{jidStr, altStr} {
-		if raw == "" {
-			continue
-		}
-		if j, err := types.ParseJID(raw); err == nil && !j.IsEmpty() && j.User != "" {
-			return j.ToNonAD(), nil
-		}
+// SendSelfText checks account status, resolves the account's own non-AD JID,
+// and sends within a single wa.Runtime lease so unlinking and relinking a
+// different phone number cannot redirect an alert to the previous number.
+func (s waAlertSender) SendSelfText(ctx context.Context, text string) error {
+	if err := s.accountCtx.Err(); err != nil {
+		return err
 	}
-	return types.EmptyJID, notify.ErrChannelUnavailable
-}
-
-func (s waAlertSender) SendText(ctx context.Context, to types.JID, text string) error {
-	_, err := s.send(ctx, to, &waE2E.Message{Conversation: proto.String(text)})
-	return err
+	user, err := s.acc.User(ctx, s.userID)
+	if err != nil {
+		return err
+	}
+	if user == nil || !user.IsActive() {
+		return fmt.Errorf("%w: account unavailable", notify.ErrChannelUnavailable)
+	}
+	return s.client.Do(func(c *wa.Client) error {
+		if !c.LoggedIn() || !c.WA.IsConnected() {
+			return fmt.Errorf("%w: WhatsApp disconnected", notify.ErrChannelUnavailable)
+		}
+		jidStr, altStr, _ := c.Self(ctx)
+		var selfJID types.JID
+		for _, raw := range []string{jidStr, altStr} {
+			if raw == "" {
+				continue
+			}
+			if j, err := types.ParseJID(raw); err == nil && !j.IsEmpty() && j.User != "" {
+				selfJID = j.ToNonAD()
+				break
+			}
+		}
+		if selfJID.IsEmpty() {
+			return fmt.Errorf("%w: WhatsApp not linked", notify.ErrChannelUnavailable)
+		}
+		_, err := c.WA.SendMessage(ctx, selfJID, &waE2E.Message{Conversation: proto.String(text)})
+		return err
+	})
 }
 
 func attentionToNotifyItems(items []mcpserver.AttentionItem, err error) ([]notify.Item, error) {
@@ -303,9 +332,14 @@ func (m *deviceAccounts) settle(a *deviceAccount, u *accounts.User) {
 	if m.readOnly {
 		return
 	}
-	if u.IsActive() && a.notifier != nil && !a.notifierStarted {
+	if n := a.notifier.Load(); u.IsActive() && n != nil && !a.notifierStarted {
 		a.notifierStarted = true
-		go a.notifier.Run(a.ctx)
+		done := make(chan struct{})
+		a.notifierDone = done
+		go func() {
+			defer close(done)
+			n.Run(a.ctx)
+		}()
 	}
 	switch {
 	case u.IsActive() && !a.started && a.client.LoggedIn():
@@ -501,6 +535,9 @@ func (m *deviceAccounts) close() {
 	for _, a := range m.users {
 		if a.stop != nil {
 			a.stop()
+		}
+		if a.notifierDone != nil {
+			<-a.notifierDone
 		}
 		a.client.Close()
 		if a.st != m.st {

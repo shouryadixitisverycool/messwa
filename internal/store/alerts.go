@@ -187,6 +187,20 @@ func (s *Store) CountAlertSendsSince(ctx context.Context, userID int64, channel 
 	return n, err
 }
 
+// OldestAlertSendSince returns the earliest send timestamp on channel strictly
+// after since, or the zero time if none exist. Used to schedule the next
+// rate-limit wakeup without polling in a tight loop.
+func (s *Store) OldestAlertSendSince(ctx context.Context, userID int64, channel string, since time.Time) (time.Time, error) {
+	var ts int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT coalesce(min(sent_at), 0) FROM alert_sends WHERE user_id=? AND channel=? AND sent_at > ?`,
+		userID, channel, since.Unix()).Scan(&ts)
+	if err != nil || ts == 0 {
+		return time.Time{}, err
+	}
+	return time.Unix(ts, 0), nil
+}
+
 func (s *Store) pruneAlertSends(ctx context.Context, before time.Time) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM alert_sends WHERE sent_at < ?`, before.Unix())
 	return err

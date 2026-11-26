@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,28 +30,19 @@ type sentWA struct {
 	text string
 }
 
-func (f *fakeWhatsApp) Connected() bool {
+func (f *fakeWhatsApp) SendSelfText(_ context.Context, text string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.connected
-}
-
-func (f *fakeWhatsApp) SelfJID(context.Context) (types.JID, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.selfJID.IsEmpty() {
-		return types.EmptyJID, ErrChannelUnavailable
+	if !f.connected {
+		return fmt.Errorf("%w: WhatsApp disconnected", ErrChannelUnavailable)
 	}
-	return f.selfJID, nil
-}
-
-func (f *fakeWhatsApp) SendText(_ context.Context, to types.JID, text string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	if f.selfJID.IsEmpty() {
+		return fmt.Errorf("%w: WhatsApp not linked", ErrChannelUnavailable)
+	}
 	if f.sendErr != nil {
 		return f.sendErr
 	}
-	f.sent = append(f.sent, sentWA{to: to, text: text})
+	f.sent = append(f.sent, sentWA{to: f.selfJID.ToNonAD(), text: text})
 	return nil
 }
 
@@ -562,7 +554,8 @@ func TestWeeklyRecapHook(t *testing.T) {
 	cfg := config.Default()
 	cfg.Alerts.WhatsApp = true
 	wa := &fakeWhatsApp{connected: true, selfJID: types.NewJID("919876543210", types.DefaultUserServer)}
-	now := istTime(t, 20, 0, 0) // Sunday 20:00
+	loc, _ := time.LoadLocation("Asia/Kolkata")
+	now := time.Date(2026, 11, 22, 20, 0, 0, 0, loc) // Sunday 20:00 IST
 
 	d := NewDispatcher(DispatcherConfig{
 		UserID:      1,
@@ -594,5 +587,146 @@ func TestWeeklyRecapHook(t *testing.T) {
 	}
 	if got := len(wa.messages()); got != 1 {
 		t.Fatalf("recap sent %d times in same week, want 1", got)
+	}
+}
+
+func TestRunRateLimitDoesNotSpin(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	st := openTestStore(t)
+	cfg := config.Default()
+	cfg.Alerts.WhatsApp = true
+	cfg.Alerts.MaxPerHour = 1
+	wa := &fakeWhatsApp{connected: true, selfJID: types.NewJID("919876543210", types.DefaultUserServer)}
+
+	// Use an active daytime clock and pre-fill the hourly cap.
+	now := istTime(t, 14, 0, 0)
+	if err := st.RecordAlertSentBatch(ctx, 1, ChannelWhatsApp, []string{"prev"}, now); err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	d := NewDispatcher(DispatcherConfig{
+		UserID: 1,
+		Store:  st,
+		Config: func() *config.Config { return cfg },
+		Source: func(context.Context) ([]Item, error) {
+			calls.Add(1)
+			return []Item{{ID: "b1", Kind: "blocked", Title: "Sale blocked", Detail: "err", Meal: "lunch"}}, nil
+		},
+		Now:          func() time.Time { return now },
+		BatchWindow:  NoBatch,
+		PollInterval: 200 * time.Millisecond,
+	})
+	d.Register(NewWhatsAppChannel(wa))
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		d.Run(ctx)
+	}()
+	time.Sleep(350 * time.Millisecond)
+	cancel()
+	<-done
+
+	// Expect at most ~3 polls (initial + 1-2 ticks), NOT a 10ms spin loop (~35 calls).
+	if got := calls.Load(); got > 5 {
+		t.Fatalf("Run spun while rate-limited: %d source calls in 350ms", got)
+	}
+}
+
+func TestOfflineRetriesOnChannelOnline(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	cfg := config.Default()
+	cfg.Alerts.WhatsApp = true
+	wa := &fakeWhatsApp{connected: false, selfJID: types.NewJID("919876543210", types.DefaultUserServer)}
+	now := istTime(t, 13, 0, 0)
+	items := []Item{{ID: "ref-blip", Kind: "refund", Title: "Refund due", Detail: "Send ₹40 back to Asha.", Meal: "lunch"}}
+
+	d := NewDispatcher(DispatcherConfig{
+		UserID:      1,
+		Store:       st,
+		Config:      func() *config.Config { return cfg },
+		Source:      func(context.Context) ([]Item, error) { return items, nil },
+		Now:         func() time.Time { return now },
+		BatchWindow: NoBatch,
+	})
+	d.Register(NewWhatsAppChannel(wa))
+
+	// Offline: recorded once, does not retry-storm on subsequent polls.
+	for range 3 {
+		if err := d.Step(ctx); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(15 * time.Second)
+	}
+	offlineRows, err := st.AlertDeliveriesByStatus(ctx, 1, store.AlertOffline)
+	if err != nil || len(offlineRows) != 1 || offlineRows[0].Attempts != 1 {
+		t.Fatalf("offline rows = %+v, err = %v", offlineRows, err)
+	}
+
+	// Reconnect: ChannelOnline unlocks the offline item once and delivers it.
+	wa.mu.Lock()
+	wa.connected = true
+	wa.mu.Unlock()
+	d.ChannelOnline(ChannelWhatsApp)
+	now = now.Add(5 * time.Second)
+	if err := d.Step(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(wa.messages()); got != 1 {
+		t.Fatalf("after ChannelOnline sent %d messages, want 1", got)
+	}
+
+	// Subsequent poll must not re-send.
+	now = now.Add(time.Minute)
+	if err := d.Step(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(wa.messages()); got != 1 {
+		t.Fatalf("re-sent after reconnect delivery: %d", got)
+	}
+}
+
+type failingRecordStore struct {
+	DeliveryStore
+	failRecord bool
+}
+
+func (f *failingRecordStore) RecordAlertSentBatch(ctx context.Context, userID int64, channel string, itemIDs []string, at time.Time) error {
+	if f.failRecord {
+		return errors.New("sqlite busy")
+	}
+	return f.DeliveryStore.RecordAlertSentBatch(ctx, userID, channel, itemIDs, at)
+}
+
+func TestSendSuccessNotDuplicatedIfStoreWriteFails(t *testing.T) {
+	ctx := context.Background()
+	st := &failingRecordStore{DeliveryStore: openTestStore(t), failRecord: true}
+	cfg := config.Default()
+	cfg.Alerts.WhatsApp = true
+	wa := &fakeWhatsApp{connected: true, selfJID: types.NewJID("919876543210", types.DefaultUserServer)}
+	now := istTime(t, 12, 0, 0)
+	items := []Item{{ID: "r-mem", Kind: "refund", Title: "Refund due", Detail: "Send ₹30 back.", Meal: "lunch"}}
+
+	d := NewDispatcher(DispatcherConfig{
+		UserID:      1,
+		Store:       st,
+		Config:      func() *config.Config { return cfg },
+		Source:      func(context.Context) ([]Item, error) { return items, nil },
+		Now:         func() time.Time { return now },
+		BatchWindow: NoBatch,
+	})
+	d.Register(NewWhatsAppChannel(wa))
+
+	if err := d.Step(ctx); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	if err := d.Step(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(wa.messages()); got != 1 {
+		t.Fatalf("sent %d times after store write failure, want 1", got)
 	}
 }

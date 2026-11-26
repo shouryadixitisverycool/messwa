@@ -184,10 +184,15 @@ func TestAlertSettingsAndPublicURL(t *testing.T) {
 		}
 	}
 
-	// BaseURL prefers PublicURL and trims trailing slash.
+	// BaseURL omits loopback listen addresses (useless on a phone), falls back
+	// to non-loopback LAN/Tailscale listen addresses, and prefers PublicURL.
 	d := Dash{Listen: "127.0.0.1:8767"}
-	if d.BaseURL() != "http://127.0.0.1:8767" {
-		t.Fatalf("BaseURL fallback = %q", d.BaseURL())
+	if d.BaseURL() != "" {
+		t.Fatalf("BaseURL loopback = %q, want empty", d.BaseURL())
+	}
+	d.Listen = "100.64.1.2:8767"
+	if d.BaseURL() != "http://100.64.1.2:8767" {
+		t.Fatalf("BaseURL tailscale = %q", d.BaseURL())
 	}
 	d.PublicURL = "https://mess.example.com/"
 	if d.BaseURL() != "https://mess.example.com" {
@@ -197,5 +202,40 @@ func TestAlertSettingsAndPublicURL(t *testing.T) {
 	bad.Dash.PublicURL = "not-a-url"
 	if err := bad.validate(); err == nil {
 		t.Fatal("invalid dashboard.public_url accepted")
+	}
+}
+
+func TestApplySavedQuietHoursRoundTrip(t *testing.T) {
+	// Disabling quiet hours ("" + "") must survive ApplySaved on restart.
+	c := Default()
+	skipped := c.ApplySaved(Settings{
+		"alerts.quiet_start": raw(""),
+		"alerts.quiet_end":   raw(""),
+	})
+	if len(skipped) != 0 || c.Alerts.QuietStart != "" || c.Alerts.QuietEnd != "" {
+		t.Fatalf("disable quiet hours on restart: skipped=%v alerts=%+v", skipped, c.Alerts)
+	}
+
+	// Also works when paired with an unrelated stale key.
+	c2 := Default()
+	c2.Groups = []string{"a@g.us"}
+	skipped2 := c2.ApplySaved(Settings{
+		"alerts.quiet_start": raw(""),
+		"alerts.quiet_end":   raw(""),
+		"sell.group_count":   raw(5), // stale
+	})
+	if len(skipped2) != 1 || skipped2["sell.group_count"] == nil || c2.Alerts.QuietStart != "" || c2.Alerts.QuietEnd != "" {
+		t.Fatalf("disable quiet hours with stale key: skipped=%v alerts=%+v", skipped2, c2.Alerts)
+	}
+
+	// Reverse: enabling quiet hours over empty file defaults survives ApplySaved.
+	c3 := Default()
+	c3.Alerts.QuietStart, c3.Alerts.QuietEnd = "", ""
+	skipped3 := c3.ApplySaved(Settings{
+		"alerts.quiet_start": raw("23:00"),
+		"alerts.quiet_end":   raw("07:00"),
+	})
+	if len(skipped3) != 0 || c3.Alerts.QuietStart != "23:00" || c3.Alerts.QuietEnd != "07:00" {
+		t.Fatalf("enable quiet hours on restart: skipped=%v alerts=%+v", skipped3, c3.Alerts)
 	}
 }

@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,7 +14,9 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/proto"
 
+	"messwa/internal/accounts"
 	"messwa/internal/config"
+	"messwa/internal/dashboard"
 	"messwa/internal/mcpserver"
 	"messwa/internal/notify"
 	"messwa/internal/store"
@@ -23,10 +28,11 @@ type mockSelfAlertSender struct {
 	selfJID   types.JID
 }
 
-func (s *mockSelfAlertSender) Connected() bool                         { return s.connected }
-func (s *mockSelfAlertSender) SelfJID(context.Context) (types.JID, error) { return s.selfJID, nil }
-func (s *mockSelfAlertSender) SendText(ctx context.Context, to types.JID, text string) error {
-	_, err := s.conn.send(ctx, to, &waE2E.Message{Conversation: proto.String(text)})
+func (s *mockSelfAlertSender) SendSelfText(ctx context.Context, text string) error {
+	if !s.connected || s.selfJID.IsEmpty() {
+		return fmt.Errorf("%w: mock WhatsApp disconnected", notify.ErrChannelUnavailable)
+	}
+	_, err := s.conn.send(ctx, s.selfJID.ToNonAD(), &waE2E.Message{Conversation: proto.String(text)})
 	return err
 }
 
@@ -109,5 +115,59 @@ func TestWhatsAppSelfAlertsEndToEndWithMockChat(t *testing.T) {
 	}
 	if !strings.HasPrefix(msgs[0].Text, "⚠️ Lunch offer didn't post in 2 groups. Fix: https://mess.example.com/#attn-") {
 		t.Fatalf("unexpected self-alert text: %q", msgs[0].Text)
+	}
+}
+
+// Regression test: Unlink holds a.mu while calling sell.Cancel, which triggers
+// sell.notify -> wakeNotifier. Because notifier uses atomic.Pointer instead of
+// a.mu, unlinking with an active task must complete without deadlocking.
+func TestDeviceAccountUnlinkWithActiveSaleDoesNotDeadlock(t *testing.T) {
+	ctx := t.Context()
+	cfg := config.Default()
+	cfg.StateDir = t.TempDir()
+	st, err := store.Open(cfg.DataDB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	id, err := st.AddUser(ctx, "admin", "admin", "hash", "active", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	acc, err := accounts.New(st, "0123456789012345678901234567890101234567890123456789012345678901")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &deviceAccounts{
+		ctx:   ctx,
+		cfg:   cfg,
+		log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		st:    st,
+		acc:   acc,
+		hub:   dashboard.NewHub(),
+		users: map[int64]*deviceAccount{},
+	}
+	defer m.close()
+	srv, err := m.server(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if _, err := st.CreateSellTask(ctx, store.SellTask{
+		UserID: id, Date: now.Format("2006-01-02"), Meal: "lunch",
+		MinPaise: 3000, MaxPaise: 5000, CreatedAt: now, EndsAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- srv.Device.Unlink(ctx) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Unlink failed: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Unlink deadlocked with active sell task")
 	}
 }
