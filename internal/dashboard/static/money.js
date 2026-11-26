@@ -40,6 +40,7 @@ let jarShown = 0;        // coins on screen or on their way
 let jarEarned = null;    // earned at the last render, to spot a new sale
 let jarNumber = 0;       // the amount on screen, for counting up
 let jarCount = 0;        // countTo's frame
+let jarTarget = 0;       // where countTo is heading
 let jarRaf = 0;
 const jarFlying = new Map();  // spot index -> coin in the air
 const jarNodes = [];          // spot index -> coin node
@@ -139,8 +140,10 @@ function jarTick(t) {
 // countTo rolls the big number from what it shows to v. A newer call
 // takes over from wherever the last one got to.
 function countTo(node, v) {
+  if (jarCount && jarTarget === v) return;
   cancelAnimationFrame(jarCount);
   jarCount = 0;
+  jarTarget = v;
   const from = jarNumber;
   const show = (x) => { jarNumber = x; node.textContent = rupees(Math.round(x)); };
   if (MONEY_STILL() || from === v) { show(v); return; }
@@ -173,9 +176,8 @@ function renderJar() {
   box.classList.remove('member');
   $('jarK').textContent = fmt(M.start, { month: 'long' });
   countTo($('jarV'), M.earned);
-  $('jarOf').textContent = M.fee > 0 ? `of ${rupees(M.fee)}` : '';
+  $('jarOf').textContent = M.fee > 0 ? `of ${rupees(M.fee)}` : 'No bill';
   box.classList.toggle('full', M.fee > 0 && M.earned >= M.fee);
-  box.style.setProperty('--fill', String(M.fee > 0 ? Math.min(1, M.earned / M.fee) : 0));
 
   const want = jarCoins(M);
   if (want < jarShown) {
@@ -207,7 +209,7 @@ function renderSpark() {
   const by = new Map(days.map((d) => [d, []]));
   for (const s of recentSales()) by.get(s.date)?.push(s);
   const vals = days.map((d) => sum(by.get(d).map((s) => s.amount)));
-  const key = days[0] + vals.join(',');
+  const key = days[0] + JSON.stringify(days.map((d) => by.get(d).map((s) => [s.amount, s.name, s.phone, saleWhat(s)])));
   if (box.dataset.key === key) return;
   box.dataset.key = key;
   const mx = Math.max(1, ...vals);
@@ -236,6 +238,7 @@ let recapWeeks = null;   // api/recap weeks, newest first
 let recapStart = null;   // the week showing, by its Monday; null is the latest
 let recapLoaded = 0;
 let recapSales = '';     // D.sales when the recap was fetched
+let recapSeq = 0;        // the newest fetch; older answers are dropped
 
 // loadRecap fetches the recap every 5 minutes, or sooner when a sale changed.
 async function loadRecap() {
@@ -244,12 +247,16 @@ async function loadRecap() {
   if (sig === recapSales && Date.now() - recapLoaded < 5 * 60e3) return;
   recapLoaded = Date.now();
   recapSales = sig;
+  const seq = ++recapSeq;
   try {
     const r = await fetch('api/recap', { cache: 'no-store' });
+    if (r.status === 401) return toLogin();
     if (!r.ok) throw new Error(r.status);
     const j = await r.json();
+    if (seq !== recapSeq) return;
     recapWeeks = j.owner ? j.weeks || [] : [];
   } catch (e) {
+    if (seq !== recapSeq) return;
     recapLoaded = 0;
     recapSales = '';
     recapWeeks = recapWeeks || [];
@@ -345,15 +352,20 @@ function renderRecap() {
   if (card.hidden) return;
   const recapAt = recapIndex(ws);
   const w = ws[recapAt];
-  // Rebuilding the slides drops focus and restarts their animations, so only
-  // do it when something on them changed.
-  const key = JSON.stringify(w) + JSON.stringify(D.sales);
-  if (card.dataset.key === key) return;
-  card.dataset.key = key;
   $('recapWeek').textContent = recapAt === 0 ? 'Last week' : weekLabel(w);
   $('recapWeek').title = weekLabel(w);
-  $('recapOlder').disabled = recapAt >= ws.length - 1;
-  $('recapNewer').disabled = recapAt === 0;
+  const older = $('recapOlder'), newer = $('recapNewer');
+  const lost = document.activeElement;
+  older.disabled = recapAt >= ws.length - 1;
+  newer.disabled = recapAt === 0;
+  // An arrow that just ran out hands focus to the other one.
+  if (lost === older && older.disabled) newer.focus();
+  if (lost === newer && newer.disabled) older.focus();
+  // Rebuilding the slides drops focus and restarts their animations, so only
+  // do it when the week changed. The price plot and regulars redraw anyway.
+  const key = JSON.stringify(w);
+  if (card.dataset.key === key) { renderPrices(); renderHeads(); return; }
+  card.dataset.key = key;
 
   const track = $('recapTrack');
   const keep = track.scrollLeft;
@@ -395,7 +407,6 @@ function renderHeads() {
     const n = el('span', 'rhead');
     n.style.setProperty('--m', t.color);
     n.append(svgEl(face(b.key)), el('b', '', String(b.n)));
-    n.tabIndex = 0;
     n.setAttribute('role', 'img');
     n.setAttribute('aria-label', `${b.name || fmtPhone(b.phone) || 'Unknown buyer'}, ${b.n} meals`);
     tip(n, () => buyerLines(b));
@@ -427,6 +438,7 @@ function rulePills(box) {
     const p = pill(LOOP, [r.name, ruleListPrice(r), el('span', 'st', word)], 'mp-rule ' + cls,
       () => editRecurringRule(r), `Edit rule ${r.name}, ${word}`);
     p.disabled = recurringBusy;
+    p.dataset.k = 'r' + r.id;
     if (r.last_error) p.title = r.last_error;
     box.append(p);
   }
@@ -447,6 +459,7 @@ function friendPills(box) {
       open ? () => openSell(f.date, friendCell(f)) : null,
       `${who}, ${word}`);
     p.style.setProperty('--m', messColor(f.mess));
+    p.dataset.k = `f${f.date}|${f.meal}|${f.friend || ''}`;
     box.append(p);
   }
 }
@@ -456,13 +469,15 @@ function renderPills() {
   box.hidden = !D.owner;
   if (!D.owner) return;
   // Keep focus on the same pill across a reload.
-  const focused = [...box.children].indexOf(document.activeElement);
+  const on = document.activeElement;
+  const focused = on && on.parentNode === box ? on.dataset.k : '';
   box.replaceChildren();
   rulePills(box);
   friendPills(box);
   const add = (text, fn, label, cls = '') => {
     const b = el('button', 'mpill add ' + cls, text);
     b.type = 'button';
+    b.dataset.k = 'add' + cls;
     b.setAttribute('aria-label', label);
     b.addEventListener('click', fn);
     box.append(b);
@@ -470,7 +485,8 @@ function renderPills() {
   add('+ Rule', () => editRecurringRule(undefined), 'New recurring rule', 'mp-rule');
   if (recurringBusy) box.querySelector('.add.mp-rule').disabled = true;
   add("+ Friend's meal", () => { if (D) openFriendForm(); }, "Sell a friend's meal");
-  if (focused >= 0) box.children[Math.min(focused, box.children.length - 1)].focus();
+  const back = focused && [...box.children].find((b) => b.dataset.k === focused);
+  if (back && back.tagName === 'BUTTON') back.focus();
 }
 
 function renderMoney() {

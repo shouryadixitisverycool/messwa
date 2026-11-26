@@ -129,8 +129,7 @@
   font-size: 10px; line-height: 14px; text-align: center; color: var(--calm-text); font-weight: var(--w-med);
 }
 
-.recap-dots { display: flex; justify-content: center; gap: 6px; }
-.recap-dots { gap: 0; }
+.recap-dots { display: flex; justify-content: center; }
 /* A 24px target around a 6px dot. */
 .rdot { width: 24px; height: 24px; padding: 0; border: 0; background: none; cursor: pointer; display: grid; place-items: center; }
 .rdot::before { content: ""; width: 6px; height: 6px; border-radius: var(--r-pill); background: var(--calm-line-2); transition: width var(--dur-2) var(--ease-out), background var(--dur-2); }
@@ -189,7 +188,7 @@ button.mpill:active:not(:disabled) { transform: scale(.97); }
 
 .money .lgrid .slot { border-radius: var(--r-md); background: var(--calm-2); border-color: var(--calm-line); box-shadow: none; }
 .money .lgrid .slot.out { background: transparent; border-color: transparent; }
-.money .lgrid .slot:not(.cell) { background: transparent; border: 1px solid var(--calm-line); opacity: .5; }
+.money .lgrid .slot:not(.cell):not(.out) { background: transparent; border: 1px solid var(--calm-line); opacity: .5; }
 .money .lgrid .item:hover, .money .lgrid .item:focus-visible, .money .lgrid .item.active {
   transform: translateY(-1px); background: var(--calm-2); box-shadow: 0 6px 16px rgba(0, 0, 0, .35); border-color: var(--calm-line-2);
 }
@@ -216,8 +215,9 @@ button.mpill:active:not(:disabled) { transform: scale(.97); }
 @media (prefers-reduced-motion: reduce) { .money .cell .live-dot { animation: none; } .money .cell.is-selling { animation: none; } }
 /* Keep the old cell states the calm skin would otherwise cover. */
 .money .cell.is-open.sellable { border-color: color-mix(in srgb, var(--calm-warn) 45%, transparent); }
-.money .cell.picked { border: 2px solid var(--calm-warn); background: color-mix(in srgb, var(--calm-warn) 9%, var(--calm-2)); }
-.money .cell.issue { border: 1px solid var(--calm-bad); box-shadow: 0 0 8px color-mix(in srgb, var(--calm-bad) 35%, transparent); }
+/* .lgrid lifts these past hover, active and sellable. */
+.money .lgrid .cell.picked { border: 2px solid var(--calm-warn); background: color-mix(in srgb, var(--calm-warn) 9%, var(--calm-2)); }
+.money .lgrid .cell.issue { border: 1px solid var(--calm-bad); box-shadow: 0 0 8px color-mix(in srgb, var(--calm-bad) 35%, transparent); }
 .money .cell.faded { opacity: .18; }
 .money .cell.faded:hover { opacity: .6; }
 
@@ -270,5 +270,6 @@ button.mpill:active:not(:disabled) { transform: scale(.97); }
   .money .lgrid .price.range { font-size: 9px; }
   /* The live dot leaves room for the price. */
   .money .cell.is-selling .price.range { display: flex; padding-bottom: 8px; }
+  .money .cell .stamp { font-size: 7px; padding: 1px 3px; }
   .week-meta { gap: var(--sp-2); font-size: var(--t-sm); }
 }

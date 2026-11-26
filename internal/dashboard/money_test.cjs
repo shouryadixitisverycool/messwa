@@ -7,7 +7,7 @@ const path = require('node:path');
 
 function money(extra = {}) {
   class Element {
-    constructor(tag = 'div', cls = '') { this.tag = tag; this.className = cls; this.children = []; this.attrs = {}; this.listeners = {}; this.style = { setProperty() {} }; this.classList = { toggle() {}, add() {}, remove() {} }; }
+    constructor(tag = 'div', cls = '') { this.tag = tag; this.className = cls; this.children = []; this.attrs = {}; this.dataset = {}; this.listeners = {}; this.style = { setProperty() {} }; this.classList = { toggle() {}, add() {}, remove() {} }; }
     append(...xs) { this.children.push(...xs); }
     replaceChildren(...xs) { this.children = xs; }
     setAttribute(k, v) { this.attrs[k] = v; }

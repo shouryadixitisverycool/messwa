@@ -617,7 +617,7 @@ function renderPrices() {
   rows.forEach(({ meal, diet, m, ms }, i) => {
     // ly is the label line, y the bar's middle. They share a line on desktop.
     const ly = top + i * rowH + (narrow ? 8 : 6), y = narrow ? ly + 24 : ly;
-    svg += icon(meal).replace('<svg ', `<svg x="2" y="${ly - 6}" width="12" height="12" `)
+    svg += (ART[meal] ? icon(meal) : '').replace('<svg ', `<svg x="2" y="${ly - 6}" width="12" height="12" `)
       + dietMark(diet).replace('<svg ', `<svg x="18" y="${ly - 6}" width="12" height="12" `)
       + `<text class="px" x="36" y="${ly + 4}" fill="#8b94a7">${meal.toUpperCase()}</text>`;
     if (narrow) {
