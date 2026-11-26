@@ -452,13 +452,14 @@ func TestOfflineRecordedAndSecondChannelCovers(t *testing.T) {
 		t.Fatalf("disconnected WA should send 0 messages, got %d", len(wa.messages()))
 	}
 
-	// Verify offline state is persisted for WhatsApp (only once, no retry-storm).
+	// Verify offline state is persisted for WhatsApp (Attempts stays 0 so
+	// offline checks never consume the failed-send retry budget).
 	offlineRows, err := st.AlertDeliveriesByStatus(ctx, 1, store.AlertOffline)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(offlineRows) != 1 || offlineRows[0].ItemID != "ref-1" || offlineRows[0].Channel != ChannelWhatsApp || offlineRows[0].Attempts != 1 {
-		t.Fatalf("offline rows = %+v, want 1 attempt for ref-1 on whatsapp", offlineRows)
+	if len(offlineRows) != 1 || offlineRows[0].ItemID != "ref-1" || offlineRows[0].Channel != ChannelWhatsApp || offlineRows[0].Attempts != 0 {
+		t.Fatalf("offline rows = %+v, want 1 offline row with 0 failed-send attempts for ref-1 on whatsapp", offlineRows)
 	}
 
 	// Verify the second channel (Web Push) covered BOTH ref-1 and wa-down with zero dispatcher changes.
@@ -661,7 +662,7 @@ func TestOfflineRetriesOnChannelOnline(t *testing.T) {
 		now = now.Add(15 * time.Second)
 	}
 	offlineRows, err := st.AlertDeliveriesByStatus(ctx, 1, store.AlertOffline)
-	if err != nil || len(offlineRows) != 1 || offlineRows[0].Attempts != 1 {
+	if err != nil || len(offlineRows) != 1 || offlineRows[0].Attempts != 0 {
 		t.Fatalf("offline rows = %+v, err = %v", offlineRows, err)
 	}
 
@@ -702,9 +703,11 @@ func (f *failingRecordStore) RecordAlertSentBatch(ctx context.Context, userID in
 
 func TestSendSuccessNotDuplicatedIfStoreWriteFails(t *testing.T) {
 	ctx := context.Background()
-	st := &failingRecordStore{DeliveryStore: openTestStore(t), failRecord: true}
+	realStore := openTestStore(t)
+	st := &failingRecordStore{DeliveryStore: realStore, failRecord: true}
 	cfg := config.Default()
 	cfg.Alerts.WhatsApp = true
+	cfg.Alerts.MaxPerHour = 1
 	wa := &fakeWhatsApp{connected: true, selfJID: types.NewJID("919876543210", types.DefaultUserServer)}
 	now := istTime(t, 12, 0, 0)
 	items := []Item{{ID: "r-mem", Kind: "refund", Title: "Refund due", Detail: "Send ₹30 back.", Meal: "lunch"}}
@@ -719,14 +722,79 @@ func TestSendSuccessNotDuplicatedIfStoreWriteFails(t *testing.T) {
 	})
 	d.Register(NewWhatsAppChannel(wa))
 
+	// First send succeeds on transport, but SQLite commit fails.
 	if err := d.Step(ctx); err != nil {
 		t.Fatal(err)
 	}
+	// A second alert in the same hour must be blocked by MaxPerHour=1 even
+	// while the first send's DB write is still pending retry.
 	now = now.Add(time.Minute)
+	items = append(items, Item{ID: "r-mem-2", Kind: "refund", Title: "Refund due", Detail: "Send ₹20 back.", Meal: "dinner"})
 	if err := d.Step(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(wa.messages()); got != 1 {
-		t.Fatalf("sent %d times after store write failure, want 1", got)
+		t.Fatalf("sent %d times while DB write pending and cap=1, want 1", got)
+	}
+
+	// Once SQLite recovers, the queued write is flushed so restart knows r-mem was sent.
+	st.failRecord = false
+	now = now.Add(time.Minute)
+	if err := d.Step(ctx); err != nil {
+		t.Fatal(err)
+	}
+	delivered, err := realStore.AlertDeliveriesForItems(ctx, 1, ChannelWhatsApp, []string{"r-mem"})
+	if err != nil || delivered["r-mem"].Status != store.AlertSent {
+		t.Fatalf("after DB recovery delivered = %+v, err = %v", delivered, err)
+	}
+}
+
+func TestOfflineDoesNotConsumeRetryBudget(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	cfg := config.Default()
+	cfg.Alerts.WhatsApp = true
+	wa := &fakeWhatsApp{connected: false, selfJID: types.NewJID("919876543210", types.DefaultUserServer)}
+	now := istTime(t, 12, 0, 0)
+	items := []Item{{ID: "ref-budget", Kind: "refund", Title: "Refund due", Detail: "Send ₹40 back.", Meal: "lunch"}}
+
+	d := NewDispatcher(DispatcherConfig{
+		UserID:      1,
+		Store:       st,
+		Config:      func() *config.Config { return cfg },
+		Source:      func(context.Context) ([]Item, error) { return items, nil },
+		Now:         func() time.Time { return now },
+		BatchWindow: NoBatch,
+	})
+	d.Register(NewWhatsAppChannel(wa))
+
+	// Record three separate offline outcomes across reconnect flaps.
+	for range 3 {
+		if err := d.Step(ctx); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(10 * time.Second)
+		d.ChannelOnline(ChannelWhatsApp)
+	}
+
+	// Now WhatsApp connects, fails once transiently, then recovers on retry.
+	wa.mu.Lock()
+	wa.connected = true
+	wa.sendErr = errors.New("temporary 500")
+	wa.mu.Unlock()
+	if err := d.Step(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Advance past backoff and clear error: must still have retry budget left.
+	wa.mu.Lock()
+	wa.sendErr = nil
+	wa.mu.Unlock()
+	now = now.Add(2 * time.Minute)
+	if err := d.Step(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(wa.messages()); got != 1 {
+		t.Fatalf("after offline flaps + transient error sent %d messages, want 1", got)
 	}
 }

@@ -53,6 +53,11 @@ type pendingItem struct {
 	firstSeen time.Time
 }
 
+type unsavedSentBatch struct {
+	ids []string
+	at  time.Time
+}
+
 // Dispatcher polls a user's attention items, applies dedupe, batching, rate
 // limiting, and quiet hours, and hands ready batches to every registered
 // Channel. It has no channel-specific logic.
@@ -77,6 +82,7 @@ type Dispatcher struct {
 	onlineSeq       map[string]uint64
 	offlineTriedSeq map[string]map[string]uint64
 	sentMem         map[string]map[string]bool
+	unsavedSent     map[string][]unsavedSentBatch
 	recapFn         WeeklyRecapFunc
 
 	// stepMu serializes Step and SendWeeklyRecap so concurrent wakes cannot
@@ -120,6 +126,7 @@ func NewDispatcher(c DispatcherConfig) *Dispatcher {
 		onlineSeq:       map[string]uint64{},
 		offlineTriedSeq: map[string]map[string]uint64{},
 		sentMem:         map[string]map[string]bool{},
+		unsavedSent:     map[string][]unsavedSentBatch{},
 	}
 }
 
@@ -359,6 +366,10 @@ func (d *Dispatcher) stepChannel(
 	baseURL string,
 ) {
 	name := ch.Name()
+	// Flush any previously sent batches whose SQLite commit failed transiently
+	// before checking deliveries or hourly counts.
+	d.flushUnsavedSent(ctx, name)
+
 	if !ch.Enabled(cfg) {
 		d.mu.Lock()
 		clear(d.pending[name])
@@ -367,7 +378,20 @@ func (d *Dispatcher) stepChannel(
 		return
 	}
 
-	delivered, err := d.store.AlertDeliveries(ctx, d.userID, name)
+	if len(current) == 0 {
+		d.mu.Lock()
+		clear(d.pending[name])
+		delete(d.nextEligible, name)
+		d.pruneMemoryLocked(name, current)
+		d.mu.Unlock()
+		return
+	}
+
+	currentIDs := make([]string, 0, len(current))
+	for id := range current {
+		currentIDs = append(currentIDs, id)
+	}
+	delivered, err := d.store.AlertDeliveriesForItems(ctx, d.userID, name, currentIDs)
 	if err != nil {
 		if ctx.Err() == nil {
 			d.log.Warn("load alert deliveries", "user", d.userID, "channel", name, "err", err)
@@ -377,6 +401,7 @@ func (d *Dispatcher) stepChannel(
 	}
 
 	d.mu.Lock()
+	d.pruneMemoryLocked(name, current)
 	onlineSeq := d.onlineSeq[name]
 	triedSeq := d.offlineTriedSeq[name]
 	sentMem := d.sentMem[name]
@@ -437,9 +462,18 @@ func (d *Dispatcher) stepChannel(
 		}
 		return
 	}
+	unsavedCount, oldestUnsaved := d.unsavedSendsSince(name, windowStart)
+	sentCount += unsavedCount
 	if sentCount >= maxPerHour {
 		nextAt := now.Add(d.pollInterval)
-		if oldestSend, err := d.store.OldestAlertSendSince(ctx, d.userID, name, windowStart); err == nil && !oldestSend.IsZero() {
+		oldestSend, err := d.store.OldestAlertSendSince(ctx, d.userID, name, windowStart)
+		if err != nil {
+			oldestSend = time.Time{}
+		}
+		if !oldestUnsaved.IsZero() && (oldestSend.IsZero() || oldestUnsaved.Before(oldestSend)) {
+			oldestSend = oldestUnsaved
+		}
+		if !oldestSend.IsZero() {
 			if unlockAt := oldestSend.Add(time.Hour + time.Second); unlockAt.After(now) {
 				nextAt = unlockAt
 			}
@@ -471,14 +505,7 @@ func (d *Dispatcher) stepChannel(
 
 	switch {
 	case err == nil:
-		// Mark sent in memory first so a transient SQLite failure after
-		// transport success cannot cause this process to double-send.
-		d.markSentMem(name, ids)
-		commitCtx, cancelCommit := context.WithTimeout(context.WithoutCancel(ctx), commitTimeout)
-		if recErr := d.store.RecordAlertSentBatch(commitCtx, d.userID, name, ids, now); recErr != nil {
-			d.log.Error("record sent alert batch", "user", d.userID, "channel", name, "err", recErr)
-		}
-		cancelCommit()
+		d.recordSentWithFallback(ctx, name, ids, now)
 		d.clearPending(name, ids)
 	case errors.Is(err, ErrChannelUnavailable):
 		// Record offline state so a fallback channel (e.g. Web Push) can cover
@@ -532,6 +559,92 @@ func (d *Dispatcher) markSentMem(channel string, ids []string) {
 	}
 	for _, id := range ids {
 		m[id] = true
+	}
+}
+
+// recordSentWithFallback persists a delivered batch to SQLite and, if that
+// write fails transiently, queues it in unsavedSent so it counts toward the
+// hourly rate limit and is retried on subsequent steps.
+func (d *Dispatcher) recordSentWithFallback(ctx context.Context, channel string, ids []string, at time.Time) {
+	d.markSentMem(channel, ids)
+	commitCtx, cancelCommit := context.WithTimeout(context.WithoutCancel(ctx), commitTimeout)
+	err := d.store.RecordAlertSentBatch(commitCtx, d.userID, channel, ids, at)
+	cancelCommit()
+	if err != nil {
+		d.log.Error("record sent alert batch; queued for retry", "user", d.userID, "channel", channel, "err", err)
+		d.mu.Lock()
+		d.unsavedSent[channel] = append(d.unsavedSent[channel], unsavedSentBatch{
+			ids: append([]string(nil), ids...),
+			at:  at,
+		})
+		d.mu.Unlock()
+	}
+}
+
+func (d *Dispatcher) flushUnsavedSent(ctx context.Context, channel string) {
+	d.mu.Lock()
+	queued := append([]unsavedSentBatch(nil), d.unsavedSent[channel]...)
+	d.mu.Unlock()
+	if len(queued) == 0 {
+		return
+	}
+	var remaining []unsavedSentBatch
+	for _, b := range queued {
+		commitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), commitTimeout)
+		err := d.store.RecordAlertSentBatch(commitCtx, d.userID, channel, b.ids, b.at)
+		cancel()
+		if err != nil {
+			remaining = append(remaining, b)
+		}
+	}
+	d.mu.Lock()
+	if len(remaining) == 0 {
+		delete(d.unsavedSent, channel)
+	} else {
+		d.unsavedSent[channel] = remaining
+	}
+	d.mu.Unlock()
+}
+
+func (d *Dispatcher) unsavedSendsSince(channel string, since time.Time) (int, time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	count := 0
+	var oldest time.Time
+	for _, b := range d.unsavedSent[channel] {
+		if b.at.Unix() > since.Unix() {
+			count++
+			if oldest.IsZero() || b.at.Before(oldest) {
+				oldest = b.at
+			}
+		}
+	}
+	return count, oldest
+}
+
+// pruneMemoryLocked drops sentMem and offlineTriedSeq entries for items that
+// are no longer active, keeping any IDs still awaiting a retried SQLite write.
+// d.mu must be held.
+func (d *Dispatcher) pruneMemoryLocked(channel string, current map[string]Item) {
+	keepUnsaved := map[string]bool{}
+	for _, b := range d.unsavedSent[channel] {
+		for _, id := range b.ids {
+			keepUnsaved[id] = true
+		}
+	}
+	if m := d.sentMem[channel]; len(m) > 0 {
+		for id := range m {
+			if _, active := current[id]; !active && !keepUnsaved[id] {
+				delete(m, id)
+			}
+		}
+	}
+	if m := d.offlineTriedSeq[channel]; len(m) > 0 {
+		for id := range m {
+			if _, active := current[id]; !active {
+				delete(m, id)
+			}
+		}
 	}
 }
 

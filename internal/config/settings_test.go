@@ -184,13 +184,15 @@ func TestAlertSettingsAndPublicURL(t *testing.T) {
 		}
 	}
 
-	// BaseURL omits loopback listen addresses (useless on a phone), falls back
-	// to non-loopback LAN/Tailscale listen addresses, and prefers PublicURL.
-	d := Dash{Listen: "127.0.0.1:8767"}
-	if d.BaseURL() != "" {
-		t.Fatalf("BaseURL loopback = %q, want empty", d.BaseURL())
+	// BaseURL omits loopback and wildcard listen addresses (useless on a phone),
+	// falls back to non-loopback LAN/Tailscale listen addresses, and prefers PublicURL.
+	for _, listen := range []string{"127.0.0.1:8767", "localhost:8767", "0.0.0.0:8767", ":8767"} {
+		d := Dash{Listen: listen}
+		if d.BaseURL() != "" {
+			t.Fatalf("BaseURL(%q) = %q, want empty", listen, d.BaseURL())
+		}
 	}
-	d.Listen = "100.64.1.2:8767"
+	d := Dash{Listen: "100.64.1.2:8767"}
 	if d.BaseURL() != "http://100.64.1.2:8767" {
 		t.Fatalf("BaseURL tailscale = %q", d.BaseURL())
 	}

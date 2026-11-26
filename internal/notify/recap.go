@@ -87,7 +87,14 @@ func (d *Dispatcher) SendWeeklyRecap(ctx context.Context) error {
 	var built bool
 	for _, t := range targets {
 		name := t.ch.Name()
-		delivered, err := d.store.AlertDeliveries(ctx, d.userID, name)
+		d.flushUnsavedSent(ctx, name)
+		d.mu.Lock()
+		alreadySentMem := d.sentMem[name][itemID]
+		d.mu.Unlock()
+		if alreadySentMem {
+			continue
+		}
+		delivered, err := d.store.AlertDeliveriesForItems(ctx, d.userID, name, []string{itemID})
 		if err != nil {
 			d.log.Warn("load recap deliveries", "user", d.userID, "channel", name, "err", err)
 			continue
@@ -95,8 +102,13 @@ func (d *Dispatcher) SendWeeklyRecap(ctx context.Context) error {
 		if rec, ok := delivered[itemID]; ok && (rec.Status == store.AlertSent || rec.Status == store.AlertOffline) {
 			continue
 		}
-		sentCount, err := d.store.CountAlertSendsSince(ctx, d.userID, name, now.Add(-time.Hour))
-		if err != nil || sentCount >= maxPerHour {
+		windowStart := now.Add(-time.Hour)
+		sentCount, err := d.store.CountAlertSendsSince(ctx, d.userID, name, windowStart)
+		if err != nil {
+			continue
+		}
+		unsavedCount, _ := d.unsavedSendsSince(name, windowStart)
+		if sentCount+unsavedCount >= maxPerHour {
 			continue
 		}
 		if !built {
@@ -123,11 +135,7 @@ func (d *Dispatcher) SendWeeklyRecap(ctx context.Context) error {
 			d.log.Warn("send weekly recap failed", "user", d.userID, "channel", name, "err", err)
 			continue
 		}
-		commitCtx, cancelCommit := context.WithTimeout(context.WithoutCancel(ctx), commitTimeout)
-		if err := d.store.RecordAlertSentBatch(commitCtx, d.userID, name, []string{itemID}, now); err != nil {
-			d.log.Error("record sent weekly recap", "user", d.userID, "channel", name, "err", err)
-		}
-		cancelCommit()
+		d.recordSentWithFallback(ctx, name, []string{itemID}, now)
 	}
 	return nil
 }

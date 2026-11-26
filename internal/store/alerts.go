@@ -59,6 +59,36 @@ func (s *Store) AlertDeliveries(ctx context.Context, userID int64, channel strin
 		return nil, err
 	}
 	defer rows.Close()
+	return scanAlertDeliveries(rows, userID, channel)
+}
+
+// AlertDeliveriesForItems returns persisted delivery records for user and
+// channel restricted to itemIDs, avoiding full-history scans on every poll.
+func (s *Store) AlertDeliveriesForItems(ctx context.Context, userID int64, channel string, itemIDs []string) (map[string]AlertDelivery, error) {
+	if len(itemIDs) == 0 {
+		return map[string]AlertDelivery{}, nil
+	}
+	args := make([]any, 0, 2+len(itemIDs))
+	args = append(args, userID, channel)
+	for _, id := range itemIDs {
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT item_id, status, attempts, detail, retry_after, updated_at
+		 FROM alert_deliveries WHERE user_id=? AND channel=? AND item_id IN (`+placeholders(len(itemIDs))+`)`,
+		args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanAlertDeliveries(rows, userID, channel)
+}
+
+func scanAlertDeliveries(rows interface {
+	Next() bool
+	Scan(...any) error
+	Err() error
+}, userID int64, channel string) (map[string]AlertDelivery, error) {
 	out := map[string]AlertDelivery{}
 	for rows.Next() {
 		var d AlertDelivery
@@ -145,6 +175,8 @@ func (s *Store) RecordAlertSentBatch(ctx context.Context, userID int64, channel 
 
 // RecordAlertOutcome persists a non-sent delivery outcome (AlertOffline or
 // AlertFailed) for itemIDs on channel. Existing AlertSent rows are left alone.
+// Attempts counts actual failed sends (AlertFailed) only, so offline checks
+// never exhaust the send-retry budget.
 func (s *Store) RecordAlertOutcome(ctx context.Context, userID int64, channel string, itemIDs []string, status AlertStatus, detail string, retryAfter, at time.Time) error {
 	if len(itemIDs) == 0 {
 		return nil
@@ -159,18 +191,22 @@ func (s *Store) RecordAlertOutcome(ctx context.Context, userID int64, channel st
 	if !retryAfter.IsZero() {
 		retryTS = retryAfter.Unix()
 	}
+	delta := 0
+	if status == AlertFailed {
+		delta = 1
+	}
 	for _, id := range itemIDs {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO alert_deliveries(user_id, item_id, channel, status, attempts, detail, retry_after, updated_at)
-			 VALUES(?, ?, ?, ?, 1, ?, ?, ?)
+			 VALUES(?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(user_id, item_id, channel) DO UPDATE SET
 				status=excluded.status,
-				attempts=alert_deliveries.attempts + 1,
+				attempts=alert_deliveries.attempts + ?,
 				detail=excluded.detail,
 				retry_after=excluded.retry_after,
 				updated_at=excluded.updated_at
 			 WHERE alert_deliveries.status != ?`,
-			userID, id, channel, string(status), detail, retryTS, ts, string(AlertSent)); err != nil {
+			userID, id, channel, string(status), delta, detail, retryTS, ts, delta, string(AlertSent)); err != nil {
 			return err
 		}
 	}

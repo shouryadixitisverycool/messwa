@@ -167,10 +167,10 @@ func (d Dash) BaseURL() string {
 	if err != nil {
 		return ""
 	}
-	if strings.EqualFold(host, "localhost") {
+	if host == "" || strings.EqualFold(host, "localhost") {
 		return ""
 	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+	if ip := net.ParseIP(host); ip != nil && (ip.IsLoopback() || ip.IsUnspecified()) {
 		return ""
 	}
 	return "http://" + l

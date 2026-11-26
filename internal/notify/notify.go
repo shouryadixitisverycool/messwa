@@ -74,6 +74,7 @@ type TextSender interface {
 // *store.Store implements this interface.
 type DeliveryStore interface {
 	AlertDeliveries(ctx context.Context, userID int64, channel string) (map[string]store.AlertDelivery, error)
+	AlertDeliveriesForItems(ctx context.Context, userID int64, channel string, itemIDs []string) (map[string]store.AlertDelivery, error)
 	AlertDeliveriesByStatus(ctx context.Context, userID int64, status store.AlertStatus) ([]store.AlertDelivery, error)
 	RecordAlertSentBatch(ctx context.Context, userID int64, channel string, itemIDs []string, at time.Time) error
 	RecordAlertOutcome(ctx context.Context, userID int64, channel string, itemIDs []string, status store.AlertStatus, detail string, retryAfter, at time.Time) error
