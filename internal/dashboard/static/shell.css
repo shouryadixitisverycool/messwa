@@ -118,7 +118,8 @@ html:has(body.has-shell) { scroll-padding-top: calc(var(--shell-h) + 8px); }
 @media (max-width: 720px) {
   :root { --shell-h: 52px; --tabbar-h: 60px; }
   body.has-shell { --shell-stick: 0px; --tabbar-top: calc(var(--tabbar-h) + env(safe-area-inset-bottom)); }
-  html:has(body.has-shell) { scroll-padding-top: 0; }
+  /* Focus and #anchors stop above the tab bar, not behind it. */
+  html:has(body.has-shell) { scroll-padding-top: 0; scroll-padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 8px); }
   /* No blur on the bar here: it would trap the fixed tab bar inside it. */
   /* Relative, not sticky, and still on top so the avatar menu covers the page. */
   .shell { position: relative; background: none; border-bottom: 0; backdrop-filter: none; -webkit-backdrop-filter: none; }
@@ -154,8 +155,11 @@ html:has(body.has-shell) { scroll-padding-top: calc(var(--shell-h) + 8px); }
 
   body.has-shell { padding-bottom: var(--tabbar-top); }
   body.has-shell .toast { bottom: calc(var(--tabbar-top) + 12px); }
+  /* --tabbar-top already holds the safe-area inset. */
+  body.has-shell .tray { padding-bottom: 12px; }
 }
-/* Money's live dot hides on phones (style.css), leaving its head empty. */
+/* Money's live dot hides on phones (style.css), leaving its head empty.
+   Insights and Usage share the .sales class, so key on the page. */
 @media (max-width: 640px) {
-  .sales .page-head { position: absolute; }
+  body[data-page="money"] .page-head { position: absolute; }
 }

@@ -84,13 +84,15 @@ function shellBadge(tab, on) {
   avatar.append(face_);
   if (SHELL_MENU[page]) avatar.classList.add('here');
 
+  // The popup holds the name card, then the menu proper, so only menu
+  // items, the admin group and the separator sit inside role=menu.
   const menu = el('div', 'shell-menu');
-  menu.id = 'shellMenu';
-  menu.setAttribute('role', 'menu');
-  menu.setAttribute('aria-label', 'Your menu');
   menu.hidden = true;
+  const list = el('div', 'shell-list');
+  list.id = 'shellMenu';
+  list.setAttribute('role', 'menu');
+  list.setAttribute('aria-label', 'Your menu');
   const who = el('div', 'shell-who');
-  who.setAttribute('role', 'none');
   const whoName = el('b', '', '');
   const whoRole = el('span', '', '');
   who.append(whoName, whoRole);
@@ -119,12 +121,13 @@ function shellBadge(tab, on) {
   out.setAttribute('role', 'menuitem');
   out.append(shellSvg('<path d="M14 5h4.5v14H14"/><path d="M10 8.5 6.5 12l3.5 3.5M6.5 12H15"/>'), el('span', '', 'Sign out'));
   out.addEventListener('click', async () => {
-    try { await send('POST', 'api/logout'); } finally { location.href = 'login.html'; }
+    try { await send('POST', 'api/logout'); } catch {} finally { location.href = 'login.html'; }
   });
 
   const sep = el('div', 'shell-sep');
   sep.setAttribute('role', 'separator');
-  menu.append(who, item('settings'), item('account'), admin, sep, out);
+  list.append(item('settings'), item('account'), admin, sep, out);
+  menu.append(who, list);
   me_.append(avatar, menu);
 
   const items = () => [...menu.querySelectorAll('.shell-item')].filter((x) => !x.closest('[hidden]'));

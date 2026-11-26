@@ -762,9 +762,9 @@ function untagged(mess, win) {
   return D.market.posts.filter((p) => p.t > from && p.mess === mess && p.kind !== 'buy' && !marketDiet(p.diet)).length;
 }
 
-// renderStats draws the market pulse into its widget, or into the boxes in
-// to, as the widget picker's preview does.
-function renderStats(to = { meta: $('pulseMeta'), wins: $('wins'), cards: $('cards') }) {
+// renderStats draws the market pulse under the board on Buy.
+function renderStats() {
+  const to = { meta: $('pulseMeta'), wins: $('wins'), cards: $('cards') };
   if (!D || !D.market) return;
   const n = now();
   const win = WINS.includes(S.win) ? S.win : 30;

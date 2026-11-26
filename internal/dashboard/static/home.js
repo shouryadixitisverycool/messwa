@@ -452,7 +452,7 @@ function dragMove(ev) {
   }
   // Scroll while held near the top or bottom of the window.
   cancelAnimationFrame(dragAuto);
-  const edge = 70, bottom = innerHeight - (homeEditing ? $('tray').offsetHeight : 0);
+  const edge = 70, bottom = homeEditing ? $('tray').getBoundingClientRect().top : innerHeight;
   const v = d.y < edge ? -(edge - d.y) / 4 : d.y > bottom - edge && d.y < bottom ? (d.y - (bottom - edge)) / 4 : 0;
   if (v) {
     const step = () => {
