@@ -188,7 +188,7 @@ document.addEventListener('attention', (e) => {
 
 function homeApply() {
   const host = $('widgets');
-  // Every widget is made up front, so the board's markup always has a home.
+  // Every widget is made up front.
   for (const id of Object.keys(WIDGETS)) homeSection(id);
   const keep = new Set(homeOrder);
   for (const id of homeOrder) {
@@ -209,8 +209,6 @@ function homeApply() {
   }
   homeLoadRules();
   if (homeEditing) homeTray();
-  // The board sizes its slots from its own width, which was 0 while hidden.
-  dispatchEvent(new Event('resize'));
 }
 
 function homeSet(order) {
@@ -254,8 +252,6 @@ function homeEdit(on) {
     hideTip();
     homeTray();
     homeLoadRules();
-  } else {
-    dispatchEvent(new Event('resize'));
   }
 }
 

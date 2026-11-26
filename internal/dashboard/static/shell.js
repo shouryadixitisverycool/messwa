@@ -80,14 +80,17 @@ function shellBadge(tab, on) {
   avatar.setAttribute('aria-controls', 'shellMenu');
   avatar.setAttribute('aria-label', 'Your menu');
   const face_ = el('span', 'shell-initial', '');
+  face_.setAttribute('aria-hidden', 'true');
   avatar.append(face_);
   if (SHELL_MENU[page]) avatar.classList.add('here');
 
   const menu = el('div', 'shell-menu');
   menu.id = 'shellMenu';
   menu.setAttribute('role', 'menu');
+  menu.setAttribute('aria-label', 'Your menu');
   menu.hidden = true;
   const who = el('div', 'shell-who');
+  who.setAttribute('role', 'none');
   const whoName = el('b', '', '');
   const whoRole = el('span', '', '');
   who.append(whoName, whoRole);
@@ -102,8 +105,12 @@ function shellBadge(tab, on) {
     return a;
   };
   const admin = el('div', 'shell-admin');
+  admin.setAttribute('role', 'group');
+  admin.setAttribute('aria-labelledby', 'shellCrown');
   admin.hidden = true;
   const crown = el('div', 'shell-crown');
+  crown.id = 'shellCrown';
+  crown.setAttribute('role', 'presentation');
   crown.append(shellSvg(SHELL_CROWN, 'shell-ic crown'), el('span', '', 'Admin'));
   admin.append(crown, item('insights'), item('usage'));
 
@@ -115,27 +122,38 @@ function shellBadge(tab, on) {
     try { await send('POST', 'api/logout'); } finally { location.href = 'login.html'; }
   });
 
-  menu.append(who, item('settings'), item('account'), admin, el('div', 'shell-sep'), out);
+  const sep = el('div', 'shell-sep');
+  sep.setAttribute('role', 'separator');
+  menu.append(who, item('settings'), item('account'), admin, sep, out);
   me_.append(avatar, menu);
 
   const items = () => [...menu.querySelectorAll('.shell-item')].filter((x) => !x.closest('[hidden]'));
-  function openMenu(open, focusFirst) {
+  // focus: 'first' or 'last' moves focus into the menu as it opens.
+  function openMenu(open, focus) {
     menu.hidden = !open;
     avatar.setAttribute('aria-expanded', String(open));
     document.body.classList.toggle('shell-menu-open', open);
-    if (open && focusFirst) items()[0]?.focus();
+    if (open && focus) { const list = items(); list[focus === 'last' ? list.length - 1 : 0]?.focus(); }
   }
-  avatar.addEventListener('click', (e) => openMenu(menu.hidden, e.detail === 0));
+  // A keyboard click (detail 0) lands on the first item; a pointer click
+  // leaves focus on the avatar, where the arrows then take over.
+  avatar.addEventListener('click', (e) => openMenu(menu.hidden, e.detail === 0 && 'first'));
+  avatar.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    openMenu(true, e.key === 'ArrowDown' ? 'first' : 'last');
+  });
   document.addEventListener('pointerdown', (e) => { if (!menu.hidden && !me_.contains(e.target)) openMenu(false); });
+  // Focus leaving the avatar and menu (Tab, Shift+Tab, a click elsewhere)
+  // closes it. focusout fires after the browser has picked the next stop.
+  me_.addEventListener('focusout', (e) => { if (!menu.hidden && e.relatedTarget && !me_.contains(e.relatedTarget)) openMenu(false); });
   menu.addEventListener('keydown', (e) => {
     const list = items();
     const i = list.indexOf(document.activeElement);
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      e.preventDefault();
-      list[(i + (e.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length]?.focus();
-    } else if (e.key === 'Tab') {
-      openMenu(false);
-    }
+    const go = { ArrowDown: i + 1, ArrowUp: i - 1, Home: 0, End: list.length - 1 }[e.key];
+    if (go === undefined) return;
+    e.preventDefault();
+    list[(go + list.length) % list.length]?.focus();
   });
   // Capture, so Escape closes the menu before a page's own keys see it.
   addEventListener('keydown', (e) => {

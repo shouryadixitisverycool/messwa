@@ -138,6 +138,8 @@ function render() {
   // registrations only.
   if (!D.owner) {
     $('title').textContent = 'My meals';
+    const here = document.querySelector('.shell-here');
+    if (here) here.textContent = 'My meals';
     document.title = 'My meals · messwa';
   }
   for (const id of ['regSec', 'pcSec', 'earnSec']) $(id).hidden = !D.owner;
@@ -904,6 +906,7 @@ new ResizeObserver(() => {
 addEventListener('keydown', (e) => {
   if (!modal.hidden) { if (e.key === 'Escape') closeModal(); return; }
   if (!D || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (document.body.classList.contains('shell-menu-open')) return;
   if (e.target.matches('input, select, textarea, [contenteditable="true"]') || e.target.closest('#insp')) return;
   if (e.key === 'ArrowLeft') $('pgPrev').click();
   if (e.key === 'ArrowRight') $('pgNext').click();

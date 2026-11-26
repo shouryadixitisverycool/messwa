@@ -52,8 +52,8 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   const host = document.getElementById('attnHost');
   if (host) host.append(box);
   else {
-    const head = document.querySelector('.app .page-head');
-    if (head) head.after(box); else document.querySelector('.app').prepend(box);
+    const pageHead = document.querySelector('.app .page-head');
+    if (pageHead) pageHead.after(box); else document.querySelector('.app').prepend(box);
   }
 
   let open = false; // the folded rows are showing

@@ -44,8 +44,11 @@
               --dur-3 360ms (cards arriving). prefers-reduced-motion
               turns them all to 0.
      Shell:   --shell-h (top bar), --tabbar-h (phone tab bar, 0 on wide
-              screens). Fixed things near the bottom should sit above
-              calc(var(--tabbar-h) + env(safe-area-inset-bottom)). */
+              screens). Set by shell.css on pages with the shell:
+              --shell-stick, what a sticky top: must clear (the bar
+              where it sticks, else 0), and --tabbar-top, what a fixed or
+              sticky bottom: must clear (the tab bar and the safe area
+              under it, else 0). */
   --t-xs: 12px;
   --t-sm: 13px;
   --t-md: 15px;
@@ -97,6 +100,8 @@
 
   --shell-h: 56px;
   --tabbar-h: 0px;
+  --shell-stick: 0px;
+  --tabbar-top: 0px;
 }
 @media (prefers-reduced-motion: reduce) {
   :root { --dur-1: 0ms; --dur-2: 0ms; --dur-3: 0ms; }
@@ -156,7 +161,6 @@ svg { display: block; }
 }
 .brand { display: flex; gap: 12px; align-items: center; }
 /* On wide screens the links sit in the brand row; phones get their own strip. */
-.navs { display: contents; }
 .logo { width: 38px; height: 38px; filter: drop-shadow(0 4px 10px rgba(255, 197, 61, .3)); }
 .brand h1 { margin: 0; font: 700 17px Pixel, var(--sans); letter-spacing: .4px; }
 .brand .sub { margin: 1px 0 0; color: var(--muted); font-size: 12px; }
@@ -654,7 +658,6 @@ a.copy.linked:hover .copy-go { color: var(--gold); }
 @media (max-width: 1200px) {
   .top { grid-template-columns: 1fr; gap: 14px; }
   .brand { flex-wrap: wrap; row-gap: 10px; min-width: 0; }
-  .navs { display: flex; flex: 1 1 100%; flex-wrap: wrap; gap: 6px; }
   .nav-link { margin-left: 0; }
 }
 @media (max-width: 640px) {
@@ -664,13 +667,6 @@ a.copy.linked:hover .copy-go { color: var(--gold); }
   .brand { flex: 1 1 100%; min-width: 0; flex-wrap: wrap; row-gap: 12px; }
   .brand h1 { font-size: 15px; }
   .logo { width: 32px; height: 32px; }
-  /* One swipeable row of links, edge to edge, under the title. */
-  .navs {
-    display: flex; flex: 0 0 calc(100% + 20px); flex-wrap: nowrap; gap: 6px; margin: 0 -10px; padding: 0 10px 2px;
-    overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain;
-  }
-  .navs::-webkit-scrollbar { display: none; }
-  .navs .nav-link { flex: none; margin-left: 0; height: 34px; padding: 0 12px 1px; font-size: 9px; }
   .chest { padding: 10px 10px 12px; border-radius: 16px; }
   .live { display: none; }
   .head-meta { display: none; }

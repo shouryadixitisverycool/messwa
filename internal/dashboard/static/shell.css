@@ -2,6 +2,10 @@
    Calm on every page, built only from the calm tokens in style.css. Buy's
    tab alone picks up the arcade gold, so the hot side reads as hot. */
 
+/* The bar sticks on wide screens, so sticky things and #anchors clear it. */
+body.has-shell { --shell-stick: var(--shell-h); }
+html:has(body.has-shell) { scroll-padding-top: calc(var(--shell-h) + 8px); }
+
 .shell {
   position: sticky; top: 0; z-index: 45;
   background: color-mix(in srgb, var(--calm-bg) 82%, transparent);
@@ -83,7 +87,7 @@
   color: var(--calm-text); text-decoration: none; font: var(--w-reg) var(--t-sm)/1 var(--sans);
 }
 .shell-item .shell-ic { width: 18px; height: 18px; color: var(--calm-muted); }
-.shell-item:hover, .shell-item:focus-visible { background: var(--calm-2); outline: none; }
+.shell-item:hover, .shell-item:focus-visible { background: var(--calm-2); }
 .shell-item[aria-current="page"] { background: var(--calm-2); }
 .shell-crown {
   display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-3) var(--sp-3) var(--sp-1);
@@ -97,7 +101,13 @@
 .shell a:focus-visible, .shell button:focus-visible { outline: 2px solid var(--calm-accent); outline-offset: 2px; }
 
 /* ---------- page heads ----------
-   Pages under the shell title themselves with one calm line, no subtitle. */
+   Pages under the shell title themselves with one calm line, no subtitle.
+   Home and Buy have no visible title; they carry an h1.sr-only. */
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0;
+}
 
 .page-head { display: flex; align-items: center; gap: var(--sp-3); min-height: 32px; }
 .page-head > :last-child:not(.page-title) { margin-left: auto; }
@@ -107,17 +117,27 @@
 
 @media (max-width: 720px) {
   :root { --shell-h: 52px; --tabbar-h: 60px; }
+  body.has-shell { --shell-stick: 0px; --tabbar-top: calc(var(--tabbar-h) + env(safe-area-inset-bottom)); }
+  html:has(body.has-shell) { scroll-padding-top: 0; }
   /* No blur on the bar here: it would trap the fixed tab bar inside it. */
   /* Relative, not sticky, and still on top so the avatar menu covers the page. */
   .shell { position: relative; background: none; border-bottom: 0; backdrop-filter: none; -webkit-backdrop-filter: none; }
-  .shell-in { padding: 0 16px; gap: var(--sp-3); }
+  .shell-in { padding: 0 max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left)); gap: var(--sp-3); }
   .shell-name { display: none; }
   .shell-here { display: block; flex: 1; min-width: 0; font: var(--w-bold) var(--t-lg)/1 var(--sans); letter-spacing: -.01em; color: var(--calm-text); }
-  .page-head .page-title { display: none; }
+  /* The bar names the page here, so the h1 stays for screen readers only,
+     and a head with nothing else in it takes no room. */
+  .page-head .page-title {
+    position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden;
+    clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+  }
+  .page-head { min-height: 0; }
+  .page-head:not(:has(> :not(.page-title))) { position: absolute; }
 
   .shell-tabs {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 45;
-    height: calc(var(--tabbar-h) + env(safe-area-inset-bottom)); padding: 0 var(--sp-2) env(safe-area-inset-bottom);
+    height: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+    padding: 0 max(var(--sp-2), env(safe-area-inset-right)) env(safe-area-inset-bottom) max(var(--sp-2), env(safe-area-inset-left));
     gap: 0; background: color-mix(in srgb, var(--calm-1) 88%, transparent);
     border-top: 1px solid var(--calm-line);
     backdrop-filter: blur(16px) saturate(140%); -webkit-backdrop-filter: blur(16px) saturate(140%);
@@ -132,6 +152,10 @@
   .shell-tab::after { left: 32%; right: 32%; top: 0; bottom: auto; }
   .shell-tab.has-dot::before { top: 8px; left: calc(50% + 6px); }
 
-  body.has-shell { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom)); }
-  body.has-shell .toast { bottom: calc(var(--tabbar-h) + 12px + env(safe-area-inset-bottom)); }
+  body.has-shell { padding-bottom: var(--tabbar-top); }
+  body.has-shell .toast { bottom: calc(var(--tabbar-top) + 12px); }
+}
+/* Money's live dot hides on phones (style.css), leaving its head empty. */
+@media (max-width: 640px) {
+  .sales .page-head { position: absolute; }
 }

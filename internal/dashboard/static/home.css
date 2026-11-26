@@ -24,8 +24,6 @@
 }
 .w-alerts .attn { margin: 0; }
 
-/* The board's footer of keys moves into the Market widget. */
-
 /* ---------- Today ---------- */
 
 /* auto-fit, so today's few cards share the row instead of leaving empty columns. */
@@ -86,12 +84,12 @@
 
 .home-bar { display: flex; }
 .home-editbar {
-  position: sticky; top: 8px; z-index: 40; flex: 1;
+  position: sticky; top: calc(var(--shell-stick) + 8px); z-index: 40; flex: 1;
   display: flex; align-items: center; gap: 10px; padding: 9px 10px 9px 14px; border-radius: 12px;
   background: color-mix(in srgb, var(--gold) 10%, var(--panel)); border: 1px solid color-mix(in srgb, var(--gold) 55%, transparent);
   box-shadow: 0 12px 30px rgba(0, 0, 0, .45);
 }
-.home-editing .home-bar { position: sticky; top: 8px; z-index: 40; }
+.home-editing .home-bar { position: sticky; top: calc(var(--shell-stick) + 8px); z-index: 40; }
 .home-edit-text { flex: 1; min-width: 0; font-size: 12.5px; color: var(--muted); }
 .home-edit-text b { color: var(--gold); font-weight: 600; }
 .home-btn {
@@ -154,7 +152,8 @@
 /* ---------- the tray ---------- */
 
 .tray {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+  /* Above the phone tab bar when there is one. */
+  position: fixed; left: 0; right: 0; bottom: var(--tabbar-top); z-index: 50;
   padding: 10px 0 calc(12px + env(safe-area-inset-bottom));
   background: linear-gradient(180deg, rgba(20, 24, 33, .97), #0e1118);
   border-top: 1px solid color-mix(in srgb, var(--gold) 45%, transparent);
@@ -179,9 +178,6 @@
 /* Previews render at a normal page width, then shrink to the card. */
 .tray-zoom { width: 640px; zoom: .39; pointer-events: none; padding: 12px; }
 .tray-zoom .chest { box-shadow: none; }
-.tray-zoom .w-mini-board { --s: 56px; --gap: 5px; }
-.tray-zoom .w-mini-board .grid { grid-template-columns: repeat(8, var(--s)); grid-template-rows: none; }
-.tray-zoom .w-mini-board .tabs { grid-template-rows: none; }
 .tray-info { display: flex; flex-direction: column; gap: 2px; padding: 8px 40px 10px 10px; }
 .tray-info b { font: 700 9px Pixel; letter-spacing: .4px; color: var(--text); text-transform: uppercase; }
 .tray-info span { font-size: 11.5px; line-height: 1.35; color: var(--muted); }

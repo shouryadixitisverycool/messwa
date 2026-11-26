@@ -4,7 +4,7 @@
 .app.account.settings { width: min(900px, 100%); }
 .set-body { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 20px; align-items: start; }
 .set-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-.settings .set-tabs { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 12px; }
+.settings .set-tabs { display: flex; flex-direction: column; gap: 2px; position: sticky; top: calc(var(--shell-stick) + 12px); }
 .set-tab {
   display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 9px 10px; border: 0; border-radius: 8px;
   background: none; cursor: pointer; color: var(--muted); text-align: left;
@@ -208,7 +208,7 @@ button.chip.mess { cursor: pointer; }
 .tile b.red { color: #ff6b5b; }
 
 .save {
-  position: sticky; bottom: 12px; z-index: 5; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px;
+  position: sticky; bottom: calc(var(--tabbar-top) + 12px); z-index: 5; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px;
   background: color-mix(in srgb, var(--gold) 8%, var(--panel)); border: 1px solid color-mix(in srgb, var(--gold) 35%, transparent);
   font-size: 12.5px; color: var(--muted); box-shadow: 0 12px 40px rgba(0, 0, 0, .45); transition: opacity .2s;
 }
@@ -232,7 +232,7 @@ button.chip.mess { cursor: pointer; }
 /* Messages: the bot's lines, a list of slots and an editor for one. */
 .msg-cols { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 10px; align-items: start; transition: opacity .2s; }
 .msg-cols.off { opacity: .55; }
-.msg-list { padding: 8px; position: sticky; top: 12px; }
+.msg-list { padding: 8px; position: sticky; top: calc(var(--shell-stick) + 12px); }
 .msg-grp { font: 700 8px Pixel; letter-spacing: .5px; text-transform: uppercase; color: var(--dim); margin: 12px 6px 4px; }
 .msg-grp:first-child { margin-top: 4px; }
 .msg-item { display: flex; align-items: center; gap: 7px; width: 100%; padding: 6px 8px; border-radius: 8px; border: 1px solid transparent; background: none; color: var(--text); font-size: 13px; text-align: left; cursor: pointer; }

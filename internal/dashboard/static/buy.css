@@ -16,4 +16,6 @@
 
 @media (max-width: 640px) {
   .app.buy { padding-top: 8px; }
+  /* style.css hides the legend on phones; ? from a keyboard still opens it. */
+  .app.buy .hint:not([hidden]) { display: flex; }
 }

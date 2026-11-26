@@ -627,7 +627,10 @@ function renderControls() {
   if (!left.firstChild) {
     const help = el('button', 'slot ctl help');
     help.append(el('span', 'q', '?'), el('span', 'lbl', 'KEYS'));
-    help.addEventListener('click', toggleKeys);
+    help.type = 'button';
+    help.setAttribute('aria-controls', 'hint');
+    help.setAttribute('aria-expanded', String(!$('hint').hidden));
+    help.addEventListener('click', () => toggleKeys());
     tip(help, () => [
       [{ t: 'Mess Auction House', c: 'nm c6' }],
       [{ t: 'Merged from your 4 mess groups.', c: 'c8' }],
@@ -1142,6 +1145,8 @@ const NUDGE_EVERY = 3 * 60 * 1000;
 const skipped = (() => { try { return new Set(JSON.parse(sessionStorage.getItem('nudge-skip') || '[]')); } catch { return new Set(); } })();
 
 async function loadNudge(force) {
+  // Only the home page uses api/sales; the Buy board doesn't.
+  if (BOARD) return;
   if (!force && Date.now() - nudgeAt < NUDGE_EVERY) return;
   nudgeAt = Date.now();
   try {
@@ -1256,10 +1261,11 @@ function openFriendHere(id, kind, view) {
 
 function tickLive() {
   const live = $('live');
-  if (!live) return;
-  const s = Math.round((Date.now() - lastOK) / 1000);
-  live.classList.toggle('off', failed || !lastOK);
-  $('liveText').textContent = !lastOK ? 'connecting' : failed ? `offline, last update ${s}s ago` : streaming || s <= pollEvery() + 2 ? 'live' : `updated ${s}s ago`;
+  if (live) {
+    const s = Math.round((Date.now() - lastOK) / 1000);
+    live.classList.toggle('off', failed || !lastOK);
+    $('liveText').textContent = !lastOK ? 'connecting' : failed ? `offline, last update ${s}s ago` : streaming || s <= pollEvery() + 2 ? 'live' : `updated ${s}s ago`;
+  }
   if (tipFor && tipFn && !tipEl.hidden && document.body.contains(tipFor)) fillTip(tipFn());
 }
 
