@@ -7,9 +7,10 @@
 // page to add it, drag a tile onto the tray to take it off. Tapping + or ✕
 // does the same without dragging. The layout is kept in this browser.
 //
-// Market and Market pulse are the board app.js draws into index.html's own
-// markup. Today and Scheduled are sale.js's cards, Alerts is attention.js's
-// banner, and the rest come from widgets.js.
+// Today and Scheduled are sale.js's cards, Alerts is attention.js's banner,
+// and the rest come from widgets.js. The market board and its pulse used to
+// be widgets too; they live on the Buy tab (buy.html) now, and a saved
+// layout that names them just skips them.
 
 const HOME_KEY = 'mah-home';
 const HOME_DEFAULT = ['alerts', 'today', 'ledger', 'earnings'];
@@ -21,8 +22,6 @@ const WIDGETS = {
   alerts: { name: 'Alerts', blurb: 'Problems that need you: refunds, failed posts, rules that hit a snag.', art: 'check' },
   today: { name: 'Today', blurb: 'Each of today\'s meals: selling, scheduled, eaten, or a button to sell it.', art: 'clock' },
   scheduled: { name: 'Scheduled', blurb: 'Sales waiting for their meal, with when they go up and at what price.', art: 'clock' },
-  market: { name: 'Market', blurb: 'Every meal for sale in your groups, by mess, with filters.', art: 'coin' },
-  pulse: { name: 'Market pulse', blurb: 'Messages, sales and demand per mess over the last two hours.', art: 'chart' },
   ledger: { name: 'Sales ledger', blurb: 'This week\'s meals and what became of them, and what you saved this month.', art: 'ingot' },
   earnings: { name: 'Earnings', blurb: '₹ per day over four weeks, per mess and diet.', art: 'chart' },
   regulars: { name: 'Regulars', blurb: 'Who keeps buying from you, and what they usually take.', art: 'paper' },
@@ -65,7 +64,7 @@ function wChest(id, cls) {
   return { box, head, meta, body };
 }
 
-// The widget sections, made once. Market and pulse wrap index.html's markup.
+// The widget sections, made once.
 function homeSection(id) {
   if (homeSecs.has(id)) return homeSecs.get(id);
   const sec = el('div', 'widget');
@@ -95,11 +94,7 @@ function homeSection(id) {
   sec.append(bar, content);
 
   let parts = null;
-  if (id === 'market') {
-    content.append($('chest'), $('hint'));
-  } else if (id === 'pulse') {
-    content.append($('pulse'));
-  } else if (id === 'alerts') {
+  if (id === 'alerts') {
     const host = el('div', 'w-alerts');
     host.id = 'attnHost';
     content.append(host, el('div', 'w-quiet-note', 'Nothing needs you right now. Alerts show here when something does.'));
@@ -334,8 +329,6 @@ function homePreview(id, box) {
       case 'alerts': box.append(alertsPreview(demo.attention)); break;
       case 'today': fill((b, m) => { b.classList.add('sales-box'); renderToday(b, null); m.textContent = 'Wednesday 18 Nov'; }); break;
       case 'scheduled': fill((b, m) => { b.classList.add('sales-box'); renderScheduled(b); m.textContent = `${D.scheduled.length} waiting`; }); break;
-      case 'market': box.append(marketPreview()); break;
-      case 'pulse': box.append(pulsePreview()); break;
       case 'ledger': fill((b) => HW.ledger(b, n)); break;
       case 'earnings': fill((b, m) => { HW.earnings(b, n); m.textContent = HW.earnMeta(n); }); break;
       case 'regulars': fill((b, m) => { HW.regulars(b, n); m.textContent = HW.regMeta(n); }); break;
@@ -363,41 +356,6 @@ function alertsPreview(items) {
     list.append(r);
   }
   box.append(head, list);
-  return box;
-}
-
-function marketPreview() {
-  const box = el('section', 'chest w-mini-board');
-  const head = el('div', 'chest-head');
-  const ic = el('span', 'head-icon');
-  ic.append(svgEl(messIcon('all')));
-  head.append(ic, el('span', 'head-name', 'All messes'), el('span', 'head-meta', `${D.listings.filter((l) => l.status === 'available' && l.kind !== 'buy').length} for sale`));
-  const body = el('div', 'body');
-  const tabs = el('div', 'tabs');
-  for (const m of [...D.messes.map((x) => x.name), 'all']) {
-    const b = el('div', 'slot tab' + (m === 'all' ? ' on' : ''));
-    b.style.setProperty('--m', messColor(m));
-    b.append(svgEl(messIcon(m)));
-    tabs.append(b);
-  }
-  const grid = el('div', 'grid');
-  const items = D.listings.filter((l) => l.kind !== 'buy' && l.status === 'available').slice(0, 18);
-  grid.append(...items.map(slotNode));
-  for (let i = items.length; i < 40; i++) grid.append(el('div', 'slot'));
-  body.append(tabs, grid);
-  box.append(head, body);
-  return box;
-}
-
-function pulsePreview() {
-  const box = el('section', 'chest pulse');
-  const head = el('div', 'chest-head');
-  const ic = el('span', 'head-icon');
-  ic.append(svgEl(icon('chart')));
-  const meta = el('span', 'head-meta'), wins = el('span', 'wins'), cards = el('div', 'cards');
-  head.append(ic, el('span', 'head-name', 'Market pulse'), meta, wins);
-  renderStats({ meta, wins, cards });
-  box.append(head, cards);
   return box;
 }
 

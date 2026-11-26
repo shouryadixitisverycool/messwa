@@ -664,15 +664,6 @@ async function send(method, path, body) {
   return data;
 }
 
-// userLink fills the header's account link with the user's name.
-function userLink(m) {
-  const a = $('accountLink');
-  if (!a) return;
-  a.replaceChildren(el('span', '', ''), m.name);
-  a.firstChild.append(svgEl(icon('paper')));
-  a.title = m.role === 'admin' ? 'Your account (admin)' : 'Your account';
-}
-
 // The shared credit keeps every dashboard page in the same pixel style.
 {
   const credit = el('footer', 'site-credit');

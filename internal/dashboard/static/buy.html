@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0d12">
+<title>Buy · messwa</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preload" href="silkscreen-700.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="shell.css">
+<link rel="stylesheet" href="sale.css">
+<link rel="stylesheet" href="buy.css">
+<script src="common.js" defer></script>
+<script src="shell.js" defer></script>
+<script src="sell.js" defer></script>
+<script src="sale.js" defer></script>
+<script src="app.js" defer></script>
+</head>
+<body data-page="buy">
+<div class="app buy">
+  <div class="day" id="day">
+    <div class="track" id="track"></div>
+  </div>
+
+  <!-- The market board. app.js draws every listing into #grid as a
+       .slot.item button carrying data-id; openListing() builds its detail
+       sheet, and BUY_ACTIONS in app.js is where buy actions plug in. -->
+  <main class="chest" id="chest">
+    <div class="chest-head">
+      <span class="head-icon" id="headIcon"></span>
+      <span class="head-name" id="headName">Loading</span>
+      <span class="head-meta" id="headMeta"></span>
+      <span class="pager" id="pager">
+        <button class="pg" id="pgPrev" aria-label="Previous page">&lsaquo;</button>
+        <span id="pgText"></span>
+        <button class="pg" id="pgNext" aria-label="Next page">&rsaquo;</button>
+      </span>
+      <span class="live" id="live"><i></i><span id="liveText">connecting</span></span>
+    </div>
+    <div class="body">
+      <nav class="tabs" id="tabs" aria-label="Messes"></nav>
+      <section class="grid" id="grid" aria-label="Listings"></section>
+    </div>
+    <div class="controls">
+      <div class="ctl-left" id="ctlLeft"></div>
+      <div class="ctl-row" id="ctlRow"></div>
+    </div>
+  </main>
+
+  <!-- Shown by the ? key or the KEYS button. -->
+  <footer class="hint" id="hint" hidden>
+    <span><kbd>1</kbd>-<kbd>5</kbd> messes</span>
+    <span><kbd>&larr;</kbd><kbd>&rarr;</kbd> pages</span>
+    <span><kbd>R</kbd> recent</span>
+    <span><kbd>P</kbd> price</span>
+    <span><kbd>D</kbd> diet</span>
+    <span><kbd>M</kbd> meal</span>
+    <span><kbd>S</kbd> sold</span>
+    <span><kbd>W</kbd> wanted</span>
+    <span><kbd>?</kbd> hide</span>
+  </footer>
+
+  <section class="chest pulse" id="pulse" aria-label="Market stats">
+    <div class="chest-head">
+      <span class="head-icon" id="pulseIcon"></span>
+      <span class="head-name">Market pulse</span>
+      <span class="head-meta" id="pulseMeta"></span>
+      <span class="legend"><span><i class="m"></i>messages</span><span><i></i>sales</span></span>
+      <span class="wins" id="wins" role="group" aria-label="Stats window"></span>
+    </div>
+    <div class="cards" id="cards"></div>
+  </section>
+</div>
+
+<div class="tip" id="tip" hidden></div>
+<div class="modal" id="modal" hidden>
+  <div class="sheet" id="sheet" role="dialog" aria-modal="true"></div>
+</div>
+<div class="toast" id="toast" hidden></div>
+</body>
+</html>

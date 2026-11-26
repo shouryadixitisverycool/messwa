@@ -2,6 +2,11 @@
 
 // Mess Auction House. Everything people wrote in the groups is untrusted, so
 // it only ever reaches the page through textContent.
+//
+// It runs on two pages. On buy.html it draws the market board (#chest),
+// its keys and the market pulse. On the home page (index.html) there is no
+// board: it keeps the day track, the setup warnings, the sell nudge and
+// the sell sheet, and feeds the widgets their data. BOARD says which.
 
 
 // ---------- state ----------
@@ -24,6 +29,8 @@ let L = { s: 72, gap: 6, cols: 9, rows: 5 };
 let byId = new Map();
 let pageItems = [];
 let pages = 1;
+const BOARD = !!document.getElementById('chest');
+const present = (id) => !!document.getElementById(id);
 
 const now = () => Date.now() / 1000 + skew;
 const tz = () => (D && D.tz) || 'Asia/Kolkata';
@@ -160,6 +167,7 @@ function sorted(list) {
 // ---------- layout ----------
 
 function layout() {
+  if (!BOARD) return;
   // clientWidth is the layout viewport. innerWidth on Android Chrome follows
   // the visual viewport, which widens when anything overflows; sizing the grid
   // from it then makes the overflow permanent.
@@ -202,17 +210,19 @@ function render() {
   const accent = messColor(S.tab);
   document.documentElement.style.setProperty('--accent', accent);
   renderDay();
-  $('noGroups').hidden = !D.no_groups;
-  $('noUPI').hidden = !D.no_upi;
+  if (present('noGroups')) $('noGroups').hidden = !D.no_groups;
+  if (present('noUPI')) $('noUPI').hidden = !D.no_upi;
   renderSales();
   // The sales ledger feeds the nudge, the Today widget, the mess of a
   // scheduled sale's card and the widgets drawn from your sales.
   if (N || !D.nudge) renderNudge();
   loadNudge();
-  renderTabs();
-  renderGrid();
-  renderControls();
-  renderStats();
+  if (BOARD) {
+    renderTabs();
+    renderGrid();
+    renderControls();
+    renderStats();
+  }
   if (typeof homeRender === 'function') homeRender();
   keepTip();
   tickLive();
@@ -227,6 +237,7 @@ function renderDay() {
   const pct = (u) => `${Math.max(0, Math.min(100, ((u - t0) / (t1 - t0)) * 100))}%`;
 
   const track = $('track');
+  if (!track) return;
   track.replaceChildren();
   for (const s of D.today) {
     const seg = el('div', 'seg');
@@ -318,7 +329,6 @@ function renderGrid() {
   $('pgText').textContent = `${S.page + 1}/${pages}`;
   $('pgPrev').disabled = S.page === 0;
   $('pgNext').disabled = S.page >= pages - 1;
-  $('sub').textContent = S.mode === 'sell' ? 'Buy it now' : 'Buy orders';
 }
 
 function emptyText() {
@@ -477,7 +487,9 @@ function itemTip(l) {
 
 const clip = (s, n) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
 
-const grid = $('grid');
+// Without the board (the home page) a detached stand-in keeps the
+// listeners below harmless.
+const grid = $('grid') || document.createElement('div');
 grid.addEventListener('pointerover', (e) => {
   if (e.pointerType !== 'mouse') return;
   const b = e.target.closest('.item');
@@ -615,7 +627,7 @@ function renderControls() {
   if (!left.firstChild) {
     const help = el('button', 'slot ctl help');
     help.append(el('span', 'q', '?'), el('span', 'lbl', 'KEYS'));
-    help.addEventListener('click', () => toast('Keys: 1-5 messes, arrows pages, R P D M S W'));
+    help.addEventListener('click', toggleKeys);
     tip(help, () => [
       [{ t: 'Mess Auction House', c: 'nm c6' }],
       [{ t: 'Merged from your 4 mess groups.', c: 'c8' }],
@@ -906,16 +918,32 @@ const cycleMeal = (dir = 1) => update(() => {
 const toggleSold = () => update(() => { S.sold = !S.sold; S.page = 0; });
 const toggleMode = () => update(() => { S.mode = S.mode === 'sell' ? 'buy' : 'sell'; S.page = 0; });
 
-$('pgPrev').addEventListener('click', () => turn(-1));
-$('pgNext').addEventListener('click', () => turn(1));
+// toggleKeys shows or hides the key legend under the board (? key or the
+// KEYS button). It's off by default and remembered in this browser.
+function toggleKeys(show) {
+  const hint = $('hint');
+  if (!hint) return;
+  hint.hidden = typeof show === 'boolean' ? !show : !hint.hidden;
+  try { localStorage.setItem('mah-keys', hint.hidden ? '' : '1'); } catch {}
+  const help = document.querySelector('.ctl.help');
+  if (help) help.setAttribute('aria-expanded', String(!hint.hidden));
+}
+
+if (BOARD) {
+  $('pgPrev').addEventListener('click', () => turn(-1));
+  $('pgNext').addEventListener('click', () => turn(1));
+  try { if (localStorage.getItem('mah-keys')) $('hint').hidden = false; } catch {}
+}
 
 addEventListener('keydown', (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   if (!$('modal').hidden) { if (e.key === 'Escape') closeModal(); return; }
   const k = e.key.toLowerCase();
-  // The keys drive the market board, so they do nothing while it's off the
-  // home page.
-  if (typeof homeHas === 'function' && !homeHas('market')) return;
+  // The keys drive the market board, so they do nothing without it, while
+  // the avatar menu is open, or while typing.
+  if (!BOARD || document.body.classList.contains('shell-menu-open')) return;
+  if (e.target.closest && e.target.closest('input, textarea, select, [contenteditable]')) return;
+  if (k === '?') { toggleKeys(); return; }
   const names = D ? [...D.messes.map((m) => m.name), 'all'] : [];
   if (/^[1-9]$/.test(k) && names[+k - 1]) setTab(names[+k - 1]);
   else if (k === 'arrowleft') turn(-1);
@@ -928,6 +956,25 @@ addEventListener('keydown', (e) => {
   else if (k === 'w') toggleMode();
   else return;
 });
+
+// ---------- buy actions ----------
+
+// BUY_ACTIONS is where the buy flow plugs into the board. Each entry is
+// { id, label, show(l), run(l, button) }: when show(l) is true for a
+// listing, its detail sheet gets a button that calls run. They come before
+// the message button, the first one styled as the main action. Empty for
+// now: buying still happens by messaging the seller.
+const BUY_ACTIONS = [];
+
+function buyButtons(l) {
+  return BUY_ACTIONS.filter((a) => a.show(l)).map((a, i) => {
+    const b = el('button', i === 0 ? 'btn primary' : 'btn', a.label);
+    b.type = 'button';
+    b.dataset.act = a.id;
+    b.addEventListener('click', () => a.run(l, b));
+    return b;
+  });
+}
 
 // ---------- detail view ----------
 
@@ -1015,7 +1062,9 @@ function openListing(l) {
   const ph = digits(l.seller.phone);
   const app = messagingApp();
   const actions = el('div', 'actions');
-  const msg = el('a', 'btn primary');
+  const buys = buyButtons(l);
+  actions.append(...buys);
+  const msg = el('a', buys.length ? 'btn' : 'btn primary');
   msg.append(svgEl(app === 'beeper' ? beeperIcon : waIcon), l.kind === 'buy' ? 'Message buyer' : 'Message seller');
   if (ph) {
     const text = encodeURIComponent(greeting(l));
@@ -1057,15 +1106,10 @@ function touchOnly() {
 function messagingApp() {
   return S.via === 'beeper' && !touchOnly() ? 'beeper' : 'whatsapp';
 }
-function paintSettingsIcon() {
-  $('settingsIcon').replaceChildren(svgEl(messagingApp() === 'beeper' ? beeperIcon : waIcon));
-}
-
 // The settings page changes the messaging app in another tab; follow it.
 addEventListener('storage', (e) => {
   if (e.key !== 'mah') return;
-  try { S.via = (JSON.parse(e.newValue || '{}').via) || 'whatsapp'; } catch { return; }
-  paintSettingsIcon();
+  try { S.via = (JSON.parse(e.newValue || '{}').via) || 'whatsapp'; } catch {}
 });
 
 
@@ -1145,6 +1189,7 @@ function nudgeLine(c, key) {
 
 function renderNudge() {
   const box = $('nudge');
+  if (!box) return;
   const hit = nextSellable();
   box.hidden = !hit;
   if (!hit) { box.replaceChildren(); return; }
@@ -1211,6 +1256,7 @@ function openFriendHere(id, kind, view) {
 
 function tickLive() {
   const live = $('live');
+  if (!live) return;
   const s = Math.round((Date.now() - lastOK) / 1000);
   live.classList.toggle('off', failed || !lastOK);
   $('liveText').textContent = !lastOK ? 'connecting' : failed ? `offline, last update ${s}s ago` : streaming || s <= pollEvery() + 2 ? 'live' : `updated ${s}s ago`;
@@ -1219,18 +1265,7 @@ function tickLive() {
 
 // ---------- boot ----------
 
-$('logo').append(svgEl(icon('coin')));
-$('navIcon').append(svgEl(icon('ingot')));
-$('insIcon').append(svgEl(icon('chart')));
-$('useIcon').append(svgEl(icon('check')));
-paintSettingsIcon();
-me().then((m) => {
-  userLink(m);
-  $('insLink').hidden = m.role !== 'admin';
-  $('useLink').hidden = m.role !== 'admin';
-
-}).catch(() => {});
-$('pulseIcon').append(svgEl(icon('chart')));
+if (BOARD) $('pulseIcon').append(svgEl(icon('chart')));
 layout();
 addEventListener('resize', () => {
   const before = `${L.cols}x${L.rows}x${L.s}`;
@@ -1240,5 +1275,11 @@ addEventListener('resize', () => {
 load();
 connect();
 setInterval(tickLive, 1000);
-setInterval(() => { if (D && document.visibilityState === 'visible') { renderDay(); renderGrid(); renderStats(); renderSales(); keepTip(); } }, 30000);
+setInterval(() => {
+  if (!D || document.visibilityState !== 'visible') return;
+  renderDay();
+  if (BOARD) { renderGrid(); renderStats(); }
+  renderSales();
+  keepTip();
+}, 30000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') load(); });

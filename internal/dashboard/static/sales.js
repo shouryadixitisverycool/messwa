@@ -138,8 +138,7 @@ function render() {
   // registrations only.
   if (!D.owner) {
     $('title').textContent = 'My meals';
-    $('sub').textContent = 'Your registrations: eaten, wasted and still open';
-    document.title = 'My meals · Mess Auction House';
+    document.title = 'My meals · messwa';
   }
   for (const id of ['regSec', 'pcSec', 'earnSec']) $(id).hidden = !D.owner;
   for (const e of document.querySelectorAll('.own')) e.hidden = !D.owner;
@@ -888,15 +887,6 @@ function renderEarnings() {
 
 // ---------- boot ----------
 
-$('logo').append(svgEl(icon('ingot')));
-$('navIcon').append(svgEl(icon('prev')));
-$('insIcon').append(svgEl(icon('chart')));
-$('useIcon').append(svgEl(icon('check')));
-me().then((m) => {
-  userLink(m);
-  $('insLink').hidden = m.role !== 'admin';
-  $('useLink').hidden = m.role !== 'admin';
-}).catch(() => {});
 $('ledIcon').append(svgEl(icon('coin')));
 $('frIcon').append(svgEl(icon('coin')));
 $('frAdd').addEventListener('click', () => { if (D) openFriendForm(); });

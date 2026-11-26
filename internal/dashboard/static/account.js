@@ -2,8 +2,6 @@
 
 // The account page: your mess API key, MCP tokens and password.
 
-$('logo').append(svgEl(icon('paper')));
-$('navIcon').append(svgEl(icon('prev')));
 $('keyIcon').append(svgEl(icon('ingot')));
 $('tokIcon').append(svgEl(icon('coin')));
 $('pwIcon').append(svgEl(icon('check')));

@@ -5,12 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#0b0d12">
-<title>My sales · Mess Auction House</title>
+<title>Money · messwa</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preload" href="silkscreen-700.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="shell.css">
 <link rel="stylesheet" href="sales.css">
 <script src="common.js" defer></script>
+<script src="shell.js" defer></script>
 <link rel="stylesheet" href="attention.css">
 <script src="attention.js" defer></script>
 <script src="sell.js" defer></script>
@@ -18,24 +20,12 @@
 <script src="ledger.js" defer></script>
 <script src="recurring.js" defer></script>
 </head>
-<body>
+<body data-page="money">
 <div class="app sales">
-  <header class="top">
-    <div class="brand">
-      <span class="logo" id="logo"></span>
-      <div>
-        <h1 id="title">My sales</h1>
-        <p class="sub" id="sub">Who bought your meals, and for how much</p>
-      </div>
-      <nav class="navs" aria-label="Pages">
-        <a class="nav-link" href="./" title="Back to the listings"><span id="navIcon"></span>Auction house</a>
-        <a class="nav-link" href="insights.html" id="insLink" title="What sells, when, and who's selling" hidden><span id="insIcon"></span>Insights</a>
-        <a class="nav-link" href="usage.html" id="useLink" title="How everyone is using messwa" hidden><span id="useIcon"></span>Usage</a>
-        <a class="nav-link" href="account.html" id="accountLink" title="Your account">Account</a>
-      </nav>
-    </div>
+  <div class="page-head">
+    <h1 class="page-title" id="title">Money</h1>
     <span class="live" id="live"><i></i><span id="liveText">connecting</span></span>
-  </header>
+  </div>
 
   <p class="notice" id="notice" hidden></p>
 

@@ -1,7 +1,6 @@
 /* The insights page. Builds on style.css and sales.css. */
 
 .app.insights { width: min(980px, 100%); }
-.insights .brand { flex: 1; min-width: 0; flex-wrap: wrap; }
 
 .wins .win.dim { opacity: .35; }
 .chest-head .wins { border-left: 0; padding-left: 0; }
@@ -151,10 +150,6 @@ table.sellers .slot-cell svg { width: 13px; height: 13px; }
 
 /* One hopper button opens a menu of the four filter groups. Each group opens
    its choices in place, with a row at the top to go back. */
-/* The links and the hopper share a row under the title, hopper on the right. */
-.insights .navrow { display: flex; flex: 1 1 100%; align-items: center; gap: 6px; min-width: 0; }
-.insights .navrow .navs { display: flex; flex: 1; flex-wrap: wrap; gap: 6px; min-width: 0; }
-.insights .navrow .nav-link { margin-left: 0; }
 .fbar { position: relative; flex: none; }
 .ftoggle { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 26px; padding: 0; }
 /* Any filter off its default: gold ring, gold glow and a dot in the corner. */
@@ -209,7 +204,5 @@ table.sellers .slot-cell svg { width: 13px; height: 13px; }
 .fopt.on > svg { opacity: 1; }
 
 @media (max-width: 640px) {
-  /* The links stay one swipeable strip, cut off before the hopper. */
-  .insights .navrow .navs { flex: 1 1 auto; flex-wrap: nowrap; margin: 0 0 0 -10px; padding: 0 0 2px 10px; }
   .ftoggle { width: 40px; height: 34px; }
 }

@@ -25,7 +25,6 @@
 .w-alerts .attn { margin: 0; }
 
 /* The board's footer of keys moves into the Market widget. */
-.widget[data-w="market"] .hint { margin-top: 12px; }
 
 /* ---------- Today ---------- */
 

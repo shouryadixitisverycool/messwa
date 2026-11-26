@@ -51,7 +51,10 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   box.append(head, list, more, note);
   const host = document.getElementById('attnHost');
   if (host) host.append(box);
-  else document.querySelector('.top').after(box);
+  else {
+    const head = document.querySelector('.app .page-head');
+    if (head) head.after(box); else document.querySelector('.app').prepend(box);
+  }
 
   let open = false; // the folded rows are showing
   more.onclick = () => { open = !open; draw(); };
