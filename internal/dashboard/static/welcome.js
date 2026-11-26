@@ -35,7 +35,7 @@ $('pick').append(svgEl(pix([
 const S = {
   name: '', status: 'pending', canStoreKeys: true, keySet: false,
   wa: null, codeMode: false, phone: '',
-  sell: null, upi: null, acks: {}, editUPI: false, errors: {},
+  sell: null, upi: null, acks: {}, edit: null, errors: {},
 };
 
 // The answers the server can't tell from its defaults live in this
@@ -45,8 +45,9 @@ const ackKey = () => `messwa.welcome.${S.name}`;
 function loadAcks() {
   try { S.acks = JSON.parse(localStorage.getItem(ackKey())) || {}; } catch { S.acks = {}; }
 }
-function ack(step) {
-  S.acks[step] = true;
+function ack(step, on = true) {
+  if (on) S.acks[step] = true;
+  else delete S.acks[step];
   try { localStorage.setItem(ackKey(), JSON.stringify(S.acks)); } catch { /* asks again next time */ }
 }
 
@@ -60,7 +61,8 @@ function setErr(step, e) {
 const nodes = new Map(); // item key to its row in the log
 let plan = { items: [], ask: null, step: 'key' };
 let queue = []; // keys waiting to type in, in order
-let busy = false;
+let typingTimer = null; // the queued row being typed now
+let typingKey = '';
 let drawn = false;
 let ready = false; // set once the first answers are all in
 
@@ -73,17 +75,24 @@ function text(s) {
 
 function typingDots() {
   const d = el('span', 'dots');
-  d.setAttribute('aria-label', 'typing');
+  d.setAttribute('aria-hidden', 'true');
   d.append(el('i'), el('i'), el('i'));
   return d;
 }
 
+const EDITS = { key: 'Change mess key', handoff: 'Change who talks to buyers', buyers: 'Change who can buy', upi: 'Change UPI ID' };
+
 function bubble(it) {
   const b = el('div', 'bubble');
   if (it.tone) b.classList.add(it.tone);
+  if (it.tone === 'err') b.setAttribute('role', 'alert');
   if (it.typing && !it.text) { b.classList.add('typing'); b.append(typingDots()); return b; }
-  if (it.secret) b.classList.add('secret');
-  if (it.text) b.append(text(it.text));
+  if (it.secret) {
+    b.classList.add('secret');
+    const t = text(it.text);
+    t.setAttribute('aria-hidden', 'true');
+    b.append(t, el('span', 'sr', it.secret));
+  } else if (it.text) b.append(text(it.text));
   if ('qr' in it) b.append(qrBox(it.qr));
   if (it.code) b.append(el('div', 'pair-code', it.code.length === 8 ? `${it.code.slice(0, 4)}-${it.code.slice(4)}` : it.code));
   if (it.groups) { b.classList.add('wide'); b.append(groupPicker(it)); }
@@ -93,10 +102,19 @@ function bubble(it) {
   if (it.edit) {
     const e = el('button', 'b-edit', 'Change');
     e.type = 'button';
-    e.addEventListener('click', () => { S.editUPI = true; render(); });
+    e.setAttribute('aria-label', EDITS[it.edit] || 'Change');
+    e.addEventListener('click', () => {
+      S.edit = it.edit;
+      setErr(it.edit);
+      render();
+    });
     b.append(e);
   }
-  if (it.from === 'sys') b.prepend(el('span', 'tick', '✓'));
+  if (it.from === 'sys') {
+    const t = el('span', 'tick', '✓');
+    t.setAttribute('aria-hidden', 'true');
+    b.prepend(t);
+  }
   return b;
 }
 
@@ -115,27 +133,41 @@ function groupPicker(it) {
   list.setAttribute('role', 'group');
   list.setAttribute('aria-label', 'Groups to post in, in order');
   for (const g of it.groups) {
-    const n = it.order.indexOf(g.jid) + 1;
     const b = el('button', 'g-chip');
     b.type = 'button';
-    b.setAttribute('aria-pressed', String(n > 0));
-    b.disabled = !g.joined && !n;
-    b.append(el('span', 'g-n', n ? String(n) : ''), el('span', 'g-name', g.name || g.jid));
+    b.dataset.jid = g.jid;
+    b.append(el('span', 'g-n'), el('span', 'g-name', g.name || g.jid));
     if (!g.joined) b.append(el('span', 'g-tag', 'not in it'));
     b.addEventListener('click', () => toggleGroup(g.jid));
     list.append(b);
   }
+  markGroups(list, it);
   return list;
+}
+
+// markGroups shows the picked groups and their order on the chips already
+// drawn, so a tap doesn't redraw the picker under the finger.
+function markGroups(list, it) {
+  for (const b of list.children) {
+    const g = it.groups.find((x) => x.jid === b.dataset.jid);
+    const n = it.order.indexOf(b.dataset.jid) + 1;
+    b.setAttribute('aria-pressed', String(n > 0));
+    b.disabled = !g.joined && !n;
+    b.firstChild.textContent = n ? String(n) : '';
+  }
 }
 
 // demo is the sample buyer chat for upi: the buyer asks, the bot answers
 // for you with a QR for the price.
 function demo(upi) {
-  const phone = el('div', 'demo-phone');
+  const phone = el('figure', 'demo-phone');
+  phone.setAttribute('aria-label', 'What a buyer sees');
   const head = el('div', 'demo-head');
   const who = el('div');
   who.append(el('b', '', 'Asha'), el('small', '', 'buyer'));
-  head.append(el('span', 'demo-av', 'A'), who);
+  const av = el('span', 'demo-av', 'A');
+  av.setAttribute('aria-hidden', 'true');
+  head.append(av, who);
   const log = el('div', 'demo-log');
   const qr = el('div', 'demo-b out demo-img');
   const img = el('img');
@@ -159,6 +191,7 @@ function row(it) {
   r.dataset.key = it.key;
   if (it.from === 'bot') {
     const av = el('span', 'msg-av');
+    av.setAttribute('aria-hidden', 'true');
     av.append(svgEl(icon('coin')));
     r.append(av);
   }
@@ -167,12 +200,30 @@ function row(it) {
   return r;
 }
 
+// patch updates a live bubble without redrawing it where it can: a new QR
+// or a new group pick. Redrawing would make screen readers read it again.
+function patch(r, was, it) {
+  const same = (k) => JSON.stringify(was[k]) === JSON.stringify(it[k]);
+  const only = (...ks) => Object.keys({ ...was, ...it }).every((k) => ks.includes(k) || same(k));
+  if (only('qr') && was.qr && it.qr) {
+    r.querySelector('.qr img').src = it.qr;
+    return true;
+  }
+  if (only('groups', 'order') && was.groups && it.groups.length === was.groups.length
+    && it.groups.every((g, i) => g.jid === was.groups[i].jid && g.name === was.groups[i].name && g.joined === was.groups[i].joined)) {
+    markGroups(r.querySelector('.g-pick'), it);
+    return true;
+  }
+  return false;
+}
+
 // place puts a new row where its item sits in the plan: before the next
 // item already drawn.
 function place(r, key) {
   const at = plan.items.findIndex((x) => x.key === key);
   const next = plan.items.slice(at + 1).map((x) => nodes.get(x.key)).find(Boolean);
   $('log').insertBefore(r, next || $('typing') || null);
+  return !next;
 }
 
 // runs marks the first row of each run of bot rows, which shows the avatar.
@@ -194,8 +245,9 @@ function add(it, animate) {
   if (animate) r.classList.add('in');
   if (animate && it.demo) r.classList.add('play');
   nodes.set(it.key, r);
-  place(r, it.key);
+  const last = place(r, it.key);
   runs();
+  return last;
 }
 
 // render draws the plan for S. Items already on screen change in place;
@@ -207,107 +259,151 @@ function render() {
   const keys = new Set(plan.items.map((x) => x.key));
   for (const [k, r] of nodes) if (!keys.has(k)) { r.remove(); nodes.delete(k); }
   queue = queue.filter((k) => keys.has(k));
+  // A row that was typing in has gone: stop typing it.
+  if (typingKey && !keys.has(typingKey)) stopTyping();
   // On the first draw, everything up to the last answer is history.
   let history = -1;
   if (!drawn) plan.items.forEach((x, i) => { if (x.from !== 'bot') history = i; });
+  let appended = false;
   plan.items.forEach((it, i) => {
     const r = nodes.get(it.key);
     if (r) {
       const sig = JSON.stringify(it);
-      if (r.dataset.sig !== sig) {
-        r.dataset.sig = sig;
-        // Keep keyboard focus on the same button when a live bubble redraws.
-        const old = [...r.lastChild.querySelectorAll('button')];
-        const f = old.indexOf(document.activeElement);
-        const b = bubble(it);
-        r.lastChild.replaceWith(b);
-        if (f >= 0) b.querySelectorAll('button')[f]?.focus({ preventScroll: true });
-      }
+      if (r.dataset.sig === sig) return;
+      const was = JSON.parse(r.dataset.sig);
+      r.dataset.sig = sig;
+      if (patch(r, was, it)) return;
+      // Keep keyboard focus on the same button when a live bubble redraws.
+      const old = [...r.lastChild.querySelectorAll('button')];
+      const f = old.indexOf(document.activeElement);
+      const b = bubble(it);
+      r.lastChild.replaceWith(b);
+      if (f >= 0) b.querySelectorAll('button')[f]?.focus({ preventScroll: true });
       return;
     }
-    if (queue.includes(it.key)) return;
-    if (reduced.matches || i <= history || it.typing) add(it, drawn && !reduced.matches);
+    if (queue.includes(it.key) || typingKey === it.key) return;
+    const idle = !queue.length && !typingKey;
+    if (reduced.matches || i <= history || (it.typing && idle)) appended = add(it, drawn && !reduced.matches) || appended;
     else queue.push(it.key);
   });
-  if (!drawn) toBottom();
+  if (!drawn) {
+    toBottom();
+    // Announce new lines from here on, not the history.
+    $('log').setAttribute('aria-live', 'polite');
+  } else if (appended) toBottom();
   drawn = true;
   $('progress').style.width = `${Math.round(chatProgress(plan.step) * 100)}%`;
   pump();
   paintAsk();
 }
 
+function stopTyping() {
+  clearTimeout(typingTimer);
+  typingTimer = null;
+  typingKey = '';
+  $('typing')?.remove();
+  $('state').textContent = 'online';
+}
+
 // pump types in the queued rows: a bot row gets a moment of typing dots,
-// longer for longer lines; your own rows appear at once.
+// longer for longer lines; your own rows and waiting dots appear at once.
 function pump() {
-  if (busy || !queue.length) return;
-  const key = queue[0];
-  const it = plan.items.find((x) => x.key === key);
-  busy = true;
-  const show = () => {
-    $('typing')?.remove();
-    $('state').textContent = 'online';
-    busy = false;
-    queue.shift();
-    if (nodes.has(key)) return pump();
-    const now = plan.items.find((x) => x.key === key);
-    if (now) add(now, true);
+  if (typingKey) return;
+  while (queue.length) {
+    const key = queue.shift();
+    const it = plan.items.find((x) => x.key === key);
+    if (!it || nodes.has(key)) continue;
+    if (it.from !== 'bot' || it.typing) {
+      add(it, true);
+      toBottom();
+      continue;
+    }
+    typingKey = key;
+    const t = row({ key: 'typing', from: 'bot', typing: true });
+    t.id = 'typing';
+    t.classList.add('in');
+    $('log').append(t);
+    runs();
+    $('state').textContent = 'typing…';
     toBottom();
-    pump();
-    paintAsk();
-  };
-  if (it.from !== 'bot') return show();
-  const t = row({ key: 'typing', from: 'bot', typing: true });
-  t.id = 'typing';
-  t.classList.add('in');
-  $('log').append(t);
+    typingTimer = setTimeout(() => {
+      stopTyping();
+      const now = plan.items.find((x) => x.key === key);
+      if (now && !nodes.has(key)) add(now, true);
+      toBottom();
+      pump();
+      paintAsk();
+    }, Math.min(350 + (it.text || '').length * 9, 900));
+    return;
+  }
   runs();
-  $('state').textContent = 'typing…';
-  toBottom();
-  setTimeout(show, Math.min(350 + (it.text || '').length * 9, 900));
 }
 
 // ---------- the composer ----------
 
 const INPUTS = {
-  key: { type: 'password', placeholder: 'Paste your mess API key' },
-  phone: { type: 'tel', placeholder: '+91 98765 43210', autocomplete: 'tel' },
-  upi: { type: 'text', placeholder: 'name@okaxis' },
+  key: { type: 'password', placeholder: 'Paste your mess API key', label: 'Mess API key' },
+  phone: { type: 'tel', placeholder: '+91 98765 43210', autocomplete: 'tel', label: 'WhatsApp number' },
+  upi: { type: 'text', placeholder: 'name@okaxis', label: 'UPI ID' },
 };
-let askSig = '';
-let sending = false;
+let askSig = 'null';
+let inputMode = ''; // the input shown last, kept while the bot types
+let sending = false; // an answer is on its way to the server
 
+// paintAsk shows the replies for the question the chat is on. While the
+// bot is still typing, the last replies stay up but can't be sent.
 function paintAsk() {
-  const ask = queue.length || busy ? null : plan.ask;
-  const sig = JSON.stringify(ask);
-  $('composer').classList.toggle('empty', !ask);
+  const typing = queue.length > 0 || !!typingKey;
+  const ask = typing ? null : plan.ask;
+  const hold = typing && askSig !== 'null';
+  $('composer').classList.toggle('empty', !ask && !hold);
+  const off = typing || sending;
+  $('send').disabled = off;
+  if (hold) {
+    for (const b of $('chips').children) b.disabled = true;
+    return;
+  }
+  const sig = JSON.stringify(ask) + sending;
   if (sig === askSig) return;
-  const was = askSig ? JSON.parse(askSig) : null;
-  askSig = sig;
+  const inComposer = $('composer').contains(document.activeElement) || document.activeElement === document.body;
+  askSig = ask ? sig : 'null';
   const chips = (ask && ask.chips) || [];
   $('chips').replaceChildren(...chips.map((c) => {
     const b = el('button', `chip${c.primary ? ' primary' : ''}${c.sub ? ' two' : ''}`);
     b.type = 'button';
-    b.disabled = !!c.disabled;
+    b.disabled = !!c.disabled || sending;
+    if (c.on) b.setAttribute('aria-current', 'true');
     b.append(el('b', '', c.label));
     if (c.sub) b.append(el('small', '', c.sub));
-    b.addEventListener('click', () => chip(c.id, c.label));
+    b.addEventListener('click', () => chip(c.id));
     return b;
   }));
   $('chips').classList.toggle('in', !!chips.length && !reduced.matches);
   // New replies grow the composer; keep the question above them in view.
   if (ask) toBottom();
-  const mode = ask && ask.input;
+  const mode = (ask && ask.input) || '';
+  const wasHidden = $('say').hidden;
   $('say').hidden = !mode;
-  if (!mode) return;
-  const input = $('sayInput');
-  if (!was || was.input !== mode) {
-    const o = INPUTS[mode];
-    input.type = o.type;
-    input.placeholder = o.placeholder;
-    input.autocomplete = o.autocomplete || 'off';
-    input.value = ask.value || '';
-    $('pick').hidden = mode !== 'upi';
-    if (matchMedia('(pointer: fine)').matches) input.focus({ preventScroll: true });
+  if (mode) {
+    const input = $('sayInput');
+    if (mode !== inputMode || (wasHidden && !input.value)) {
+      const o = INPUTS[mode];
+      input.type = o.type;
+      input.placeholder = o.placeholder;
+      input.autocomplete = o.autocomplete || 'off';
+      input.setAttribute('aria-label', o.label);
+      input.value = ask.value || '';
+      $('pick').hidden = mode !== 'upi';
+    }
+    inputMode = mode;
+  }
+  // Move focus to the new replies when it was in the composer or nowhere,
+  // so a keyboard user lands on the next answer. Touch screens don't get
+  // the input focused, which would pop the keyboard up.
+  if (ask && inComposer && !sending) {
+    const first = [...$('chips').children].find((b) => !b.disabled);
+    if (mode && matchMedia('(pointer: fine)').matches) $('sayInput').focus({ preventScroll: true });
+    else if (first && !mode) first.focus({ preventScroll: true });
   }
 }
 
@@ -315,16 +411,16 @@ $('say').addEventListener('submit', async (e) => {
   e.preventDefault();
   const mode = plan.ask && plan.ask.input;
   const v = $('sayInput').value.trim();
-  if (!mode || !v || sending) return;
+  if (!mode || !v || sending || queue.length || typingKey) return;
   sending = true;
-  $('send').disabled = true;
+  paintAsk();
   try {
     if (mode === 'key') await saveKey(v);
     if (mode === 'phone') await getCode(v);
     if (mode === 'upi') await saveUPI(v);
   } finally {
     sending = false;
-    $('send').disabled = false;
+    paintAsk();
   }
 });
 
@@ -333,42 +429,62 @@ async function saveKey(key) {
   try {
     await send('PUT', 'api/mess-key', { key });
     $('sayInput').value = '';
+    if (S.edit === 'key') S.edit = null;
     await paint();
   } catch (x) { setErr('key', x); render(); }
 }
 
 async function getCode(phone) {
-  setErr('wa');
+  setErr('code');
   S.phone = phone;
   S.wa = { ...S.wa, code: '' };
   render();
   try {
-    await send('POST', 'api/whatsapp/code', { phone });
-  } catch (x) { setErr('wa', x); }
-  paintWhatsApp();
+    const d = await send('POST', 'api/whatsapp/code', { phone });
+    if (d.code) S.wa = { ...S.wa, code: d.code };
+  } catch (x) { setErr('code', x); }
+  render();
 }
 
-async function chip(id, label) {
+async function chip(id) {
+  if (sending) return;
+  if (id === 'keep') { S.edit = null; return render(); }
   if (id === 'phone' || id === 'qr') {
     S.codeMode = id === 'phone';
-    setErr('wa');
+    setErr('code');
+    render();
     return paintWhatsApp();
   }
   if (id === 'groups') { ack('groups'); return render(); }
   const [k, v] = id.split(':');
   if (k === 'handoff' || k === 'buyers') {
-    // Picked straight away, so the chat moves on while it saves.
+    // Picked straight away, so the chat moves on while it saves. A failed
+    // save takes the answer back and asks again.
+    const was = S.sell[k];
+    const acked = !!S.acks[k];
+    const editing = S.edit;
     S.sell = { ...S.sell, [k]: v };
     ack(k);
+    S.edit = null;
+    setErr(k);
     render();
-    return saveSell({ [k]: v });
+    const ok = await saveSell({ [k]: v }, k, () => { S.sell = { ...S.sell, [k]: was }; });
+    if (!ok) {
+      if (!acked) ack(k, false);
+      S.edit = editing;
+      render();
+    }
+    return;
   }
   if (id === 'ask') {
     setErr('ask');
+    sending = true;
+    paintAsk();
     try {
       await send('POST', 'api/approval');
       await paint();
-    } catch (x) { setErr('ask', x); render(); }
+    } catch (x) { setErr('ask', x); } finally { sending = false; }
+    render();
   }
 }
 
@@ -379,6 +495,7 @@ async function chip(id, label) {
 // a fresh QR is always up. It checks every 3 seconds, since the QR rotates.
 // The phone-number mode shows a code instead.
 let waTimer = null;
+let waRetry = null;
 let restarting = false;
 
 async function startLink() {
@@ -387,21 +504,29 @@ async function startLink() {
   try { await send('POST', 'api/whatsapp', {}); } catch (x) { setErr('wa', x); } finally { restarting = false; }
 }
 
+const done = () => S.status === 'declined' || S.status === 'active';
+
 async function paintWhatsApp() {
-  if (S.status === 'declined') return;
+  clearTimeout(waRetry);
+  if (done()) return;
   try {
     const r = await fetch('api/whatsapp', { cache: 'no-store' });
     if (r.status === 401) return toLogin();
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
     const was = !!(S.wa && S.wa.linked);
-    S.wa = d;
+    // A code asked for by phone stays until a new one comes.
+    S.wa = { ...d, code: d.code || (S.codeMode && S.wa && S.wa.code) || '' };
     setErr('wa', d.error && !d.linked ? new Error(d.error) : null);
     if (!d.linked && !d.pairing) startLink();
     if (!d.linked && !waTimer) waTimer = setInterval(paintWhatsApp, 3000);
     if (d.linked && waTimer) { clearInterval(waTimer); waTimer = null; }
     if (was !== !!d.linked) await loadSell();
-  } catch (x) { setErr('wa', x); }
+  } catch (x) {
+    setErr('wa', x);
+    // Not polling yet: try again soon.
+    if (!waTimer) waRetry = setTimeout(paintWhatsApp, 3000);
+  }
   render();
 }
 
@@ -411,19 +536,24 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && !(
 // ---------- groups and how you sell ----------
 
 let sellTimer = null;
+let sellChain = Promise.resolve();
+let sellSeq = 0; // bumped by each save, so older answers don't win
 
 async function loadSell() {
   clearTimeout(sellTimer);
-  if (S.status === 'declined') return;
+  if (done()) return;
+  const seq = sellSeq;
   try {
     const r = await fetch('api/setup-sell', { cache: 'no-store' });
     if (r.status === 401) return toLogin();
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    // A save went out meanwhile: its answer is newer than this one.
+    if (seq !== sellSeq) return;
     S.sell = d;
     // A fresh account gets every group it's in, so it can sell at once.
     const joined = d.groups.filter((g) => g.joined).map((g) => g.jid);
-    if (d.checked && !d.saved && joined.length) return saveSell({ groups: joined });
+    if (d.checked && !d.saved && joined.length) { saveSell({ groups: joined }, 'groups'); return; }
     setErr('groups', d.error ? new Error(d.error) : null);
     // Not in any group yet: keep looking until they join one.
     if (d.checked && !joined.length) sellTimer = setTimeout(loadSell, 10000);
@@ -433,21 +563,36 @@ async function loadSell() {
   render();
 }
 
-async function saveSell(change) {
-  const g = S.sell;
-  const body = {
-    groups: postingOrder(g.groups).map((x) => x.jid),
-    handoff: g.handoff,
-    buyers: g.buyers,
-    ...change,
+// saveSell sends the groups and selling answers, with change on top. Saves
+// go out one at a time, each built on the latest answers. On failure undo
+// takes the change back, unless a later save has gone out since. It
+// resolves to whether the save worked.
+function saveSell(change, step, undo) {
+  const seq = ++sellSeq;
+  const run = async () => {
+    const g = S.sell;
+    const body = {
+      groups: postingOrder(g.groups).map((x) => x.jid),
+      handoff: g.handoff,
+      buyers: g.buyers,
+      ...change,
+    };
+    try {
+      const d = await send('PUT', 'api/setup-sell', body);
+      if (seq === sellSeq) S.sell = d;
+      setErr(step);
+      render();
+      return true;
+    } catch (x) {
+      if (undo && seq === sellSeq) undo();
+      setErr(step, x);
+      render();
+      return false;
+    }
   };
-  const step = 'groups' in change ? 'groups' : 'how';
-  try {
-    S.sell = await send('PUT', 'api/setup-sell', body);
-    setErr('groups');
-    setErr('how');
-  } catch (x) { setErr(step, x); }
-  render();
+  const p = sellChain.then(run);
+  sellChain = p.catch(() => {});
+  return p;
 }
 
 // toggleGroup adds a group to the end of the posting order, or takes it out.
@@ -459,9 +604,11 @@ function toggleGroup(jid) {
     return render();
   }
   // Draw the new order now; the save confirms it.
-  S.sell = { ...S.sell, groups: S.sell.groups.map((x) => ({ ...x, picked: next.includes(x.jid), order: next.indexOf(x.jid) + 1 })) };
+  const was = S.sell.groups;
+  S.sell = { ...S.sell, groups: was.map((x) => ({ ...x, picked: next.includes(x.jid), order: next.indexOf(x.jid) + 1 })) };
+  setErr('groups');
   render();
-  saveSell({ groups: next });
+  saveSell({ groups: next }, 'groups', () => { S.sell = { ...S.sell, groups: was }; });
 }
 
 // ---------- UPI ----------
@@ -482,7 +629,7 @@ async function saveUPI(upi) {
   try {
     const d = await send('PUT', 'api/setup-upi', { upi });
     S.upi = d.upi;
-    S.editUPI = false;
+    if (S.edit === 'upi') S.edit = null;
     $('sayInput').value = '';
   } catch (x) { setErr('upi', x); }
   render();
@@ -501,6 +648,7 @@ $('upiFile').addEventListener('change', async () => {
     const body = new FormData();
     body.append('qr', file);
     const r = await fetch('api/upi-qr', { method: 'POST', cache: 'no-store', headers: { 'X-CSRF-Token': m.csrf }, body });
+    if (r.status === 401) return toLogin();
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
     await saveUPI(d.upi);
@@ -511,6 +659,15 @@ $('upiFile').addEventListener('change', async () => {
 
 let polling = null;
 
+// stop ends all checking once there's nothing left to set up.
+function stop() {
+  clearInterval(waTimer); waTimer = null;
+  clearTimeout(waRetry);
+  clearTimeout(sellTimer);
+  clearInterval(polling); polling = null;
+}
+
+// paint loads the account. It resolves to false when the page is leaving.
 async function paint() {
   mePromise = null;
   const m = await me();
@@ -518,14 +675,16 @@ async function paint() {
     // Approved while watching: say so, then go.
     const watching = S.status === 'requested' && drawn;
     S.status = 'active';
+    stop();
     if (watching) render();
     setTimeout(() => { location.href = './'; }, watching ? 1400 : 0);
-    return;
+    return false;
   }
   if (S.name !== m.name) { S.name = m.name; loadAcks(); }
   S.status = m.status;
   S.canStoreKeys = m.can_store_keys;
   S.keySet = m.mess_key_set;
+  if (m.status === 'declined') stop();
   render();
 
   // The server pushes decisions (see listen below). A decision made with
@@ -533,6 +692,7 @@ async function paint() {
   const asked = m.status === 'requested';
   if (asked && !polling) polling = setInterval(() => paint().catch(() => {}), 60000);
   if (!asked && polling) { clearInterval(polling); polling = null; }
+  return true;
 }
 
 $('logout').addEventListener('click', async () => {
@@ -551,6 +711,14 @@ function listen() {
 // Draw nothing until the first answers are in, so a returning user's
 // history comes in as one piece instead of typing out again.
 Promise.all([paint(), loadUPI()])
-  .then(() => (S.status === 'declined' ? null : paintWhatsApp()))
-  .catch(() => {})
-  .then(() => { ready = true; render(); listen(); });
+  .then(async ([go]) => {
+    if (!go || !S.name) return;
+    if (S.status !== 'declined') await paintWhatsApp();
+    ready = true;
+    render();
+    listen();
+  })
+  .catch(() => {
+    $('log').append(row({ key: 'boot', from: 'bot', text: 'I couldn\'t load your account. Reload the page to try again.', tone: 'err' }));
+    $('composer').classList.add('empty');
+  });

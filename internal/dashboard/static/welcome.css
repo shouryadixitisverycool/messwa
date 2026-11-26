@@ -38,6 +38,7 @@ body.welcome { display: flex; flex-direction: column; min-height: 100dvh; }
 
 /* ---------- the log ---------- */
 
+.chat-main { flex: 1; display: flex; flex-direction: column; }
 .chat-log { flex: 1; display: flex; flex-direction: column; gap: 4px; padding: 18px 16px 12px; }
 .msg { display: flex; align-items: flex-end; gap: 8px; max-width: 100%; }
 .msg.first { margin-top: 10px; }
@@ -77,6 +78,7 @@ body.welcome { display: flex; flex-direction: column; min-height: 100dvh; }
 .msg .bubble.ok { border-color: color-mix(in srgb, var(--veg) 45%, transparent); }
 .bubble.secret .b-text { letter-spacing: 2px; color: var(--muted); }
 .bubble code { font-size: 12px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 .b-edit {
   margin: 2px 0 0 10px; padding: 0; background: none; border: 0; cursor: pointer;
@@ -136,7 +138,7 @@ body.welcome { display: flex; flex-direction: column; min-height: 100dvh; }
 /* ---------- the sample buyer chat ---------- */
 
 .msg .bubble.demo-wrap { padding: 6px; background: transparent; border: 0; width: min(300px, 100%); }
-.demo-phone { border-radius: 16px; overflow: hidden; border: 1px solid var(--line); background: #0b141a; box-shadow: 0 10px 30px rgba(0, 0, 0, .35); }
+.demo-phone { margin: 0; border-radius: 16px; overflow: hidden; border: 1px solid var(--line); background: #0b141a; box-shadow: 0 10px 30px rgba(0, 0, 0, .35); }
 .demo-head { display: flex; gap: 8px; align-items: center; padding: 8px 10px; background: #202c33; color: #e9edef; font-size: 12.5px; line-height: 1.2; }
 .demo-head small { display: block; color: #8696a0; font-size: 10.5px; }
 .demo-av { width: 26px; height: 26px; border-radius: 50%; background: #53bdeb; color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 12px; flex: none; }
@@ -228,6 +230,8 @@ body.welcome { display: flex; flex-direction: column; min-height: 100dvh; }
   .msg.bot { padding-right: 16px; }
   .msg.me { padding-left: 36px; }
   .chip.two { max-width: none; }
+  .b-edit { padding: 6px 4px; margin: -6px -4px -6px 6px; }
+  .chat-top .nav-link { padding: 10px 8px; }
 }
 
 body.welcome .site-credit { padding-top: 4px; }

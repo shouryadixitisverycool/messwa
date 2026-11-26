@@ -14,8 +14,9 @@
 //   upi: the saved UPI ID, or null before it loads
 //   acks: the questions answered on this browser that the server can't
 //     tell apart from its defaults (groups, handoff, buyers)
-//   editUPI: the user asked to change their UPI ID
+//   edit: the answer the user asked to change (key, handoff, buyers, upi)
 //   errors: step to message, shown as the bot's reply under that step
+//     (key, wa, code, groups, handoff, buyers, upi, ask)
 //
 // Each item is {key, from: 'bot' | 'me' | 'sys', text, ...}; the key stays
 // the same while the item means the same thing, so the page can update it
@@ -61,19 +62,20 @@ function chatPlan(s) {
   bot('key-q', 'First, your mess API key. I use it to read your meals and QR.');
   if (!s.canStoreKeys && !s.keySet) {
     bot('key-nosecret', 'The server has no `MESSWA_SECRET_KEY`, so I can\'t store keys yet. Ask an admin to set it.', { tone: 'warn' });
-  } else if (!s.keySet) {
+  } else if (!s.keySet || s.edit === 'key') {
     bot('key-net', 'I check it with the mess portal, so be on the IIIT network.', { tone: 'dim' });
     err('key');
-    return done('key', { input: 'key' });
+    return done('key', { input: 'key', chips: s.keySet ? [KEEP] : [] });
   } else {
-    me('key-a', '••••••••••••', { secret: true });
+    me('key-a', '••••••••••••', { secret: 'Mess key saved', edit: 'key' });
   }
 
-  // 2. WhatsApp.
+  // 2. WhatsApp. Errors from polling (wa) and from asking for a code (code)
+  // are kept apart, so the next poll doesn't wipe a rejected number.
   const asked = s.status === 'requested' || s.status === 'active';
   bot('wa-q', 'Now link your WhatsApp. Linking sends no messages.');
   if (!s.wa) {
-    bot('wa-wait', '', { typing: true });
+    if (!(s.errors && s.errors.wa)) bot('wa-wait', '', { typing: true });
     err('wa');
     return done('wa', null);
   }
@@ -90,15 +92,16 @@ function chatPlan(s) {
       bot('wa-code', 'In WhatsApp tap Link with phone number instead, then type:', { code: s.wa.code });
     }
     err('wa');
+    err('code');
     return done('wa', { input: 'phone', chips: [{ id: 'qr', label: 'Scan a QR instead' }] });
   }
   sys('wa-ok', 'WhatsApp linked', { tone: 'ok' });
 
   // 3. Groups. The picker stays live, so changing it later saves at once.
   // Later answers (a saved UPI ID, a request) mean the user got past this
-  // on another browser.
+  // on another browser, but only a saved pick counts as an answer.
   const later = !!s.upi || asked;
-  bot('groups-q', 'Where should I post your offers? I go top to bottom.');
+  bot('groups-q', 'Where should I post your offers? Tap them in the order I should try.');
   const g = s.sell;
   if (!g || !g.checked) {
     bot('groups-wait', g && !g.connecting ? 'I couldn\'t check your groups yet. Trying again…' : '', { typing: !g || g.connecting });
@@ -113,24 +116,28 @@ function chatPlan(s) {
   }
   err('groups');
   const picked = postingOrder(g.groups);
-  if (!(acks.groups || later)) {
-    return done('groups', { chips: [{ id: 'groups', label: picked.length > 1 ? 'Post in these' : 'Post there', disabled: !g.saved || !picked.length }] });
+  const groupsSaved = g.saved && picked.length > 0;
+  if (!groupsSaved || !(acks.groups || later)) {
+    return done('groups', { chips: [{ id: 'groups', label: picked.length > 1 ? 'Post in these' : 'Post there', disabled: !groupsSaved }] });
   }
-  me('groups-a', picked.map((x) => x.name || x.jid).join(', ') || 'None');
+  me('groups-a', picked.map((x) => x.name || x.jid).join(', '));
 
-  // 4. How you sell.
+  // 4. How you sell. A failed save takes the answer back, so the question
+  // comes back with the error under it.
   bot('handoff-q', 'A buyer replies to your offer. Who talks to them?');
-  if (!(acks.handoff || later)) {
-    err('how');
-    return done('handoff', { chips: Object.entries(HANDOFF).map(([id, [label, sub]]) => ({ id: `handoff:${id}`, label, sub })) });
+  if (!(acks.handoff || later) || s.edit === 'handoff') {
+    err('handoff');
+    return done('handoff', { chips: choices('handoff', HANDOFF, g.handoff, s.edit === 'handoff') });
   }
-  me('handoff-a', (HANDOFF[g.handoff] || HANDOFF.never)[0]);
+  me('handoff-a', (HANDOFF[g.handoff] || HANDOFF.never)[0], { edit: 'handoff' });
+  err('handoff');
   bot('buyers-q', 'Who can buy?');
-  if (!(acks.buyers || later)) {
-    err('how');
-    return done('buyers', { chips: Object.entries(BUYERS).map(([id, [label, sub]]) => ({ id: `buyers:${id}`, label, sub })) });
+  if (!(acks.buyers || later) || s.edit === 'buyers') {
+    err('buyers');
+    return done('buyers', { chips: choices('buyers', BUYERS, g.buyers, s.edit === 'buyers') });
   }
-  me('buyers-a', (BUYERS[g.buyers] || BUYERS.anyone)[0]);
+  me('buyers-a', (BUYERS[g.buyers] || BUYERS.anyone)[0], { edit: 'buyers' });
+  err('buyers');
 
   // 5. UPI, then what a buyer sees with it.
   bot('upi-q', 'Buyers pay you on UPI. What\'s your UPI ID?');
@@ -138,9 +145,9 @@ function chatPlan(s) {
     bot('upi-wait', '', { typing: true });
     return done('upi', null);
   }
-  if (!s.upi || s.editUPI) {
+  if (!s.upi || s.edit === 'upi') {
     err('upi');
-    return done('upi', { input: 'upi', value: s.upi || '' });
+    return done('upi', { input: 'upi', value: s.upi || '', chips: s.upi ? [KEEP] : [] });
   }
   me('upi-a', s.upi, { edit: 'upi' });
   err('upi');
@@ -166,6 +173,16 @@ function chatPlan(s) {
     : 'That\'s everything. Shall I ask the admins to let you in?');
   err('ask');
   return done('ask', { chips: [{ id: 'ask', label: 'Ask the admins', primary: true, disabled: missing.length > 0 }] });
+}
+
+// KEEP backs out of changing an answer.
+const KEEP = { id: 'keep', label: 'Keep it' };
+
+// choices lists a question's quick replies. When changing an answer the
+// current one is marked and there's a way back.
+function choices(key, opts, now, editing) {
+  const out = Object.entries(opts).map(([id, [label, sub]]) => ({ id: `${key}:${id}`, label, sub, on: editing && id === now }));
+  return editing ? [...out, KEEP] : out;
 }
 
 // The steps, in order, for the progress bar.

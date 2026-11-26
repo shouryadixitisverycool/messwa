@@ -18,7 +18,7 @@ const sell = (more = {}) => ({
 const state = (more = {}) => ({
   name: 'asha', status: 'pending', canStoreKeys: true, keySet: false,
   wa: { linked: false, pairing: true, qr: 'data:x' }, codeMode: false, phone: '',
-  sell: null, upi: '', acks: {}, editUPI: false, errors: {}, ...more,
+  sell: null, upi: '', acks: {}, edit: null, errors: {}, ...more,
 });
 // A plan's keys, and the ids of what it asks with.
 const keys = (p) => [...p.items.map((x) => x.key)];
@@ -125,10 +125,44 @@ test('UPI: asked for, then changeable', () => {
   assert.deepEqual(asks(p), ['upi']);
   p = chatPlan(state({ ...base, upi: null }));
   assert.equal(p.items.at(-1).typing, true);
-  p = chatPlan(state({ ...base, upi: 'a@ok', editUPI: true }));
+  p = chatPlan(state({ ...base, upi: 'a@ok', edit: 'upi' }));
   assert.equal(p.step, 'upi');
   assert.equal(p.ask.value, 'a@ok');
+  assert.deepEqual(asks(p), ['upi', 'keep']);
   assert.ok(!keys(p).includes('upi-a'));
+});
+
+test('a saved answer can be changed, or kept', () => {
+  const base = { keySet: true, wa: { linked: true }, sell: sell({ handoff: 'on_reply' }), upi: 'a@ok' };
+  let p = chatPlan(state({ ...base, edit: 'handoff' }));
+  assert.equal(p.step, 'handoff');
+  assert.deepEqual(asks(p), ['handoff:never', 'handoff:on_reply', 'keep']);
+  assert.equal(p.ask.chips.find((c) => c.on).id, 'handoff:on_reply');
+  p = chatPlan(state({ ...base, edit: 'key' }));
+  assert.equal(p.step, 'key');
+  assert.deepEqual(asks(p), ['key', 'keep']);
+  // Each answer offers a change.
+  p = chatPlan(state(base));
+  for (const k of ['key-a', 'handoff-a', 'buyers-a', 'upi-a']) assert.ok(p.items.find((x) => x.key === k).edit, k);
+});
+
+test('a failed selling answer shows its error under its own question', () => {
+  const p = chatPlan(state({ keySet: true, wa: { linked: true }, sell: sell(), acks: { groups: 1 }, errors: { handoff: 'disk full' } }));
+  assert.equal(p.step, 'handoff');
+  assert.equal(p.items.at(-1).key, 'handoff-err');
+});
+
+test('groups must be saved before going on, even with a UPI ID set', () => {
+  const p = chatPlan(state({ keySet: true, wa: { linked: true }, sell: sell({ saved: false }), upi: 'a@ok' }));
+  assert.equal(p.step, 'groups');
+  assert.equal(p.ask.chips[0].disabled, true);
+  assert.ok(!keys(p).includes('ask-q'));
+});
+
+test('a rejected phone number keeps its error next to the WhatsApp one', () => {
+  const p = chatPlan(state({ keySet: true, codeMode: true, phone: '12', wa: { linked: false, pairing: true }, errors: { code: 'bad number' } }));
+  assert.equal(p.items.at(-1).key, 'code-err');
+  assert.deepEqual(asks(p), ['phone', 'qr']);
 });
 
 test('after asking, the chat waits; approval keeps the history', () => {
