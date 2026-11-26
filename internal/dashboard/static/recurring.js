@@ -207,25 +207,6 @@ function setRuleBusy(busy) {
   for (const b of $('pills').querySelectorAll('button.mp-rule')) b.disabled = busy;
 }
 
-// "Mon-Fri", "Weekends", "Every day" or "Mon, Wed, Fri".
-function ruleDaysText(days) {
-  const set = new Set(days);
-  if (set.size === 7) return 'Every day';
-  if (set.size === 5 && [1, 2, 3, 4, 5].every((d) => set.has(d))) return 'Mon-Fri';
-  if (set.size === 2 && set.has(0) && set.has(6)) return 'Weekends';
-  return recurringDayOrder.filter((d) => set.has(d)).map((d) => recurringDays[d]).join(', ');
-}
-
-function ruleTimeText(before) {
-  if (before > 0) return `${before} min before serving`;
-  if (before < 0) return `${-before} min into serving`;
-  return 'when serving starts';
-}
-
-function ruleDateText(date) {
-  return typeof fmtDay === 'function' ? fmtDay(date) : date;
-}
-
 function ruleChip(parent, type, value, label, checked, art, cls = 'rseg-i') {
   const l = el('label', cls), input = el('input'), span = el('span');
   input.type = type; input.value = String(value); input.checked = checked;

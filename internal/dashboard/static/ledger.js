@@ -249,15 +249,20 @@ const calFilterHas = (f, c) => (CAL_FILTERS.find((x) => x[0] === f)?.[2] || []).
 
 function renderCalFilter() {
   const box = $('lfilter');
+  // Tapping a chip redraws the row; keep focus on the chip.
+  const on = document.activeElement;
+  const focused = on && on.parentNode === box ? on.dataset.f : '';
   box.replaceChildren();
   for (const [id, label, , own] of CAL_FILTERS) {
     if (own && !D.owner) continue;
     const b = el('button', 'lf lf-' + id);
     b.type = 'button';
+    b.dataset.f = id;
     b.setAttribute('aria-pressed', String(calFilter === id));
     b.append(el('i'), label);
     b.addEventListener('click', () => { calFilter = calFilter === id ? '' : id; renderCalendar(); });
     box.append(b);
+    if (focused === id) b.focus();
   }
 }
 

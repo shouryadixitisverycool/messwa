@@ -36,11 +36,20 @@ const jarSpots = (() => {
   return out;
 })();
 
-let jarShown = 0;        // coins on screen
+let jarShown = 0;        // coins on screen or on their way
 let jarEarned = null;    // earned at the last render, to spot a new sale
 let jarNumber = 0;       // the amount on screen, for counting up
+let jarCount = 0;        // countTo's frame
 let jarRaf = 0;
-const jarFlying = new Set();
+const jarFlying = new Map();  // spot index -> coin in the air
+const jarNodes = [];          // spot index -> coin node
+
+// dropCoinOff takes coin i out of the jar, mid-air or settled.
+function dropCoinOff(i) {
+  jarFlying.delete(i);
+  if (jarNodes[i]) jarNodes[i].remove();
+  jarNodes[i] = undefined;
+}
 
 // jarCoins is how many coins a month fills the jar with: earned against the
 // bill, or against everything it could have made when there is no bill.
@@ -84,7 +93,9 @@ const placeCoin = (c, x, y, a, squash = 1) => c.setAttribute('transform', `trans
 function dropCoin(svg, i, delay) {
   const s = jarSpots[i];
   const pile = svg.querySelector('.jar-pile'), air = svg.querySelector('.jar-air');
+  dropCoinOff(i);
   const c = coinNode();
+  jarNodes[i] = c;
   if (MONEY_STILL()) { placeCoin(c, s.x, s.y, s.a); pile.append(c); return; }
   const x0 = 62 + ((i * 37) % 36), y0 = 6;
   const g = 0.0016;                       // viewBox units per ms²
@@ -112,32 +123,36 @@ function dropCoin(svg, i, delay) {
     placeCoin(c, s.x, s.y, s.a);
     f.done = true;
   };
-  jarFlying.add(f);
+  jarFlying.set(i, f);
   if (!jarRaf) jarRaf = requestAnimationFrame(jarTick);
 }
 
 function jarTick(t) {
-  for (const f of jarFlying) {
+  for (const [i, f] of jarFlying) {
     if (!f.start) f.start = t;
     f.step(t);
-    if (f.done) jarFlying.delete(f);
+    if (f.done) jarFlying.delete(i);
   }
   jarRaf = jarFlying.size ? requestAnimationFrame(jarTick) : 0;
 }
 
-// countTo rolls the big number from what it shows to v.
+// countTo rolls the big number from what it shows to v. A newer call
+// takes over from wherever the last one got to.
 function countTo(node, v) {
+  cancelAnimationFrame(jarCount);
+  jarCount = 0;
   const from = jarNumber;
-  jarNumber = v;
-  if (MONEY_STILL() || from === v) { node.textContent = rupees(Math.round(v)); return; }
-  const t0 = performance.now(), dur = Math.min(1400, 500 + Math.abs(v - from));
+  const show = (x) => { jarNumber = x; node.textContent = rupees(Math.round(x)); };
+  if (MONEY_STILL() || from === v) { show(v); return; }
+  const dur = Math.min(1400, 500 + Math.abs(v - from));
+  let t0 = 0;
   const tick = (t) => {
+    if (!t0) t0 = t;
     const k = Math.min(1, (t - t0) / dur);
-    const e = 1 - Math.pow(1 - k, 3);
-    node.textContent = rupees(Math.round(from + (v - from) * e));
-    if (k < 1) requestAnimationFrame(tick);
+    show(from + (v - from) * (1 - Math.pow(1 - k, 3)));
+    jarCount = k < 1 ? requestAnimationFrame(tick) : 0;
   };
-  requestAnimationFrame(tick);
+  jarCount = requestAnimationFrame(tick);
 }
 
 function renderJar() {
@@ -163,10 +178,9 @@ function renderJar() {
   box.style.setProperty('--fill', String(M.fee > 0 ? Math.min(1, M.earned / M.fee) : 0));
 
   const want = jarCoins(M);
-  const pile = svg.querySelector('.jar-pile');
   if (want < jarShown) {
-    // A deleted sale or a new month: take coins off the top.
-    while (pile.childNodes.length > want) pile.lastChild.remove();
+    // A deleted sale or a new month: take coins off the top, falling ones too.
+    for (let i = want; i < jarShown; i++) dropCoinOff(i);
     jarShown = want;
   }
   const first = jarEarned === null;
@@ -178,8 +192,7 @@ function renderJar() {
     for (let i = 0; i < n; i++) dropCoin(svg, jarShown + i, i * gap);
     jarShown = want;
   } else if (fresh && want) {
-    // A sale too small to add a coin still drops one onto the pile.
-    pile.lastChild && pile.lastChild.remove();
+    // A sale too small to add a coin drops the top one again.
     dropCoin(svg, want - 1, 0);
   }
   jarEarned = M.earned;
@@ -194,6 +207,9 @@ function renderSpark() {
   const by = new Map(days.map((d) => [d, []]));
   for (const s of recentSales()) by.get(s.date)?.push(s);
   const vals = days.map((d) => sum(by.get(d).map((s) => s.amount)));
+  const key = days[0] + vals.join(',');
+  if (box.dataset.key === key) return;
+  box.dataset.key = key;
   const mx = Math.max(1, ...vals);
   box.replaceChildren();
   box.style.setProperty('--n', String(days.length));
@@ -207,7 +223,7 @@ function renderSpark() {
         [{ t: fmtDay(d), c: 'nm' }],
         ...(ss.length ? ss.map((s) => [{ t: `${cap(saleWhat(s))} `, c: 'c7' }, { t: rupees(s.amount), c: 'c6' }, { t: ` · ${s.name || fmtPhone(s.phone) || 'Unknown buyer'}`, c: 'c8' }]) : [[{ t: 'No sales', c: 'c8' }]]),
         ss.length > 1 ? [{ t: 'Total ', c: 'c7' }, { t: rupees(vals[i]), c: 'cf' }] : null,
-      ];
+      ].filter(Boolean);
     });
     box.append(b);
   });
@@ -217,12 +233,17 @@ function renderSpark() {
 // ---------- the Sunday recap ----------
 
 let recapWeeks = null;   // api/recap weeks, newest first
-let recapAt = 0;         // which week is showing
+let recapStart = null;   // the week showing, by its Monday; null is the latest
 let recapLoaded = 0;
+let recapSales = '';     // D.sales when the recap was fetched
 
+// loadRecap fetches the recap every 5 minutes, or sooner when a sale changed.
 async function loadRecap() {
-  if (!D || !D.owner || Date.now() - recapLoaded < 5 * 60e3) return;
+  if (!D || !D.owner) return;
+  const sig = JSON.stringify(D.sales);
+  if (sig === recapSales && Date.now() - recapLoaded < 5 * 60e3) return;
   recapLoaded = Date.now();
+  recapSales = sig;
   try {
     const r = await fetch('api/recap', { cache: 'no-store' });
     if (!r.ok) throw new Error(r.status);
@@ -230,6 +251,7 @@ async function loadRecap() {
     recapWeeks = j.owner ? j.weeks || [] : [];
   } catch (e) {
     recapLoaded = 0;
+    recapSales = '';
     recapWeeks = recapWeeks || [];
   }
   renderRecap();
@@ -246,13 +268,20 @@ function slide(cls, ...kids) {
 // The first slide: how many spare meals sold, as a row of coins per meal.
 function soldSlide(w) {
   const big = el('div', 'rbig');
-  big.append(el('b', '', String(w.sold)), el('span', '', ` of ${w.spare}`));
-  const line = el('p', 'rline', w.spare ? 'spare meals sold' : 'No spare meals this week');
+  const unread = !w.spare && w.unknown;
+  if (unread) big.append(el('span', 'quiet', 'Not read yet'));
+  else big.append(el('b', '', String(w.sold)), el('span', '', ` of ${w.spare}`));
+  const line = el('p', 'rline', unread ? `${w.unknown} meal${w.unknown === 1 ? '' : 's'} unread` : w.spare ? 'spare meals sold' : 'No spare meals this week');
   const rows = el('div', 'rmeals');
   for (const m of w.by_meal || []) {
     const r = el('div', 'rmeal');
     r.title = cap(m.meal);
-    r.append(svgEl(icon(m.meal)));
+    r.setAttribute('role', 'img');
+    r.setAttribute('aria-label', `${cap(m.meal)}: ${m.sold} of ${m.spare} sold`);
+    // Meals the art doesn't cover get their first letter.
+    let art = null;
+    try { art = svgEl(icon(m.meal)); } catch (e) { art = el('b', 'rml', cap(m.meal)[0]); }
+    r.append(art);
     const dots = el('span', 'rdots');
     for (let i = 0; i < m.spare; i++) dots.append(el('i', i < m.sold ? 'on' : ''));
     r.append(dots);
@@ -261,7 +290,7 @@ function soldSlide(w) {
   const foot = el('div', 'rfoot');
   if (w.earned) foot.append(el('b', '', `+${rupees(Math.round(w.earned))}`));
   if (w.extras_sold) foot.append(el('span', '', `${w.extras_sold} extra${w.extras_sold === 1 ? '' : 's'}`));
-  if (w.unknown) foot.append(el('span', 'warn', `${w.unknown} unread`));
+  if (w.unknown && !unread) foot.append(el('span', 'warn', `${w.unknown} unread`));
   return slide('s-sold', big, line, rows, foot);
 }
 
@@ -302,13 +331,25 @@ function regularSlide(w) {
   return slide('s-reg', ...kids);
 }
 
+// recapIndex is where the chosen week sits in the list, so a new week
+// arriving on Monday doesn't move what's showing.
+function recapIndex(ws) {
+  const i = ws.findIndex((w) => w.start === recapStart);
+  return i < 0 ? 0 : i;
+}
+
 function renderRecap() {
   const card = $('recap');
   const ws = recapWeeks || [];
   card.hidden = !D.owner || !ws.length;
   if (card.hidden) return;
-  recapAt = Math.max(0, Math.min(recapAt, ws.length - 1));
+  const recapAt = recapIndex(ws);
   const w = ws[recapAt];
+  // Rebuilding the slides drops focus and restarts their animations, so only
+  // do it when something on them changed.
+  const key = JSON.stringify(w) + JSON.stringify(D.sales);
+  if (card.dataset.key === key) return;
+  card.dataset.key = key;
   $('recapWeek').textContent = recapAt === 0 ? 'Last week' : weekLabel(w);
   $('recapWeek').title = weekLabel(w);
   $('recapOlder').disabled = recapAt >= ws.length - 1;
@@ -325,7 +366,7 @@ function renderRecap() {
   [...track.children].forEach((s, i) => {
     const b = el('button', 'rdot');
     b.type = 'button';
-    b.setAttribute('aria-label', `Slide ${i + 1} of ${track.children.length}`);
+    b.setAttribute('aria-label', `Recap slide ${i + 1} of ${track.children.length}`);
     b.addEventListener('click', () => track.scrollTo({ left: s.offsetLeft - track.offsetLeft, behavior: MONEY_STILL() ? 'auto' : 'smooth' }));
     dots.append(b);
   });
@@ -355,6 +396,7 @@ function renderHeads() {
     n.style.setProperty('--m', t.color);
     n.append(svgEl(face(b.key)), el('b', '', String(b.n)));
     n.tabIndex = 0;
+    n.setAttribute('role', 'img');
     n.setAttribute('aria-label', `${b.name || fmtPhone(b.phone) || 'Unknown buyer'}, ${b.n} meals`);
     tip(n, () => buyerLines(b));
     box.append(n);
@@ -413,6 +455,8 @@ function renderPills() {
   const box = $('pills');
   box.hidden = !D.owner;
   if (!D.owner) return;
+  // Keep focus on the same pill across a reload.
+  const focused = [...box.children].indexOf(document.activeElement);
   box.replaceChildren();
   rulePills(box);
   friendPills(box);
@@ -426,6 +470,7 @@ function renderPills() {
   add('+ Rule', () => editRecurringRule(undefined), 'New recurring rule', 'mp-rule');
   if (recurringBusy) box.querySelector('.add.mp-rule').disabled = true;
   add("+ Friend's meal", () => { if (D) openFriendForm(); }, "Sell a friend's meal");
+  if (focused >= 0) box.children[Math.min(focused, box.children.length - 1)].focus();
 }
 
 function renderMoney() {
@@ -436,8 +481,15 @@ function renderMoney() {
 }
 
 (() => {
-  $('recapOlder').addEventListener('click', () => { recapAt++; renderRecap(); });
-  $('recapNewer').addEventListener('click', () => { recapAt--; renderRecap(); });
+  const step = (d) => {
+    const ws = recapWeeks || [];
+    const w = ws[recapIndex(ws) + d];
+    if (!w) return;
+    recapStart = d < 0 && recapIndex(ws) + d === 0 ? null : w.start;
+    renderRecap();
+  };
+  $('recapOlder').addEventListener('click', () => step(1));
+  $('recapNewer').addEventListener('click', () => step(-1));
   let t = 0;
   $('recapTrack').addEventListener('scroll', () => { cancelAnimationFrame(t); t = requestAnimationFrame(recapDot); }, { passive: true });
   tip($('jarArt'), () => (D ? savedTip() : []));

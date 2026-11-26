@@ -141,7 +141,6 @@ function render() {
     if (here) here.textContent = 'My meals';
     document.title = 'My meals · messwa';
   }
-  for (const e of document.querySelectorAll('.own')) e.hidden = !D.owner;
   renderMoney();
   renderCalendar();
   if (typeof refreshRecurringRulesView === 'function') refreshRecurringRulesView();
@@ -579,7 +578,7 @@ function renderPrices() {
   pricesNarrow = pricesTooNarrow();
   const narrow = pricesNarrow;
   // Extras sell for a fraction of a meal and have no market median, so the
-  // price check is meals only. Earnings below count both.
+  // price check is meals only.
   const mine = recentSales().filter((s) => !s.extra);
   // A row per meal and diet you sold in: the market's asks in that diet
   // against your sales in it.
@@ -663,16 +662,22 @@ function renderPrices() {
 
 // The phone layout draws at the box's pixel width, so redraw when the box
 // resizes, not only when it crosses into or out of the narrow layout.
+// Only width counts: the recap track's height animates as slides change.
+let recapWidth = 0;
 new ResizeObserver(() => {
-  if (!D || !D.owner || !$('pplot') || !(pricesNarrow || pricesTooNarrow())) return;
-  renderPrices();
+  const w = $('recap').clientWidth;
+  if (w === recapWidth) return;
+  recapWidth = w;
+  if (!D || !D.owner || !$('pplot')) return;
+  if (pricesNarrow || pricesTooNarrow()) renderPrices();
+  recapDot();
   if (tipFor && !tipFor.isConnected) hideTip();
-}).observe($('recapTrack'));
+}).observe($('recap'));
 addEventListener('keydown', (e) => {
   if (!modal.hidden) { if (e.key === 'Escape') closeModal(); return; }
   if (!D || e.metaKey || e.ctrlKey || e.altKey) return;
   if (document.body.classList.contains('shell-menu-open')) return;
-  if (e.target.matches('input, select, textarea, [contenteditable="true"]') || e.target.closest('#insp')) return;
+  if (e.target.matches('input, select, textarea, [contenteditable="true"]') || e.target.closest('#insp, #recap')) return;
   if (e.key === 'ArrowLeft') $('pgPrev').click();
   if (e.key === 'ArrowRight') $('pgNext').click();
 });

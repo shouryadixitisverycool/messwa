@@ -24,10 +24,10 @@
 .coin-ring { fill: none; stroke: rgba(255, 244, 210, .45); stroke-width: .8; }
 .jar.full .jar-glass { stroke: color-mix(in srgb, var(--calm-ok) 55%, var(--calm-line-2)); }
 
-.jar-num { min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+.jar-num { min-width: 0; container-type: inline-size; display: flex; flex-direction: column; gap: var(--sp-1); }
 .jar-k { font-size: var(--t-sm); color: var(--calm-muted); }
 .jar-v {
-  font-size: 40px; line-height: var(--lh-tight); font-weight: var(--w-bold); color: var(--calm-text);
+  font-size: min(40px, 22cqi); line-height: var(--lh-tight); font-weight: var(--w-bold); color: var(--calm-text);
   font-variant-numeric: tabular-nums; letter-spacing: -.02em; white-space: nowrap;
 }
 .jar.full .jar-v { color: var(--calm-ok); }
@@ -66,7 +66,7 @@
 
 .recap-track {
   display: grid; grid-auto-flow: column; grid-auto-columns: 100%;
-  overflow-x: auto; scroll-snap-type: x mandatory; overscroll-behavior-x: contain;
+  overflow-x: auto; overflow-y: hidden; scroll-snap-type: x mandatory; overscroll-behavior-x: contain;
   scrollbar-width: none;
   align-items: start;
   transition: height var(--dur-3) var(--ease-out);
@@ -90,6 +90,7 @@
 .rmeals { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-2); }
 .rmeal { display: flex; align-items: center; gap: var(--sp-3); }
 .rmeal > svg { width: 18px; height: 18px; image-rendering: pixelated; flex: none; }
+.rmeal > .rml { width: 18px; flex: none; text-align: center; color: var(--calm-muted); }
 .rdots { display: flex; flex-wrap: wrap; gap: 6px; }
 .rdots i {
   width: 14px; height: 14px; border-radius: 50%;
@@ -129,8 +130,12 @@
 }
 
 .recap-dots { display: flex; justify-content: center; gap: 6px; }
-.rdot { width: 6px; height: 6px; padding: 0; border: 0; border-radius: var(--r-pill); background: var(--calm-line-2); cursor: pointer; transition: width var(--dur-2) var(--ease-out), background var(--dur-2); }
-.rdot[aria-current="true"] { width: 18px; background: var(--calm-accent); }
+.recap-dots { gap: 0; }
+/* A 24px target around a 6px dot. */
+.rdot { width: 24px; height: 24px; padding: 0; border: 0; background: none; cursor: pointer; display: grid; place-items: center; }
+.rdot::before { content: ""; width: 6px; height: 6px; border-radius: var(--r-pill); background: var(--calm-line-2); transition: width var(--dur-2) var(--ease-out), background var(--dur-2); }
+.rdot[aria-current="true"]::before { width: 18px; background: var(--calm-accent); }
+.rdot[aria-current="true"] { width: 30px; }
 
 /* ---------- pills ---------- */
 
@@ -143,7 +148,8 @@
   font: var(--w-reg) var(--t-sm) var(--sans); white-space: nowrap;
   transition: background var(--dur-1), border-color var(--dur-1), transform var(--dur-1) var(--ease-spring);
 }
-.mpill > span { overflow: hidden; text-overflow: ellipsis; }
+.mpill > span { flex: none; }
+.mpill > span:first-of-type { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .mpill svg { width: 15px; height: 15px; flex: none; color: var(--calm-muted); }
 button.mpill { cursor: pointer; }
 button.mpill:hover:not(:disabled) { background: var(--calm-2); border-color: var(--calm-line-2); }
@@ -208,6 +214,10 @@ button.mpill:active:not(:disabled) { transform: scale(.97); }
 }
 @keyframes live-pulse { 50% { opacity: .3; transform: scale(.7); } }
 @media (prefers-reduced-motion: reduce) { .money .cell .live-dot { animation: none; } .money .cell.is-selling { animation: none; } }
+/* Keep the old cell states the calm skin would otherwise cover. */
+.money .cell.is-open.sellable { border-color: color-mix(in srgb, var(--calm-warn) 45%, transparent); }
+.money .cell.picked { border: 2px solid var(--calm-warn); background: color-mix(in srgb, var(--calm-warn) 9%, var(--calm-2)); }
+.money .cell.issue { border: 1px solid var(--calm-bad); box-shadow: 0 0 8px color-mix(in srgb, var(--calm-bad) 35%, transparent); }
 .money .cell.faded { opacity: .18; }
 .money .cell.faded:hover { opacity: .6; }
 
@@ -258,5 +268,7 @@ button.mpill:active:not(:disabled) { transform: scale(.97); }
   .money .lgrid .dh span { font-size: 10px; }
   .money .lgrid .price { font-size: 14px; }
   .money .lgrid .price.range { font-size: 9px; }
+  /* The live dot leaves room for the price. */
+  .money .cell.is-selling .price.range { display: flex; padding-bottom: 8px; }
   .week-meta { gap: var(--sp-2); font-size: var(--t-sm); }
 }

@@ -83,3 +83,31 @@ test('rule pills name the rule, its price and whether it is on', () => {
   m.run('rulePills($("pills"))');
   assert.deepEqual(box.children.map(text), ['Weekday lunches·₹45·on', 'Weekends·₹20-30·off', 'Broken·₹1-2·check']);
 });
+
+test('a week with only unread meals says so instead of 0 of 0', () => {
+  const m = money();
+  const s = m.run(`soldSlide({ sold: 0, spare: 0, earned: 0, extras_sold: 0, unknown: 2, by_meal: [] })`);
+  assert.match(text(s), /Not read yet/);
+  assert.match(text(s), /2 meals unread/);
+  assert.doesNotMatch(text(s), /0 of 0/);
+});
+
+test('a meal with no art gets its first letter instead of throwing', () => {
+  const m = money({ icon: (n) => { if (n !== 'lunch') throw new TypeError('no art'); return ''; } });
+  const s = m.run(`soldSlide({ sold: 1, spare: 2, earned: 40, by_meal: [{ meal: 'brunch', spare: 1, sold: 1 }, { meal: 'lunch', spare: 1, sold: 0 }] })`);
+  const rows = s.children.find((c) => c.className === 'rmeals').children;
+  assert.equal(rows[0].children[0].textContent, 'B');
+  assert.equal(rows[0].attrs['aria-label'], 'Brunch: 1 of 1 sold');
+});
+
+test('taking coins off the jar also stops the ones still falling', () => {
+  const m = money({ matchMedia: () => ({ matches: false }) });
+  const removed = [];
+  m.run('var svg = { querySelector: () => ({ append() {} }) }');
+  for (let i = 0; i < 5; i++) m.run(`dropCoin(svg, ${i}, 0)`);
+  m.run('jarNodes.forEach((c, i) => { c.remove = () => globalThis.gone.push(i); })');
+  m.ctx.gone = removed;
+  m.run('for (let i = 2; i < 5; i++) dropCoinOff(i)');
+  assert.deepEqual(removed, [2, 3, 4]);
+  assert.equal(m.run('JSON.stringify([...jarFlying.keys()])'), '[0,1]');
+});
