@@ -110,6 +110,8 @@ func TestOpenRewritesOldPaymentRows(t *testing.T) {
 		{"payment", "Paid INR 65.00\nNote: x" + dump + "y", "Paid INR 65.00\nNote: x" + dump + "y"},
 		{"payment", "Amount unavailable.\nNote: x" + dump + "y", "Amount unavailable.\nNote: x" + dump + "y"},
 		{"text", "Amount unavailable." + dump + "{}", "Amount unavailable." + dump + "{}"},
+		// The old prefixes, matched case-sensitively as the Go parsing does.
+		{"payment", "amount unavailable." + dump + "{}", "amount unavailable." + dump + "{}"},
 	}
 	path := filepath.Join(t.TempDir(), "test.db")
 	s, err := Open(path)
