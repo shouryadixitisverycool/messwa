@@ -20,50 +20,33 @@
 <script src="sell.js" defer></script>
 <script src="sale.js" defer></script>
 <script src="app.js" defer></script>
-<script src="widget-demo.js" defer></script>
-<script src="widgets.js" defer></script>
 <script src="home.js" defer></script>
 </head>
 <body data-page="home">
-<!-- Home. For now it keeps the widget column (home.js), which the new
-     Home replaces. The market board moved to buy.html. -->
-<div class="app home">
+<!-- Home (home.js): the verdict over the orb, today's meals, and a card
+     per thing that needs you. app.js feeds it api/state and api/sales and
+     keeps the sell sheet; attention.js hands it the attention items. -->
+<main class="app home" id="home">
   <h1 class="sr-only">Home</h1>
-  <div class="day" id="day">
-    <div class="track" id="track"></div>
-  </div>
+  <section class="hero" aria-labelledby="verdict">
+    <div class="orb" id="orb" data-mode="idle" aria-hidden="true">
+      <i class="orb-glow"></i><i class="orb-body"></i><i class="orb-body b2"></i>
+      <i class="orb-ring"></i><i class="orb-ring r2"></i><i class="orb-spark"></i>
+    </div>
+    <h2 class="home-verdict" id="verdict" aria-live="polite">&nbsp;</h2>
+    <p class="since" id="since" hidden></p>
+    <p class="sr-only" id="orbSays" role="status"></p>
+  </section>
 
-  <a class="setup-warn" id="noGroups" href="settings.html#offer" hidden><b>Your offers have nowhere to go.</b> Pick the WhatsApp groups to post in before you sell. <span class="go">Pick groups &rsaquo;</span></a>
-  <a class="setup-warn" id="noUPI" href="settings.html#buyers" hidden><b>Buyers have no UPI QR to pay on.</b> Add your UPI ID and the bot sends each buyer a QR for the agreed price. <span class="go">Add UPI &rsaquo;</span></a>
+  <nav class="rail" id="rail" aria-label="Today's meals" hidden>
+    <div class="rail-line" aria-hidden="true"><i></i></div>
+    <div class="rail-nodes" id="railNodes"></div>
+  </nav>
 
   <div class="sell-nudge" id="nudge" hidden></div>
 
-  <!-- Settings › You opens edit mode with ./#edit-home. -->
-  <div class="home-bar" id="homeBar" hidden>
-    <div class="home-editbar">
-      <span class="home-edit-text"><b>Editing your home.</b></span>
-      <button class="home-btn" id="homeReset" type="button" title="Back to Alerts, Today, Sales ledger and Earnings">RESET</button>
-      <button class="home-btn gold" id="homeDone" type="button">DONE</button>
-    </div>
-  </div>
-
-  <div class="widgets" id="widgets"></div>
-
-  <div class="home-empty" id="homeEmpty" hidden>
-    <b>Nothing on your home yet.</b>
-    <span>Add the widgets you want to see here.</span>
-    <button class="home-btn gold" id="homeEmptyEdit" type="button">+ ADD WIDGETS</button>
-  </div>
-
-</div>
-
-<aside class="tray" id="tray" hidden aria-label="Widgets you can add">
-  <div class="tray-head">
-    <span class="tray-title">ADD WIDGETS</span>
-    <span class="tray-meta" id="trayMeta"></span>
-  </div>
-  <div class="tray-list" id="trayList"></div>
-</aside>
+  <section class="fixes" id="fixes" aria-label="Needs you" hidden></section>
+</main>
 
 <div class="tip" id="tip" hidden></div>
 <div class="modal" id="modal" hidden>

@@ -1,9 +1,10 @@
 'use strict';
 
 // The "needs you" banner: problems the seller has to act on, from
-// /api/attention. On the home page it's the Alerts widget (#attnHost); on
-// the sales page it sits under the header. It stays hidden while there are
-// none, and says how many there are with an "attention" event on document.
+// /api/attention. On the home page home.js draws them as cards instead
+// (homeAttention); elsewhere the banner sits under the page head. It stays
+// hidden while there are none, and says how many there are with an
+// "attention" event on document.
 // Browser alerts only fire while a dashboard tab is open.
 
 function attentionUnseen(items, seen) { return items.filter((x) => !seen.has(x.id)); }
@@ -57,6 +58,10 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     const heading = pageHead || document.querySelector('.app > h1');
     if (heading) heading.after(box); else document.querySelector('.app')?.prepend(box);
   }
+
+  // Home hides the banner and draws cards, so its errors show under them.
+  const home = document.getElementById('home');
+  if (home) home.append(note);
 
   let open = false; // the folded rows are showing
   more.onclick = () => { open = !open; draw(); };
@@ -139,11 +144,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       done.title = 'Hide this until it changes';
       done.onclick = async () => {
         done.disabled = true;
-        try {
-          await send('POST', 'api/attention', { id: item.id });
-          items = items.filter((x) => x.id !== item.id);
-          draw();
-        } catch (err) { note.textContent = err.message; done.disabled = false; }
+        try { await resolve(item.id); } catch (err) { note.textContent = err.message; done.disabled = false; }
       };
       acts.append(done);
     }
@@ -151,10 +152,26 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     return r;
   }
 
+  // resolvedAt keeps when each item was marked done, so a refresh that
+  // was already on its way doesn't bring it back.
+  const resolvedAt = new Map();
+  async function resolve(id) {
+    await send('POST', 'api/attention', { id });
+    resolvedAt.set(id, Date.now());
+    items = items.filter((x) => x.id !== id);
+    draw();
+  }
+
   let items = [];
   function draw() {
-    box.hidden = !items.length;
     document.dispatchEvent(new CustomEvent('attention', { detail: items.length }));
+    // Home draws each item as its own card (home.js).
+    if (typeof homeAttention === 'function') {
+      box.hidden = true;
+      homeAttention(items, { when, resolve, refresh, openSale });
+      return;
+    }
+    box.hidden = !items.length;
     if (!items.length) return;
     box.classList.toggle('red', items.some((x) => (ATTN_KIND[x.kind] || [])[1] === 'red'));
     line.textContent = items.length === 1 ? '1 THING NEEDS YOU' : `${items.length} THINGS NEED YOU`;
@@ -172,7 +189,8 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       for (const item of attentionUnseen(items, seen)) {
         try {
           const n = new Notification(item.title, { body: [when(item), item.detail].filter(Boolean).join(' · '), tag: item.id });
-          n.onclick = () => { window.focus(); location.href = target(item); n.close(); };
+          // Home has a card for every item, at #attn-<id>.
+          n.onclick = () => { window.focus(); location.href = './#attn-' + item.id; n.close(); };
         } catch {}
       }
     }
@@ -186,10 +204,12 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     if (busy) return;
     busy = true;
     try {
+      const asked = Date.now();
       const r = await fetch('api/attention', { cache: 'no-store' });
       if (r.status === 401 || r.status === 403) { items = []; draw(); return; }
       if (!r.ok) throw new Error('Couldn\'t refresh this list.');
-      items = await r.json();
+      items = (await r.json()).filter((x) => !(resolvedAt.get(x.id) >= asked));
+      for (const [id, at] of resolvedAt) if (at < asked) resolvedAt.delete(id);
       note.textContent = '';
       keepScroll(draw);
       alertNew();

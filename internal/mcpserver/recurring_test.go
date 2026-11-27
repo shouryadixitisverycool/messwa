@@ -30,7 +30,7 @@ func TestRecurringAlertsAreScopedAndDeduplicated(t *testing.T) {
 	if err != nil || len(others) != 0 {
 		t.Fatal("another user's rule issue disclosed")
 	}
-	if err := srv.ResolveAttention(ctx, 7, items[0].ID); err != nil {
+	if err := srv.ResolveAttention(ctx, 7, items[0].ID, items[0].Kind); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.RecurringRuleError(ctx, r.ID, r.Revision, "Portal unavailable"); err != nil {

@@ -33,7 +33,7 @@ func TestAttentionOldIssuesAndResolutionIsolation(t *testing.T) {
 	if again[0].ID != a[0].ID {
 		t.Fatal("unstable issue ID")
 	}
-	if err = s.ResolveAttention(ctx, 1, a[0].ID); err != nil {
+	if err = s.ResolveAttention(ctx, 1, a[0].ID, a[0].Kind); err != nil {
 		t.Fatal(err)
 	}
 	a, err = s.Attention(ctx, 1)
@@ -83,14 +83,80 @@ func TestAttentionRefundSurvivesBoardLinger(t *testing.T) {
 	if err != nil || v == nil || len(v.Buyers) != 1 || items[0].Buyer != v.Buyers[0].Key {
 		t.Fatalf("refund buyer %q does not match the sale view: %+v %v", items[0].Buyer, v, err)
 	}
-	if err = s.ResolveAttention(ctx, 1, items[0].ID); err != nil {
+	if items[0].Amount != 40 || items[0].Phone != "+919999999999" {
+		t.Fatalf("refund amount/phone: %+v", items[0])
+	}
+	if err = s.ResolveAttention(ctx, 1, items[0].ID, items[0].Kind); err != nil {
 		t.Fatal(err)
 	}
 	if err = st.RefundSellTaskBuyer(ctx, id, peer, "60.00", "another payment"); err != nil {
 		t.Fatal(err)
 	}
 	items, err = s.Attention(ctx, 1)
-	if err != nil || len(items) != 1 {
+	if err != nil || len(items) != 1 || items[0].Amount != 60 {
 		t.Fatalf("changed refund was hidden: %v %v", items, err)
+	}
+}
+
+func TestAttentionPostGroupAndRefundFields(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "fields.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.SetGroup(ctx, "g1@g.us", "Kadamba Exchange", nil); err != nil {
+		t.Fatal(err)
+	}
+	s := New(config.Default(), st, nil)
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	s.SetClock(func() time.Time { return now })
+
+	tid, err := st.CreateSellTask(ctx, store.SellTask{Date: "2026-11-04", Meal: "lunch", MinPaise: 4000, MaxPaise: 6000, CreatedAt: now, EndsAt: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ClaimOfferPost(ctx, tid, "g1@g.us", "offer-1", 0, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetOfferFailed(ctx, tid, "offer-1", "group send failed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ClaimOfferPost(ctx, tid, "g2@g.us", "offer-2", 0, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetOfferFailed(ctx, tid, "offer-2", "timeout"); err != nil {
+		t.Fatal(err)
+	}
+	// Refund buyer with LID only (no phone known).
+	if _, err := st.AddSellTaskBuyer(ctx, tid, "77@lid", "", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RefundSellTaskBuyer(ctx, tid, "77@lid", "52.50", "overpaid"); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := s.Attention(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byGroup := map[string]AttentionItem{}
+	var refund *AttentionItem
+	for i := range items {
+		switch items[i].Kind {
+		case "post":
+			byGroup[items[i].Group] = items[i]
+		case "refund":
+			refund = &items[i]
+		}
+	}
+	if got := byGroup["g1@g.us"]; got.Group != "g1@g.us" || got.GroupName != "Kadamba Exchange" || got.Task != tid {
+		t.Fatalf("named group post item: %+v", got)
+	}
+	if got := byGroup["g2@g.us"]; got.Group != "g2@g.us" || got.GroupName != "" || got.Task != tid {
+		t.Fatalf("unnamed group post item: %+v", got)
+	}
+	if refund == nil || refund.Amount != 52.5 || refund.Phone != "" || refund.Buyer != "77@lid" {
+		t.Fatalf("lid refund item: %+v", refund)
 	}
 }
