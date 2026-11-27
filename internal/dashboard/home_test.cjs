@@ -136,7 +136,7 @@ test('buyers waiting on you in a running sale become cards', () => {
         { key: 'b', state: 'negotiating' },
         { key: 'c', state: 'parked', muted: true },
       ]) },
-      { meal: 'dinner', state: 'open', extras: [{ name: 'Egg', task: task(9, [{ key: 'd', state: 'parked' }]) }] },
+      { meal: 'dinner', state: 'open', extras: [{ name: 'Egg', slots: [{ slot: 'dinner#e1', state: 'selling', task: task(9, [{ key: 'd', state: 'parked' }]) }, { slot: 'dinner#e2', state: 'scheduled' }] }] },
     ] }],
     upcoming: [{ date: '2026-11-26', cells: [{ meal: 'lunch', task: task(7, [{ key: 'a', state: 'parked' }]) }] }],
     friends: [{ date: '2026-11-26', meal: 'breakfast', task: task(11, [{ key: 'e', state: 'parked' }]) }],

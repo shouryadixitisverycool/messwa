@@ -197,7 +197,8 @@ function parkedItems(N) {
   if (N.ahead) cells.push([N.ahead.date, N.ahead.cell]);
   const tasks = [];
   for (const [date, c] of cells) {
-    for (const t of [c.task, ...(c.extras || []).map((e) => e.task)]) if (t) tasks.push([date, c.meal, t]);
+    // Extras sold on their own run their tasks per slot.
+    for (const t of [c.task, ...(c.extras || []).flatMap((e) => (e.slots || []).map((x) => x.task))]) if (t) tasks.push([date, c.meal, t]);
   }
   for (const f of N.friends || []) if (f.task) tasks.push([f.date, f.meal, f.task]);
   const out = [];
