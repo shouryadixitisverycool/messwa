@@ -159,6 +159,16 @@ func Open(path string) (*Store, error) {
 			return nil, fmt.Errorf("migrate: %w", err)
 		}
 	}
+	// Payment messages recorded before the payment card kept a JSON dump of
+	// the payload after the amount line. Drop it and rewrite the line from
+	// "Reported amount: INR 65.00 (unverified)." to "Paid INR 65.00".
+	if _, err := db.Exec(`UPDATE sale_messages SET text=substr(text,1,instr(text,char(10)||char(10)||'Retained payment details:')-1)
+ WHERE kind='payment' AND instr(text,char(10)||char(10)||'Retained payment details:')>0;
+UPDATE sale_messages SET text='Paid '||substr(text,18,length(text)-31)
+ WHERE kind='payment' AND text LIKE 'Reported amount: % (unverified).'`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate payment messages: %w", err)
+	}
 	st := &Store{db: db}
 	if err := st.migrateOwnership(context.Background()); err != nil {
 		db.Close()

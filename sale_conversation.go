@@ -2,14 +2,15 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
+
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types/events"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+
 	"messwa/internal/store"
-	"time"
 )
 
 // This observer never feeds messages or failures back into sale decisions.
@@ -130,16 +131,18 @@ func (m *sellManager) recordConversation(peer, alt, id string, at time.Time, fro
 	}()
 }
 
+// conversationPaymentText is "Paid INR 65.00", the amount decoded from
+// the payload, and the buyer's note on a second line. The dashboard draws
+// it as a WhatsApp payment card. The raw payload stays out: it is opaque
+// to the seller and carries transaction data they have no use for.
 func conversationPaymentText(msg *waE2E.Message) string {
 	pay := msg.GetSendPaymentMessage()
-	b, _ := protojson.Marshal(pay)
-	var pretty any
-	if json.Unmarshal(b, &pretty) == nil {
-		b, _ = json.MarshalIndent(pretty, "", "  ")
-	}
-	label := "Amount unavailable."
+	text := "Amount unavailable."
 	if p, err := decodePaymentPayload(pay.GetTransactionData()); err == nil && p != nil && p.Amount != "" {
-		label = fmt.Sprintf("Reported amount: %s %s (unverified).", p.Currency, p.Amount)
+		text = fmt.Sprintf("Paid %s %s", p.Currency, p.Amount)
 	}
-	return label + "\n\nRetained payment details:\n" + string(b)
+	if note := strings.TrimSpace(pay.GetNoteMessage().GetExtendedTextMessage().GetText()); note != "" {
+		text += "\nNote: " + note
+	}
+	return text
 }

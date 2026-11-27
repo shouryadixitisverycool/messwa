@@ -91,3 +91,35 @@ func TestConversationFollowsMovedBuyer(t *testing.T) {
 		t.Fatalf("recorded under %d, want the sale holding the buyer %d (%v)", got, older, err)
 	}
 }
+
+// Payment rows recorded with the raw payload dump lose it on the next open.
+func TestOpenDropsStoredPaymentPayload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	old := SaleMessage{ID: "p", At: 1, Kind: "payment", Text: "Reported amount: INR 65.00 (unverified).\n\nRetained payment details:\n{\"transactionData\": \"AQAAAJEB\"}"}
+	text := SaleMessage{ID: "t", At: 2, Kind: "text", Text: "hi\n\nRetained payment details:\nkept"}
+	for _, m := range []SaleMessage{old, text} {
+		if err := s.AddSaleMessage(ctx, 1, "buyer", m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+	if s, err = Open(path); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	got, err := s.SaleMessages(ctx, 1, "buyer")
+	if err != nil || len(got) != 2 {
+		t.Fatalf("messages: %v %v", got, err)
+	}
+	if got[0].Text != "Paid INR 65.00" {
+		t.Fatalf("payment text = %q", got[0].Text)
+	}
+	if got[1].Text != text.Text {
+		t.Fatalf("non-payment text changed: %q", got[1].Text)
+	}
+}

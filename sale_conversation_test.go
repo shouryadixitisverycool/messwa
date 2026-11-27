@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -17,9 +18,20 @@ import (
 func TestConversationUnreadablePayment(t *testing.T) {
 	for _, payload := range []string{"", "unreadable payload"} {
 		text := conversationPaymentText(&waE2E.Message{SendPaymentMessage: &waE2E.SendPaymentMessage{TransactionData: proto.String(payload)}})
-		if !strings.HasPrefix(text, "Amount unavailable.") || strings.Contains(text, "Reported amount:") {
+		if !strings.HasPrefix(text, "Amount unavailable.") || strings.Contains(text, "Paid") {
 			t.Fatalf("unreadable payment shows an amount: %s", text)
 		}
+	}
+}
+
+func TestConversationPaymentHidesPayload(t *testing.T) {
+	payload := base64.StdEncoding.EncodeToString(mockPaymentPayload("65.00", time.Now()))
+	text := conversationPaymentText(&waE2E.Message{SendPaymentMessage: &waE2E.SendPaymentMessage{
+		TransactionData: proto.String(payload),
+		NoteMessage:     &waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{Text: proto.String("lunch")}},
+	}})
+	if text != "Paid INR 65.00\nNote: lunch" {
+		t.Fatalf("payment text = %q", text)
 	}
 }
 
