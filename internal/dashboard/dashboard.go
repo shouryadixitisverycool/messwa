@@ -249,6 +249,7 @@ func Handler(cfg *config.Config, srv *mcpserver.Server, hub *Hub, acc *accounts.
 	}))
 
 	attentionRoutes(mux, srv)
+	homeRoutes(mux, cfg, srv)
 	recurringRoutes(mux, srv)
 	mux.Handle("GET /api/sales", member(salesHandler(cfg, srv, regs)))
 	mux.Handle("GET /api/meal-extras", member(mealExtrasHandler(cfg, srv, regs)))

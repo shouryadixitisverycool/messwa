@@ -5,8 +5,8 @@
 //
 // It runs on two pages. On buy.html it draws the market board (#chest),
 // its keys and the market pulse. On the home page (index.html) there is no
-// board: it keeps the day track, the setup warnings, the sell nudge and
-// the sell sheet, and feeds the widgets their data. BOARD says which.
+// board: it keeps the sell nudge and the sell sheet, and feeds home.js
+// api/state and api/sales. BOARD says which.
 
 
 // ---------- state ----------
@@ -213,8 +213,7 @@ function render() {
   if (present('noGroups')) $('noGroups').hidden = !D.no_groups;
   if (present('noUPI')) $('noUPI').hidden = !D.no_upi;
   renderSales();
-  // The sales ledger feeds the nudge, the Today widget, the mess of a
-  // scheduled sale's card and the widgets drawn from your sales.
+  // The sales ledger feeds the nudge and Home's rail and verdict.
   if (N || !D.nudge) renderNudge();
   loadNudge();
   if (BOARD) {
@@ -1135,10 +1134,9 @@ function toast(msg) {
 
 // ---------- sell your next meal ----------
 
-// The nudge above the widgets points at your next registered meal nobody
+// The nudge on Home points at your next registered meal nobody
 // is selling yet: the one being served now or the next one, the same meals
-// the sales ledger offers to sell. It shows only while the Today widget is
-// off the page. It reads api/sales, which asks the portal, so it refreshes
+// the sales ledger offers to sell. It reads api/sales, which asks the portal, so it refreshes
 // every few minutes rather than with the board.
 let N = null;            // last /api/sales, or null
 let nudgeAt = 0;
@@ -1163,8 +1161,6 @@ async function loadNudge(force) {
 
 function nextSellable() {
   if (!D.nudge || !N || !N.owner || N.sell_off) return null;
-  // The Today widget offers the same meals, with more room.
-  if (typeof homeHas === 'function' && homeHas('today')) return null;
   const n = now();
   const out = [];
   // Tomorrow's first meal comes as ahead once today's last one is over.

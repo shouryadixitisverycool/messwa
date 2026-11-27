@@ -99,7 +99,7 @@ func Open(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	os.Chmod(path, 0o600)
-	if _, err := db.Exec(conversationSchema + recurringSchema + attentionSchema + schema + logSchema + deliverySchema + priceSchema + accountSchema + factSchema + sellTaskSchema + sellScheduleSchema + sellEventSchema + settingsSchema + friendMealSchema + galaSchema); err != nil {
+	if _, err := db.Exec(conversationSchema + recurringSchema + attentionSchema + visitSchema + schema + logSchema + deliverySchema + priceSchema + accountSchema + factSchema + sellTaskSchema + sellScheduleSchema + sellEventSchema + settingsSchema + friendMealSchema + galaSchema); err != nil {
 		return nil, fmt.Errorf("schema: %w", err)
 	}
 	if _, err := db.Exec(`INSERT OR IGNORE INTO account_ids SELECT id FROM users`); err != nil {
@@ -154,6 +154,8 @@ func Open(path string) (*Store, error) {
 		// Accounts made before self sign-up were all made by an admin.
 		{"users", "status TEXT NOT NULL DEFAULT 'active'"},
 		{"users", "status_at INTEGER"},
+		{"attention_resolved", "kind TEXT NOT NULL DEFAULT ''"},
+		{"attention_resolved", "resolved_at INTEGER NOT NULL DEFAULT 0"},
 	} {
 		if _, err := db.Exec("ALTER TABLE " + c.table + " ADD COLUMN " + c.col); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return nil, fmt.Errorf("migrate: %w", err)

@@ -65,7 +65,7 @@ func attentionRoutes(mux *http.ServeMux, srv *mcpserver.Server) {
 		}
 		for _, item := range items {
 			if item.ID == in.ID && item.Resolvable {
-				if err := srv.ResolveAttention(r.Context(), accounts.UserFrom(r.Context()).ID, in.ID); err != nil {
+				if err := srv.ResolveAttention(r.Context(), accounts.UserFrom(r.Context()).ID, in.ID, item.Kind); err != nil {
 					jsonError(w, "Could not save resolution", 500)
 					return
 				}

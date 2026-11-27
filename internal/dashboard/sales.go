@@ -529,9 +529,9 @@ func buildSales(ctx context.Context, cfg *config.Config, srv *mcpserver.Server, 
 		if d.State != "armed" && d.State != "sending" && d.State != "sent" && d.State != "handed_off" {
 			continue
 		}
-		isExtra := store.IsExtraSlot(d.Meal) || d.Extra != ""
+		isExtra := isExtraDelivery(d)
 		// Friends' meals ("dinner#f1") and legacy proxy slots ("dinner#2") stay out of your totals.
-		if !isExtra && strings.Contains(d.Meal, "#") {
+		if isFriendDelivery(d) {
 			slotSales[d.Date+"|"+d.Meal] = d
 			continue
 		}

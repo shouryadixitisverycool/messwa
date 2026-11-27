@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"messwa/internal/store"
+	"sort"
 	"time"
 )
 
@@ -26,6 +27,13 @@ type AttentionItem struct {
 	// Buyer is the key of the buyer a refund item is about, as the sale
 	// view's buyers carry it, so the dashboard opens that buyer's sheet.
 	Buyer string `json:"buyer,omitempty"`
+	// Group and GroupName identify the group a failed post item was for.
+	Group     string `json:"group,omitempty"`
+	GroupName string `json:"group_name,omitempty"`
+	// Amount is the refund due in rupees on a refund item.
+	Amount float64 `json:"amount,omitempty"`
+	// Phone is the buyer's phone on a refund item, when known.
+	Phone string `json:"phone,omitempty"`
 }
 
 func (s *Server) Attention(ctx context.Context, user int64) ([]AttentionItem, error) {
@@ -53,6 +61,8 @@ func (s *Server) Attention(ctx context.Context, user int64) ([]AttentionItem, er
 	if err != nil {
 		return nil, err
 	}
+	var groupNames map[string]string
+	groupNamesLoaded := false
 	active := false
 	for _, t := range tasks {
 		if t.State == store.TaskActive {
@@ -63,11 +73,14 @@ func (s *Server) Attention(ctx context.Context, user int64) ([]AttentionItem, er
 			return nil, err
 		}
 		for _, b := range bs {
-			if rupeesStr(b.Refund) > 0 {
+			if amt := rupeesStr(b.Refund); amt > 0 {
 				n := len(out)
 				add("refund", fmt.Sprintf("refund:%d:%s", t.ID, b.Peer), "Refund due", fmt.Sprintf("Send ₹%s back to %s, unless they got the meal.", b.Refund, s.attentionWho(ctx, b)), t.Date, t.Meal, t.ID, false, true)
 				if len(out) > n {
-					out[n].Buyer = firstOf(s.person(ctx, b.Peer, b.Alt, "").Phone, b.Peer)
+					p := s.person(ctx, b.Peer, b.Alt, "")
+					out[n].Buyer = firstOf(p.Phone, b.Peer)
+					out[n].Amount = amt
+					out[n].Phone = p.Phone
 				}
 			}
 		}
@@ -85,9 +98,25 @@ func (s *Server) Attention(ctx context.Context, user int64) ([]AttentionItem, er
 					latest[p.Group] = p
 				}
 			}
-			for group, p := range latest {
+			// In group order, so cards don't shuffle between refreshes.
+			groups := make([]string, 0, len(latest))
+			for g := range latest {
+				groups = append(groups, g)
+			}
+			sort.Strings(groups)
+			for _, group := range groups {
+				p := latest[group]
 				if p.State == store.OfferFailed {
+					n := len(out)
 					add("post", fmt.Sprintf("post:%d:%s:%d", t.ID, group, p.Seq), "Offer didn't post", p.Error, t.Date, t.Meal, t.ID, false, false)
+					if len(out) > n {
+						if !groupNamesLoaded {
+							groupNames, _ = s.st.GroupNames(ctx)
+							groupNamesLoaded = true
+						}
+						out[n].Group = group
+						out[n].GroupName = groupNames[group]
+					}
 				}
 			}
 		}
@@ -142,8 +171,17 @@ func (s *Server) attentionWho(ctx context.Context, b store.SellBuyer) string {
 	return b.Peer
 }
 
-func (s *Server) ResolveAttention(ctx context.Context, user int64, id string) error {
-	return s.st.ResolveAttention(ctx, user, id)
+func (s *Server) ResolveAttention(ctx context.Context, user int64, id, kind string) error {
+	return s.st.ResolveAttention(ctx, user, id, kind, s.now())
+}
+func (s *Server) ResolvedAttentionCount(ctx context.Context, user int64, kind string, since int64) (int, error) {
+	return s.st.ResolvedAttentionCount(ctx, user, kind, since)
+}
+func (s *Server) PingHomeVisit(ctx context.Context, user int64) (int64, error) {
+	return s.st.PingHomeVisit(ctx, user, s.now())
+}
+func (s *Server) HomeVisitSince(ctx context.Context, user int64) (int64, error) {
+	return s.st.HomeVisitSince(ctx, user)
 }
 func (s *Server) AttentionSale(ctx context.Context, id int64) (*SaleView, error) {
 	t, err := s.st.GetSellTask(ctx, id)
