@@ -280,7 +280,7 @@ func TestSellTaskAcceptsPlainDMs(t *testing.T) {
 			}
 		}
 		// A's two minutes run out; B gets the same prompt and pays.
-		time.Sleep(2 * time.Minute)
+		time.Sleep(payTurn + payGrace)
 		synctest.Wait()
 		if got := sentTo(f.conn.messages(), buyerB); len(got) != 3 || got[0].text != "ok 1" {
 			t.Fatalf("B's turn didn't start: %+v", got)

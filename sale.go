@@ -443,7 +443,9 @@ func (s *sale) takeTurn(ctx context.Context, buyer types.JID, d store.Delivery, 
 	// so messages from just before the first arming cannot qualify.
 	armedAt = armedAt.Add(time.Second)
 	queued := !t.payUntil.IsZero()
-	payUntil := t.payUntil
+	// payUntil is when the turn ends: the deadline the buyer was given plus
+	// payGrace, but never past the meal's end.
+	payUntil := t.payUntil.Add(payGrace)
 	var deadline <-chan time.Time
 	if queued {
 		if s.end.Before(payUntil) {

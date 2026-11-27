@@ -91,7 +91,7 @@ func TestSellTaskMessagesBuyPosts(t *testing.T) {
 			t.Fatalf("late poster was messaged while buyerA held the turn: %q", got)
 		}
 		// Once buyerA's 2-minute turn expires, the sweep resumes.
-		time.Sleep(payTurn - buyPostSweep + time.Second)
+		time.Sleep(payTurn + payGrace - buyPostSweep + time.Second)
 		settle()
 		if got := texts(sentTo(f.conn.messages(), late)); len(got) != 2 || got[0] != "have bakul non-veg lunch" {
 			t.Fatalf("late poster got %q", got)

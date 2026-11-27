@@ -37,6 +37,13 @@ var pick = func(n int) int { return rand.IntN(n) }
 // the turn.
 const payTurn = 2 * time.Minute
 
+// payGrace keeps a turn open past payTurn for a payment sent on the last
+// second. WhatsApp timestamps round down to the second and messages can
+// arrive a few seconds late, so a screenshot sent at the deadline used to
+// miss the turn. The buyer still hears payTurn; only the bot waits longer.
+// The meal's end still cuts it off: a QR is no use after the meal.
+const payGrace = 15 * time.Second
+
 // lines renders the bot's replies for one sale, in the account's own
 // wording when it has some. The zero value says the built-in lines with
 // no meal details.
