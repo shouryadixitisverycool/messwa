@@ -53,7 +53,9 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   if (host) host.append(box);
   else {
     const pageHead = document.querySelector('.app .page-head');
-    if (pageHead) pageHead.after(box); else document.querySelector('.app').prepend(box);
+    // After the page's heading, so screen readers meet the title first.
+    const heading = pageHead || document.querySelector('.app > h1');
+    if (heading) heading.after(box); else document.querySelector('.app')?.prepend(box);
   }
 
   let open = false; // the folded rows are showing

@@ -935,7 +935,8 @@ function toggleKeys(show) {
 if (BOARD) {
   $('pgPrev').addEventListener('click', () => turn(-1));
   $('pgNext').addEventListener('click', () => turn(1));
-  try { if (localStorage.getItem('mah-keys')) $('hint').hidden = false; } catch {}
+  // Phones hide KEYS, so a remembered legend there would have no close button.
+  try { if (localStorage.getItem('mah-keys') && !matchMedia('(max-width: 640px)').matches) $('hint').hidden = false; } catch {}
 }
 
 addEventListener('keydown', (e) => {
@@ -1145,8 +1146,8 @@ const NUDGE_EVERY = 3 * 60 * 1000;
 const skipped = (() => { try { return new Set(JSON.parse(sessionStorage.getItem('nudge-skip') || '[]')); } catch { return new Set(); } })();
 
 async function loadNudge(force) {
-  // Only the home page uses api/sales; the Buy board doesn't.
-  if (BOARD) return;
+  // Buy fetches api/sales only on demand, when an alert opens a sale.
+  if (BOARD && !force) return;
   if (!force && Date.now() - nudgeAt < NUDGE_EVERY) return;
   nudgeAt = Date.now();
   try {

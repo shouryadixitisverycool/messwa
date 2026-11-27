@@ -136,7 +136,7 @@ function shellBadge(tab, on) {
     menu.hidden = !open;
     avatar.setAttribute('aria-expanded', String(open));
     document.body.classList.toggle('shell-menu-open', open);
-    if (open && focus) { const list = items(); list[focus === 'last' ? list.length - 1 : 0]?.focus(); }
+    if (open && focus) { const stops = items(); stops[focus === 'last' ? stops.length - 1 : 0]?.focus(); }
   }
   // A keyboard click (detail 0) lands on the first item; a pointer click
   // leaves focus on the avatar, where the arrows then take over.
@@ -151,12 +151,12 @@ function shellBadge(tab, on) {
   // closes it. focusout fires after the browser has picked the next stop.
   me_.addEventListener('focusout', (e) => { if (!menu.hidden && e.relatedTarget && !me_.contains(e.relatedTarget)) openMenu(false); });
   menu.addEventListener('keydown', (e) => {
-    const list = items();
-    const i = list.indexOf(document.activeElement);
-    const go = { ArrowDown: i + 1, ArrowUp: i - 1, Home: 0, End: list.length - 1 }[e.key];
+    const stops = items();
+    const i = stops.indexOf(document.activeElement);
+    const go = { ArrowDown: i + 1, ArrowUp: i - 1, Home: 0, End: stops.length - 1 }[e.key];
     if (go === undefined) return;
     e.preventDefault();
-    list[(go + list.length) % list.length]?.focus();
+    stops[(go + stops.length) % stops.length]?.focus();
   });
   // Capture, so Escape closes the menu before a page's own keys see it.
   addEventListener('keydown', (e) => {
