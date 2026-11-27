@@ -92,34 +92,46 @@ func TestConversationFollowsMovedBuyer(t *testing.T) {
 	}
 }
 
-// Payment rows recorded with the raw payload dump lose it on the next open.
+// Payment rows recorded with the raw payload dump are rewritten to the new
+// form on open, keeping the buyer's note, and nothing else changes.
 func TestOpenDropsStoredPaymentPayload(t *testing.T) {
+	const dump = "\n\nRetained payment details:\n"
+	rows := []struct{ kind, text, want string }{
+		{"payment", "Reported amount: INR 65.00 (unverified)." + dump + `{"transactionData": "AQAAAJEB"}`, "Paid INR 65.00"},
+		{"payment", "Reported amount: INR 1200.50 (unverified)." + dump + `{"noteMessage": {"extendedTextMessage": {"text": " table 3 "}}, "transactionData": "AQ"}`, "Paid INR 1200.50\nNote: table 3"},
+		{"payment", "Reported amount: INR 40.00 (unverified)." + dump + `{"noteMessage": {"conversation": "lunch"}}`, "Paid INR 40.00\nNote: lunch"},
+		{"payment", "Amount unavailable." + dump + `{"noteMessage": {"extendedTextMessage": {"text": ""}}}`, "Amount unavailable."},
+		{"payment", "Reported amount: INR 65.00 (unverified)." + dump + "{not json", "Paid INR 65.00"},
+		// New rows, including a note a buyer typed to look like the old dump.
+		{"payment", "Paid INR 65.00\nNote: x" + dump + "y", "Paid INR 65.00\nNote: x" + dump + "y"},
+		{"payment", "Amount unavailable.", "Amount unavailable."},
+		{"text", "hi" + dump + "kept", "hi" + dump + "kept"},
+	}
 	path := filepath.Join(t.TempDir(), "test.db")
 	s, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := t.Context()
-	old := SaleMessage{ID: "p", At: 1, Kind: "payment", Text: "Reported amount: INR 65.00 (unverified).\n\nRetained payment details:\n{\"transactionData\": \"AQAAAJEB\"}"}
-	text := SaleMessage{ID: "t", At: 2, Kind: "text", Text: "hi\n\nRetained payment details:\nkept"}
-	for _, m := range []SaleMessage{old, text} {
-		if err := s.AddSaleMessage(ctx, 1, "buyer", m); err != nil {
+	for i, r := range rows {
+		if err := s.AddSaleMessage(ctx, 1, "buyer", SaleMessage{ID: string(rune('a' + i)), At: int64(i), Kind: r.kind, Text: r.text}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	s.Close()
-	if s, err = Open(path); err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	got, err := s.SaleMessages(ctx, 1, "buyer")
-	if err != nil || len(got) != 2 {
-		t.Fatalf("messages: %v %v", got, err)
-	}
-	if got[0].Text != "Paid INR 65.00" {
-		t.Fatalf("payment text = %q", got[0].Text)
-	}
-	if got[1].Text != text.Text {
-		t.Fatalf("non-payment text changed: %q", got[1].Text)
+	for range 2 { // the second open must change nothing
+		if s, err = Open(path); err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.SaleMessages(ctx, 1, "buyer")
+		s.Close()
+		if err != nil || len(got) != len(rows) {
+			t.Fatalf("messages: %v %v", got, err)
+		}
+		for i, r := range rows {
+			if got[i].Text != r.want {
+				t.Errorf("row %d = %q, want %q", i, got[i].Text, r.want)
+			}
+		}
 	}
 }

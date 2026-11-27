@@ -1360,8 +1360,11 @@ function payCard(m) {
   const foot = el('div', 'cv-pay-foot');
   const what = el('div', 'cv-pay-what');
   what.append(el('span', '', m.from_me ? 'Sent by you' : 'Sent to you'), el('small', '', 'WhatsApp Pay'));
-  foot.append(el('span', 'cv-pay-icon', '₹'), what, el('time', 'cv-pay-at', hm(m.at)));
+  const icon = el('span', 'cv-pay-icon', '₹');
+  icon.setAttribute('aria-hidden', 'true');
+  foot.append(icon, what, el('time', 'cv-pay-at', hm(m.at)));
   card.append(top, foot);
+  card.setAttribute('role', 'group');
   card.setAttribute('aria-label', `WhatsApp Pay, ${top.firstChild.textContent}${note ? ', note: ' + note : ''}`);
   return card;
 }

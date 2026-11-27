@@ -35,6 +35,15 @@ func TestConversationPaymentHidesPayload(t *testing.T) {
 	}
 }
 
+func TestConversationPaymentPlainNote(t *testing.T) {
+	text := conversationPaymentText(&waE2E.Message{SendPaymentMessage: &waE2E.SendPaymentMessage{
+		NoteMessage: &waE2E.Message{Conversation: proto.String(" dinner ")},
+	}})
+	if text != "Amount unavailable.\nNote: dinner" {
+		t.Fatalf("payment text = %q", text)
+	}
+}
+
 // A new buyer's first DM is recorded even when the offer handler admits
 // them only after the recorder's first lookup.
 func TestConversationWaitsForAdmission(t *testing.T) {

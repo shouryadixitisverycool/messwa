@@ -138,10 +138,17 @@ func (m *sellManager) recordConversation(peer, alt, id string, at time.Time, fro
 func conversationPaymentText(msg *waE2E.Message) string {
 	pay := msg.GetSendPaymentMessage()
 	text := "Amount unavailable."
-	if p, err := decodePaymentPayload(pay.GetTransactionData()); err == nil && p != nil && p.Amount != "" {
+	p, err := decodePaymentPayload(pay.GetTransactionData())
+	if err == nil && p != nil && p.Amount != "" {
 		text = fmt.Sprintf("Paid %s %s", p.Currency, p.Amount)
 	}
-	if note := strings.TrimSpace(pay.GetNoteMessage().GetExtendedTextMessage().GetText()); note != "" {
+	// The note is usually in noteMessage; Android UPI payments may carry
+	// it only inside the payload, as interopNote.
+	note := strings.TrimSpace(messageText(pay.GetNoteMessage()))
+	if note == "" && p != nil && p.Note != nil {
+		note = strings.TrimSpace(*p.Note)
+	}
+	if note != "" {
 		text += "\nNote: " + note
 	}
 	return text
