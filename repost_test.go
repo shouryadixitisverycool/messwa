@@ -427,7 +427,7 @@ func TestSellTaskRepostsPauseWhileBuyerHoldsTurn(t *testing.T) {
 		}
 
 		// Once A's turn lapses, reposting resumes.
-		time.Sleep(payTurn + repostCheck)
+		time.Sleep(payTurn + payGrace + repostCheck)
 		synctest.Wait()
 		if p := groupPosts(f.conn, f.group); len(p) != 2 {
 			t.Fatalf("did not repost after buyer turn lapsed: %+v", p)

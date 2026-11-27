@@ -418,7 +418,7 @@ func TestPoolStaysOpenWhileOneMealFreeThenPausesWhenFull(t *testing.T) {
 		}
 
 		// B lets their turn lapse; C wakes up on the second task and hears 60.
-		time.Sleep(payTurn + time.Second)
+		time.Sleep(payTurn + payGrace + time.Second)
 		settle()
 		if toC := texts(sentTo(f.conn.messages(), buyerC)); len(toC) != 1 || toC[0] != "60" {
 			t.Fatalf("C got %q after B's turn lapsed", toC)

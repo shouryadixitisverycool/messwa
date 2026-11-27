@@ -164,6 +164,69 @@ func TestScreenshotPartialPayerKeepsTurn(t *testing.T) {
 	})
 }
 
+// TestScreenshotOnTheDeadline is the 27 Nov case: the buyer's screenshot
+// carried the same second as their turn's deadline and was dropped. The
+// turn now runs payGrace past the deadline, so it sells the meal, even
+// when the reader takes longer than the grace to answer.
+func TestScreenshotOnTheDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f, r := screenshotFixture(t, map[string]payshot.Receipt{"late": paidShot(35, "SHOURYA DIXIT", "633176597383")}, nil)
+		gate := make(chan struct{})
+		r.gates = map[string]chan struct{}{"late": gate}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		id := f.startPaying(ctx, buyerA)
+		f.conn.emit(f.reply(buyerB, "me too"))
+		synctest.Wait()
+		until := buyerState(t, f, id, buyerA).PayUntil
+		if until.IsZero() {
+			t.Fatal("A has no payment deadline")
+		}
+		time.Sleep(time.Until(until))
+		f.shot(buyerA, "late")
+		time.Sleep(30 * time.Second)
+		synctest.Wait()
+		close(gate)
+		synctest.Wait()
+		if got := texts(sentTo(f.conn.messages(), buyerA)); len(got) == 0 || got[len(got)-1] != "[QR]" {
+			t.Fatalf("A's screenshot on the deadline got %q, want the meal QR", got)
+		}
+		for _, m := range texts(sentTo(f.conn.messages(), buyerB)) {
+			if m == "ok 35" {
+				t.Fatalf("B was asked to pay while A's screenshot was being read")
+			}
+		}
+		if task := f.task(id); task.State != store.TaskSold {
+			t.Fatalf("task is %s", task.State)
+		}
+	})
+}
+
+// TestScreenshotAfterTheGrace drops a screenshot sent once payGrace has
+// run out too: the turn has passed to the next buyer.
+func TestScreenshotAfterTheGrace(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f, _ := screenshotFixture(t, map[string]payshot.Receipt{"late": paidShot(35, "SHOURYA DIXIT", "1")}, nil)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		id := f.startPaying(ctx, buyerA)
+		f.conn.emit(f.reply(buyerB, "me too"))
+		synctest.Wait()
+		time.Sleep(time.Until(buyerState(t, f, id, buyerA).PayUntil.Add(payGrace)))
+		f.shot(buyerA, "late")
+		time.Sleep(10 * time.Second)
+		synctest.Wait()
+		if got := texts(sentTo(f.conn.messages(), buyerA)); slices.Contains(got, "[QR]") {
+			t.Fatalf("A got the meal QR after the grace: %q", got)
+		}
+		if got := texts(sentTo(f.conn.messages(), buyerB)); !slices.Contains(got, "ok 35") {
+			t.Fatalf("B wasn't asked to pay after A's turn: %q", got)
+		}
+		cancel()
+		synctest.Wait()
+	})
+}
+
 // TestScreenshotNotAPayment answers a photo, a failed payment and a
 // payment to someone else with "cant see a payment", at most twice, and
 // sends no meal QR.

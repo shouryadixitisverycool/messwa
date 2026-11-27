@@ -1174,7 +1174,7 @@ func TestNegotiationResumesPausedBuyersAfterHolderTimesOut(t *testing.T) {
 		}
 
 		// A lets the 2-minute turn expire; B immediately wakes up and is asked to pay 50.
-		time.Sleep(payTurn + time.Second)
+		time.Sleep(payTurn + payGrace + time.Second)
 		settle()
 		if a := buyerState(t, f, id, buyerA); a.State != store.BuyerTimedOut {
 			t.Fatalf("A = %+v", a)
@@ -1231,7 +1231,7 @@ func TestNegotiationPausedTimersFrozenDuringTurn(t *testing.T) {
 		}
 
 		// A's turn expires; B still has ~30s left before their nudge fires.
-		time.Sleep(10 * time.Second)
+		time.Sleep(payGrace + 10*time.Second)
 		synctest.Wait()
 		if toB := texts(sentTo(f.conn.messages(), buyerB)); len(toB) != 1 {
 			t.Fatalf("B was nudged too early after unpause: %q", toB)
