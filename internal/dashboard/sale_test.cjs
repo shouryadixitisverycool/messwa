@@ -84,3 +84,25 @@ test('labels name the extra after its meal', () => {
   assert.equal(mealLabel({ meal: 'dinner', base_meal: 'dinner' }), 'dinner');
   assert.equal(mealLabel({ meal: 'dinner#f1', base_meal: 'dinner', for_friend: true, friend: 'Ravi' }), 'dinner · for Ravi');
 });
+
+// payCard parses the text Go stores for a WhatsApp Pay message, so this
+// pins that format. el and hm come from other scripts; stub just enough.
+const node = (tag, cls, text) => ({
+  tag, cls, textContent: text ?? '', children: [], attrs: {},
+  append(...c) { this.children.push(...c); },
+  setAttribute(k, v) { this.attrs[k] = v; },
+  get firstChild() { return this.children[0]; },
+});
+const payCtx = vm.createContext({ setInterval() {}, el: node, hm: () => '19:44' });
+vm.runInContext(fs.readFileSync(path.join(__dirname, 'static/sale.js'), 'utf8') + '\nthis.payCard = payCard;', payCtx);
+const texts = (n) => [n.textContent, ...n.children.flatMap(texts)].filter(Boolean);
+
+test('a payment draws as a card with its amount and note', () => {
+  const card = payCtx.payCard({ text: 'Paid INR 1200.00\nNote: table 3\nby the door', from_me: false, at: 1 });
+  assert.deepEqual(texts(card), ['₹1,200', 'table 3\nby the door', '₹', 'Sent to you', 'WhatsApp Pay', '19:44']);
+  assert.equal(payCtx.payCard({ text: 'Paid INR 65.50', at: 1 }).children[0].children[0].textContent, '₹65.50');
+});
+
+test('a payment with no readable amount stays plain text', () => {
+  assert.equal(payCtx.payCard({ text: 'Amount unavailable.\nNote: lunch', at: 1 }), null);
+});
