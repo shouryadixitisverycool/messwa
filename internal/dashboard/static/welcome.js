@@ -455,7 +455,7 @@ async function getCode(phone) {
 
 async function chip(id) {
   if (sending) return;
-  if (id === 'keep') { S.edit = null; replay = true; return render(); }
+  if (id === 'keep') { setErr(S.edit); S.edit = null; replay = true; return render(); }
   if (id === 'phone' || id === 'qr') {
     S.codeMode = id === 'phone';
     setErr('code');
@@ -467,13 +467,14 @@ async function chip(id) {
   if (k === 'handoff' || k === 'buyers') {
     // Picked straight away, so the chat moves on while it saves. A failed
     // save takes the answer back and asks again (see saveSell).
-    if (S.edit === k) replay = true;
-    S.sell = { ...S.sell, [k]: v };
+    if (S.edit === k || S.errors[k]) replay = true;
+    // Until it saves, the admins can't be asked.
+    S.sell = { ...S.sell, [k]: v, pending: true };
     ack(k);
     S.edit = null;
     setErr(k);
     render();
-    return saveSell();
+    return saveSell(null, k);
   }
   if (id === 'ask') {
     setErr('ask');
@@ -576,7 +577,7 @@ function write(fn) {
 // A save that fails while a newer one waits does nothing: the newer one
 // carries the same answers. The newest one failing puts back what the
 // server has, and asks again whatever didn't save.
-function saveSell(groups) {
+function saveSell(groups, step = 'groups') {
   const seq = ++sellSeq;
   return write(async () => {
     const g = S.sell;
@@ -591,6 +592,8 @@ function saveSell(groups) {
       if (seq === sellSeq) {
         S.sell = d;
         for (const k of ['groups', 'handoff', 'buyers']) setErr(k);
+        // WhatsApp was reconnecting: look at the groups again soon.
+        if (!d.checked) { clearTimeout(sellTimer); sellTimer = setTimeout(loadSell, 3000); }
       }
     } catch (x) {
       if (seq !== sellSeq) return;
@@ -599,7 +602,9 @@ function saveSell(groups) {
       const groupsLost = JSON.stringify(postingOrder(S.sell.groups).map((y) => y.jid)) !== JSON.stringify(postingOrder(was.groups).map((y) => y.jid));
       S.sell = { ...S.sell, groups: was.groups, handoff: was.handoff, buyers: was.buyers, pending: false };
       for (const k of lost) { ack(k, false); setErr(k, x); }
-      if (groupsLost || !lost.length) setErr('groups', x);
+      if (groupsLost) setErr('groups', x);
+      // Nothing changed on screen: say so where it was asked.
+      if (!groupsLost && !lost.length) { if (step !== 'groups') ack(step, false); setErr(step, x); }
     }
     render();
   });
