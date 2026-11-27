@@ -138,8 +138,9 @@ function render() {
   // registrations only.
   if (!D.owner) {
     $('title').textContent = 'My meals';
-    $('sub').textContent = 'Your registrations: eaten, wasted and still open';
-    document.title = 'My meals · Mess Auction House';
+    const here = document.querySelector('.shell-here');
+    if (here) here.textContent = 'My meals';
+    document.title = 'My meals · messwa';
   }
   for (const id of ['regSec', 'pcSec', 'earnSec']) $(id).hidden = !D.owner;
   for (const e of document.querySelectorAll('.own')) e.hidden = !D.owner;
@@ -888,15 +889,6 @@ function renderEarnings() {
 
 // ---------- boot ----------
 
-$('logo').append(svgEl(icon('ingot')));
-$('navIcon').append(svgEl(icon('prev')));
-$('insIcon').append(svgEl(icon('chart')));
-$('useIcon').append(svgEl(icon('check')));
-me().then((m) => {
-  userLink(m);
-  $('insLink').hidden = m.role !== 'admin';
-  $('useLink').hidden = m.role !== 'admin';
-}).catch(() => {});
 $('ledIcon').append(svgEl(icon('coin')));
 $('frIcon').append(svgEl(icon('coin')));
 $('frAdd').addEventListener('click', () => { if (D) openFriendForm(); });
@@ -914,6 +906,7 @@ new ResizeObserver(() => {
 addEventListener('keydown', (e) => {
   if (!modal.hidden) { if (e.key === 'Escape') closeModal(); return; }
   if (!D || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (document.body.classList.contains('shell-menu-open')) return;
   if (e.target.matches('input, select, textarea, [contenteditable="true"]') || e.target.closest('#insp')) return;
   if (e.key === 'ArrowLeft') $('pgPrev').click();
   if (e.key === 'ArrowRight') $('pgNext').click();

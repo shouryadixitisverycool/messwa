@@ -7,8 +7,6 @@
 // sends them to /api/settings. A value that matches the default isn't
 // saved, so it keeps following config.toml.
 
-$('logo').append(svgEl(icon('paper')));
-$('navIcon').append(svgEl(icon('prev')));
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const clone = (v) => JSON.parse(JSON.stringify(v));
@@ -978,7 +976,6 @@ $('varHelp').addEventListener('click', (e) => { if (e.target === $('varHelp')) $
   const m = await me();
   const admin = m.role === 'admin';
   isAdmin = admin;
-  $('role').textContent = admin ? 'Selling tabs are yours.' : 'Selling tabs are for your own WhatsApp.';
   paintTiles(m);
   try {
     const r = await fetch('api/settings', { cache: 'no-store' });

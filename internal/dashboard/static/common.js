@@ -27,7 +27,10 @@ const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : '');
 function keepScroll(fn) {
   if (window.scrollY <= 0) return fn();
   const fixed = (n) => { for (; n; n = n.parentElement) if (getComputedStyle(n).position === 'fixed') return true; return false; };
-  const hit = document.elementsFromPoint(innerWidth / 2, 1).find((n) => !fixed(n));
+  // Probe just under the sticky shell bar, not the bar itself.
+  const bar = document.querySelector('.shell');
+  const y = Math.max(1, Math.ceil(bar ? bar.getBoundingClientRect().bottom : 0) + 1);
+  const hit = document.elementsFromPoint(innerWidth / 2, y).find((n) => !fixed(n) && !n.closest('.shell'));
   const pins = [];
   for (let n = hit; n && n !== document.body; n = n.parentElement) {
     if (n.id) pins.push([n, n.getBoundingClientRect().top]);
@@ -662,15 +665,6 @@ async function send(method, path, body) {
   const data = text ? JSON.parse(text) : {};
   if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
   return data;
-}
-
-// userLink fills the header's account link with the user's name.
-function userLink(m) {
-  const a = $('accountLink');
-  if (!a) return;
-  a.replaceChildren(el('span', '', ''), m.name);
-  a.firstChild.append(svgEl(icon('paper')));
-  a.title = m.role === 'admin' ? 'Your account (admin)' : 'Your account';
 }
 
 // The shared credit keeps every dashboard page in the same pixel style.

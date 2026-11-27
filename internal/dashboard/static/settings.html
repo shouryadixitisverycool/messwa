@@ -5,29 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#0b0d12">
-<title>Settings · Mess Auction House</title>
+<title>Settings · messwa</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preload" href="silkscreen-700.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="shell.css">
 <link rel="stylesheet" href="account.css">
 <link rel="stylesheet" href="settings.css">
 <script src="common.js" defer></script>
+<script src="shell.js" defer></script>
 <script src="settings.js" defer></script>
 </head>
-<body>
+<body data-page="settings">
 <div class="app account settings">
-  <header class="top">
-    <div class="brand">
-      <span class="logo" id="logo"></span>
-      <div>
-        <h1>Settings</h1>
-        <p class="sub" id="role">&nbsp;</p>
-      </div>
-      <nav class="navs" aria-label="Pages">
-        <a class="nav-link" href="./" title="Back to the listings"><span id="navIcon"></span>Auction house</a>
-      </nav>
-    </div>
-  </header>
+  <div class="page-head">
+    <h1 class="page-title">Settings</h1>
+  </div>
 
   <div class="set-body">
   <nav class="set-tabs" id="tabs" aria-label="Settings sections" hidden>

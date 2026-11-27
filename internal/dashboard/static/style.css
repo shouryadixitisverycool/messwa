@@ -20,6 +20,91 @@
   --cols: 9;
   --rows: 5;
   --sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  /* ---------- calm tokens ----------
+     The Sell side (Home, Money, Settings, Account) and the app shell use
+     these. Buy keeps the arcade look above: Pixel font, slots, gold.
+     Same dark family as --bg and --panel, with less contrast and no glow.
+
+     Type:    --t-xs 12, --t-sm 13, --t-md 15 (body), --t-lg 18,
+              --t-xl 24 (page titles), --t-2xl 32 (one big number).
+              --lh-tight for headings and numbers, --lh-body for text.
+              --w-reg / --w-med / --w-bold.
+     Space:   --sp-1 … --sp-8 on a 4px base (4 8 12 16 24 32 40 48).
+     Radius:  --r-sm 8, --r-md 12, --r-lg 16, --r-pill.
+     Surface: --calm-bg (page), --calm-1 (card), --calm-2 (raised or
+              hover), --calm-line (hairline), --calm-line-2 (stronger).
+     Text:    --calm-text, --calm-muted (secondary), --calm-dim (hints).
+     Status:  --calm-ok, --calm-warn, --calm-bad, each with a -bg tint
+              for a pill or card wash. --calm-accent marks the current
+              thing (selected tab, focus ring).
+     Motion:  --ease-out for things arriving, --ease-in-out for things
+              moving, --ease-spring for a small overshoot on press.
+              --dur-1 120ms (hover, press), --dur-2 200ms (menus, tabs),
+              --dur-3 360ms (cards arriving). prefers-reduced-motion
+              turns them all to 0.
+     Shell:   --shell-h (top bar), --tabbar-h (phone tab bar, 0 on wide
+              screens). Set by shell.css on pages with the shell:
+              --shell-stick, what a sticky top: must clear (the bar
+              where it sticks, else 0), and --tabbar-top, what a fixed or
+              sticky bottom: must clear (the tab bar and the safe area
+              under it, else 0). */
+  --t-xs: 12px;
+  --t-sm: 13px;
+  --t-md: 15px;
+  --t-lg: 18px;
+  --t-xl: 24px;
+  --t-2xl: 32px;
+  --lh-tight: 1.2;
+  --lh-body: 1.5;
+  --w-reg: 400;
+  --w-med: 550;
+  --w-bold: 650;
+
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 40px;
+  --sp-8: 48px;
+
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-pill: 999px;
+
+  --calm-bg: #0b0d12;
+  --calm-1: #12151c;
+  --calm-2: #181c25;
+  --calm-line: #1f2430;
+  --calm-line-2: #2a303d;
+  --calm-text: #e6e9ef;
+  --calm-muted: #9199a9;
+  --calm-dim: #5c6475;
+  --calm-accent: #c9d3e6;
+  --calm-ok: #4cc38a;
+  --calm-ok-bg: rgba(76, 195, 138, .12);
+  --calm-warn: #e9b44c;
+  --calm-warn-bg: rgba(233, 180, 76, .12);
+  --calm-bad: #ec6a5c;
+  --calm-bad-bg: rgba(236, 106, 92, .12);
+
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --ease-in-out: cubic-bezier(.65, 0, .35, 1);
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --dur-1: 120ms;
+  --dur-2: 200ms;
+  --dur-3: 360ms;
+
+  --shell-h: 56px;
+  --tabbar-h: 0px;
+  --shell-stick: 0px;
+  --tabbar-top: 0px;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-1: 0ms; --dur-2: 0ms; --dur-3: 0ms; }
 }
 
 * { box-sizing: border-box; }
@@ -76,7 +161,6 @@ svg { display: block; }
 }
 .brand { display: flex; gap: 12px; align-items: center; }
 /* On wide screens the links sit in the brand row; phones get their own strip. */
-.navs { display: contents; }
 .logo { width: 38px; height: 38px; filter: drop-shadow(0 4px 10px rgba(255, 197, 61, .3)); }
 .brand h1 { margin: 0; font: 700 17px Pixel, var(--sans); letter-spacing: .4px; }
 .brand .sub { margin: 1px 0 0; color: var(--muted); font-size: 12px; }
@@ -574,7 +658,6 @@ a.copy.linked:hover .copy-go { color: var(--gold); }
 @media (max-width: 1200px) {
   .top { grid-template-columns: 1fr; gap: 14px; }
   .brand { flex-wrap: wrap; row-gap: 10px; min-width: 0; }
-  .navs { display: flex; flex: 1 1 100%; flex-wrap: wrap; gap: 6px; }
   .nav-link { margin-left: 0; }
 }
 @media (max-width: 640px) {
@@ -584,13 +667,6 @@ a.copy.linked:hover .copy-go { color: var(--gold); }
   .brand { flex: 1 1 100%; min-width: 0; flex-wrap: wrap; row-gap: 12px; }
   .brand h1 { font-size: 15px; }
   .logo { width: 32px; height: 32px; }
-  /* One swipeable row of links, edge to edge, under the title. */
-  .navs {
-    display: flex; flex: 0 0 calc(100% + 20px); flex-wrap: nowrap; gap: 6px; margin: 0 -10px; padding: 0 10px 2px;
-    overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain;
-  }
-  .navs::-webkit-scrollbar { display: none; }
-  .navs .nav-link { flex: none; margin-left: 0; height: 34px; padding: 0 12px 1px; font-size: 9px; }
   .chest { padding: 10px 10px 12px; border-radius: 16px; }
   .live { display: none; }
   .head-meta { display: none; }

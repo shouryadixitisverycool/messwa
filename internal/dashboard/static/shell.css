@@ -1,0 +1,165 @@
+/* The app shell (shell.js): top bar, Home / Buy / Money tabs, avatar menu.
+   Calm on every page, built only from the calm tokens in style.css. Buy's
+   tab alone picks up the arcade gold, so the hot side reads as hot. */
+
+/* The bar sticks on wide screens, so sticky things and #anchors clear it. */
+body.has-shell { --shell-stick: var(--shell-h); }
+html:has(body.has-shell) { scroll-padding-top: calc(var(--shell-h) + 8px); }
+
+.shell {
+  position: sticky; top: 0; z-index: 45;
+  background: color-mix(in srgb, var(--calm-bg) 82%, transparent);
+  border-bottom: 1px solid var(--calm-line);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+}
+.shell-in {
+  width: min(100%, 1640px); height: var(--shell-h); margin: 0 auto; padding: 0 20px;
+  display: flex; align-items: center; gap: var(--sp-5);
+}
+.shell-ic { width: 20px; height: 20px; flex: none; }
+
+.shell-brand {
+  display: inline-flex; align-items: center; gap: var(--sp-2); flex: none;
+  color: var(--calm-text); text-decoration: none; border-radius: var(--r-sm);
+}
+.shell-logo { width: 24px; height: 24px; }
+.shell-logo svg { width: 100%; height: 100%; }
+.shell-name { font: var(--w-bold) var(--t-md)/1 var(--sans); letter-spacing: -.01em; }
+.shell-here { display: none; }
+
+/* ---------- tabs ---------- */
+
+.shell-tabs { display: flex; gap: var(--sp-1); flex: 1; }
+.shell-tab {
+  position: relative; display: inline-flex; align-items: center; gap: var(--sp-2);
+  height: 36px; padding: 0 var(--sp-3); border-radius: var(--r-sm);
+  color: var(--calm-muted); text-decoration: none;
+  font: var(--w-med) var(--t-sm)/1 var(--sans);
+  transition: color var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out);
+}
+.shell-tab .shell-ic { width: 18px; height: 18px; }
+.shell-tab:hover { color: var(--calm-text); background: var(--calm-2); }
+.shell-tab[aria-current="page"] { color: var(--calm-text); background: var(--calm-2); }
+/* The underline slides in under the current tab. */
+.shell-tab::after {
+  content: ""; position: absolute; left: var(--sp-3); right: var(--sp-3); bottom: -10px; height: 2px;
+  border-radius: 2px; background: var(--calm-accent);
+  transform: scaleX(0); transition: transform var(--dur-2) var(--ease-out);
+}
+.shell-tab[aria-current="page"]::after { transform: scaleX(1); }
+.shell-tab[data-tab="buy"][aria-current="page"] { color: var(--gold); }
+.shell-tab[data-tab="buy"][aria-current="page"]::after { background: var(--gold); box-shadow: 0 0 10px rgba(255, 197, 61, .5); }
+/* Alerts on Home, set by shellBadge. */
+.shell-tab.has-dot::before {
+  content: ""; position: absolute; top: 6px; left: 22px; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--calm-bad); box-shadow: 0 0 0 2px var(--calm-bg);
+}
+
+/* ---------- avatar menu ---------- */
+
+.shell-me { position: relative; flex: none; margin-left: auto; }
+.shell-avatar {
+  display: grid; place-items: center; width: 34px; height: 34px; padding: 0; cursor: pointer;
+  border-radius: 50%; border: 1px solid var(--calm-line-2); background: var(--calm-2);
+  color: var(--calm-text); font: var(--w-bold) var(--t-sm)/1 var(--sans);
+  transition: border-color var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-spring);
+}
+.shell-avatar:hover { border-color: var(--calm-muted); }
+.shell-avatar:active { transform: scale(.94); }
+.shell-avatar.here, .shell-avatar[aria-expanded="true"] { border-color: var(--calm-accent); }
+/* A small gold rim says the account is an admin's. */
+.shell-avatar.admin { box-shadow: 0 0 0 2px var(--calm-bg), 0 0 0 3px color-mix(in srgb, var(--gold) 55%, transparent); }
+
+.shell-menu {
+  position: absolute; top: calc(100% + var(--sp-2)); right: 0; min-width: 220px; padding: var(--sp-1);
+  border-radius: var(--r-md); border: 1px solid var(--calm-line-2); background: var(--calm-1);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .5);
+  transform-origin: top right; animation: shell-in var(--dur-2) var(--ease-out);
+}
+@keyframes shell-in { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
+.shell-who { display: flex; flex-direction: column; gap: 2px; padding: var(--sp-2) var(--sp-3) var(--sp-3); border-bottom: 1px solid var(--calm-line); margin-bottom: var(--sp-1); }
+.shell-who b { font: var(--w-bold) var(--t-sm)/var(--lh-tight) var(--sans); color: var(--calm-text); overflow-wrap: anywhere; }
+.shell-who span { font-size: var(--t-xs); color: var(--calm-dim); }
+.shell-item {
+  display: flex; align-items: center; gap: var(--sp-3); width: 100%; min-height: 38px; padding: 0 var(--sp-3);
+  border: 0; border-radius: var(--r-sm); background: none; cursor: pointer; text-align: left;
+  color: var(--calm-text); text-decoration: none; font: var(--w-reg) var(--t-sm)/1 var(--sans);
+}
+.shell-item .shell-ic { width: 18px; height: 18px; color: var(--calm-muted); }
+.shell-item:hover, .shell-item:focus-visible { background: var(--calm-2); }
+.shell-item[aria-current="page"] { background: var(--calm-2); }
+.shell-crown {
+  display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-3) var(--sp-3) var(--sp-1);
+  margin-top: var(--sp-1); border-top: 1px solid var(--calm-line);
+  font: var(--w-med) var(--t-xs)/1 var(--sans); color: var(--gold); letter-spacing: .02em;
+}
+.shell-crown .crown { width: 16px; height: 16px; }
+.shell-sep { height: 1px; margin: var(--sp-1) 0; background: var(--calm-line); }
+.shell-out { color: var(--calm-muted); }
+
+.shell a:focus-visible, .shell button:focus-visible { outline: 2px solid var(--calm-accent); outline-offset: 2px; }
+
+/* ---------- page heads ----------
+   Pages under the shell title themselves with one calm line, no subtitle.
+   Home and Buy have no visible title; they carry an h1.sr-only. */
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+.page-head { display: flex; align-items: center; gap: var(--sp-3); min-height: 32px; }
+.page-head > :last-child:not(.page-title) { margin-left: auto; }
+.page-title { margin: 0; flex: 1; min-width: 0; font: var(--w-bold) var(--t-xl)/var(--lh-tight) var(--sans); letter-spacing: -.015em; color: var(--calm-text); }
+
+/* ---------- phones ---------- */
+
+@media (max-width: 720px) {
+  :root { --shell-h: 52px; --tabbar-h: 60px; }
+  body.has-shell { --shell-stick: 0px; --tabbar-top: calc(var(--tabbar-h) + env(safe-area-inset-bottom)); }
+  /* Focus and #anchors stop above the tab bar, not behind it. */
+  html:has(body.has-shell) { scroll-padding-top: 0; scroll-padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 8px); }
+  /* No blur on the bar here: it would trap the fixed tab bar inside it. */
+  /* Relative, not sticky, and still on top so the avatar menu covers the page. */
+  .shell { position: relative; background: none; border-bottom: 0; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .shell-in { padding: 0 max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left)); gap: var(--sp-3); }
+  .shell-name { display: none; }
+  .shell-here { display: block; flex: 1; min-width: 0; font: var(--w-bold) var(--t-lg)/1 var(--sans); letter-spacing: -.01em; color: var(--calm-text); }
+  /* The bar names the page here, so the h1 stays for screen readers only,
+     and a head with nothing else in it takes no room. */
+  .page-head .page-title {
+    position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden;
+    clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+  }
+  .page-head { min-height: 0; }
+  .page-head:not(:has(> :not(.page-title))) { position: absolute; }
+
+  .shell-tabs {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 45;
+    height: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+    padding: 0 max(var(--sp-2), env(safe-area-inset-right)) env(safe-area-inset-bottom) max(var(--sp-2), env(safe-area-inset-left));
+    gap: 0; background: color-mix(in srgb, var(--calm-1) 88%, transparent);
+    border-top: 1px solid var(--calm-line);
+    backdrop-filter: blur(16px) saturate(140%); -webkit-backdrop-filter: blur(16px) saturate(140%);
+  }
+  .shell-tab {
+    flex: 1; flex-direction: column; justify-content: center; gap: 3px; height: 100%; padding: 0;
+    border-radius: 0; background: none; font-size: 11px;
+  }
+  .shell-tab:hover, .shell-tab[aria-current="page"] { background: none; }
+  .shell-tab .shell-ic { width: 22px; height: 22px; transition: transform var(--dur-2) var(--ease-spring); }
+  .shell-tab[aria-current="page"] .shell-ic { transform: translateY(-1px) scale(1.06); }
+  .shell-tab::after { left: 32%; right: 32%; top: 0; bottom: auto; }
+  .shell-tab.has-dot::before { top: 8px; left: calc(50% + 6px); }
+
+  body.has-shell { padding-bottom: var(--tabbar-top); }
+  body.has-shell .toast { bottom: calc(var(--tabbar-top) + 12px); }
+  /* --tabbar-top already holds the safe-area inset. */
+  body.has-shell .tray { padding-bottom: 12px; }
+}
+/* Money's live dot hides on phones (style.css), leaving its head empty.
+   Insights and Usage share the .sales class, so key on the page. */
+@media (max-width: 640px) {
+  body[data-page="money"] .page-head { position: absolute; }
+}

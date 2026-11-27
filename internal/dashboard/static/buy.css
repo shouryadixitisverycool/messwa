@@ -1,0 +1,21 @@
+/* The Buy tab: the market board in its arcade look (style.css), under the
+   calm shell. Only page layout lives here. */
+
+.app.buy { padding-top: 16px; gap: 14px; }
+.app.buy .day { padding: 0 2px 14px; }
+
+/* The key legend, opened with ? or the KEYS button. */
+.app.buy .hint {
+  margin-top: -4px; padding: 10px 14px; border-radius: 12px;
+  background: var(--panel); border: 1px solid var(--line);
+  animation: keys-in var(--dur-2) var(--ease-out);
+}
+@keyframes keys-in { from { opacity: 0; transform: translateY(-4px); } }
+.ctl.help[aria-expanded="true"] { border-color: color-mix(in srgb, var(--gold) 55%, transparent); }
+.ctl.help[aria-expanded="true"] .q { color: var(--gold); }
+
+@media (max-width: 640px) {
+  .app.buy { padding-top: 8px; }
+  /* style.css hides the legend on phones; ? from a keyboard still opens it. */
+  .app.buy .hint:not([hidden]) { display: flex; }
+}

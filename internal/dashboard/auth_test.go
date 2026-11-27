@@ -149,7 +149,12 @@ func TestSignIn(t *testing.T) {
 	}
 
 	// Without a session, pages go to sign-in and the API refuses.
-	for path, want := range map[string]string{"/": "/login.html", "/sales.html": "/login.html?next=sales.html", "/account.html": "/login.html?next=account.html"} {
+	for path, want := range map[string]string{
+		"/":             "/login.html",
+		"/sales.html":   "/login.html?next=sales.html",
+		"/buy.html":     "/login.html?next=buy.html",
+		"/account.html": "/login.html?next=account.html",
+	} {
 		res, err := anon.Get(d.URL + path)
 		if err != nil {
 			t.Fatal(err)
@@ -182,6 +187,11 @@ func TestSignIn(t *testing.T) {
 	res = admin.get(t, "/", nil)
 	if res.StatusCode != 200 || res.Header.Get("Cache-Control") != "private, no-cache" {
 		t.Errorf("signed-in board: %d %q", res.StatusCode, res.Header.Get("Cache-Control"))
+	}
+	member := d.as(t, accounts.Member)
+	res = member.get(t, "/buy.html", nil)
+	if res.StatusCode != 200 || res.Header.Get("Cache-Control") != "private, no-cache" {
+		t.Errorf("signed-in buy: %d %q", res.StatusCode, res.Header.Get("Cache-Control"))
 	}
 
 	// The cookie can't be read by scripts or sent cross-site.

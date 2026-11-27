@@ -497,11 +497,6 @@ function renderPrice(users) {
 
 // ---------- boot ----------
 
-$('logo').append(svgEl(icon('check')));
-$('navIcon').append(svgEl(icon('prev')));
-$('salesIcon').append(svgEl(icon('coin')));
-$('insIcon').append(svgEl(icon('chart')));
-me().then(userLink).catch(() => {});
 $('ovIcon').append(svgEl(icon('paper')));
 $('dyIcon').append(svgEl(icon('chart')));
 $('usIcon').append(svgEl(icon('coin')));

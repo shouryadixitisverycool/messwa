@@ -5,34 +5,24 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#0b0d12">
-<title>Usage · Mess Auction House</title>
+<title>Usage · messwa</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preload" href="silkscreen-700.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="shell.css">
 <link rel="stylesheet" href="sales.css">
 <link rel="stylesheet" href="insights.css">
 <link rel="stylesheet" href="usage.css">
 <script src="common.js" defer></script>
+<script src="shell.js" defer></script>
 <script src="usage.js" defer></script>
 <script src="usage-live.js" defer></script>
 </head>
-<body>
+<body data-page="usage">
 <div class="app sales insights usage">
-  <header class="top">
-    <div class="brand">
-      <span class="logo" id="logo"></span>
-      <div>
-        <h1>Usage</h1>
-        <p class="sub">How everyone is using messwa · admins only</p>
-      </div>
-      <nav class="navs" aria-label="Pages">
-        <a class="nav-link" href="./" title="Back to the listings"><span id="navIcon"></span>Auction house</a>
-        <a class="nav-link" href="sales.html" title="Who you sold to, and for how much"><span id="salesIcon"></span>My sales</a>
-        <a class="nav-link" href="insights.html" title="What sells, when, and who's selling"><span id="insIcon"></span>Insights</a>
-        <a class="nav-link" href="account.html" id="accountLink" title="Your account">Account</a>
-      </nav>
-    </div>
-  </header>
+  <div class="page-head">
+    <h1 class="page-title">Usage</h1>
+  </div>
 
   <div class="filters" aria-label="Filters">
     <div class="wins" id="fRange" aria-label="Range"></div>

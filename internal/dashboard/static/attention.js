@@ -51,7 +51,12 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   box.append(head, list, more, note);
   const host = document.getElementById('attnHost');
   if (host) host.append(box);
-  else document.querySelector('.top').after(box);
+  else {
+    const pageHead = document.querySelector('.app .page-head');
+    // After the page's heading, so screen readers meet the title first.
+    const heading = pageHead || document.querySelector('.app > h1');
+    if (heading) heading.after(box); else document.querySelector('.app')?.prepend(box);
+  }
 
   let open = false; // the folded rows are showing
   more.onclick = () => { open = !open; draw(); };
@@ -87,7 +92,10 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     const v = await r.json();
     if (openSaleBuyer(v, buyer)) return;
     if (v.state === 'active') {
-      if (!N) await loadNudge(true);
+      // The ledger may be missing or stale (Buy never refreshes it), so
+      // fetch it again when the sale isn't in it.
+      if (openTaskMenu(v)) return;
+      await loadNudge(true);
       if (openTaskMenu(v)) return;
     }
     throw new Error(v.state === 'active' ? 'Nobody has answered this sale yet.' : 'Nobody answered this sale before it ended.');

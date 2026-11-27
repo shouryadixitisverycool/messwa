@@ -5,38 +5,26 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#0b0d12">
-<title>Insights · Mess Auction House</title>
+<title>Insights · messwa</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preload" href="silkscreen-700.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="shell.css">
 <link rel="stylesheet" href="sales.css">
 <link rel="stylesheet" href="insights.css">
 <script src="common.js" defer></script>
+<script src="shell.js" defer></script>
 <script src="insights.js" defer></script>
 </head>
-<body>
+<body data-page="insights">
 <div class="app sales insights">
-  <header class="top">
-    <div class="brand">
-      <span class="logo" id="logo"></span>
-      <div>
-        <h1>Market insights</h1>
-        <p class="sub">What sells, when, and who's selling</p>
-      </div>
-      <div class="navrow">
-        <nav class="navs" aria-label="Pages">
-          <a class="nav-link" href="./" title="Back to the listings"><span id="navIcon"></span>Auction house</a>
-          <a class="nav-link" href="sales.html" title="Who you sold to, and for how much"><span id="salesIcon"></span>My sales</a>
-          <a class="nav-link" href="usage.html" title="How everyone is using messwa"><span id="useIcon"></span>Usage</a>
-          <a class="nav-link" href="account.html" id="accountLink" title="Your account">Account</a>
-        </nav>
-        <div class="fbar">
-          <button class="win ftoggle" id="fToggle" type="button" aria-label="Filters" title="Filters" aria-haspopup="menu" aria-expanded="false" aria-controls="fMenu"><span id="fIcon"></span></button>
-          <div class="fmenu" id="fMenu" role="menu" aria-label="Filters" hidden></div>
-        </div>
-      </div>
+  <div class="page-head">
+    <h1 class="page-title">Insights</h1>
+    <div class="fbar">
+      <button class="win ftoggle" id="fToggle" type="button" aria-label="Filters" title="Filters" aria-haspopup="menu" aria-expanded="false" aria-controls="fMenu"><span id="fIcon"></span></button>
+      <div class="fmenu" id="fMenu" role="menu" aria-label="Filters" hidden></div>
     </div>
-  </header>
+  </div>
 
   <p class="notice" id="notice" hidden></p>
 

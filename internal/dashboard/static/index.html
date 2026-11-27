@@ -5,14 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#0b0d12">
-<title>Mess Auction House</title>
+<title>messwa</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preload" href="silkscreen-700.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="shell.css">
 <link rel="stylesheet" href="sale.css">
 <link rel="stylesheet" href="sales.css">
 <link rel="stylesheet" href="home.css">
 <script src="common.js" defer></script>
+<script src="shell.js" defer></script>
 <link rel="stylesheet" href="attention.css">
 <script src="attention.js" defer></script>
 <script src="sell.js" defer></script>
@@ -22,27 +24,14 @@
 <script src="widgets.js" defer></script>
 <script src="home.js" defer></script>
 </head>
-<body>
-<div class="app">
-  <header class="top">
-    <div class="brand">
-      <span class="logo" id="logo"></span>
-      <div>
-        <h1>Mess Auction House</h1>
-        <p class="sub" id="sub">Buy it now</p>
-      </div>
-      <nav class="navs" aria-label="Pages">
-        <a class="nav-link" href="sales.html" id="salesLink" title="Who you sold to, and for how much"><span id="navIcon"></span><b id="salesLabel">My sales</b></a>
-        <a class="nav-link" href="insights.html" id="insLink" title="What sells, when, and who's selling" hidden><span id="insIcon"></span>Insights</a>
-        <a class="nav-link" href="usage.html" id="useLink" title="How everyone is using messwa" hidden><span id="useIcon"></span>Usage</a>
-        <a class="nav-link" href="settings.html" id="settingsBtn" title="Settings"><span id="settingsIcon"></span>Settings</a>
-        <a class="nav-link" href="account.html" id="accountLink" title="Your account">Account</a>
-      </nav>
-    </div>
-    <div class="day" id="day">
-      <div class="track" id="track"></div>
-    </div>
-  </header>
+<body data-page="home">
+<!-- Home. For now it keeps the widget column (home.js), which the new
+     Home replaces. The market board moved to buy.html. -->
+<div class="app home">
+  <h1 class="sr-only">Home</h1>
+  <div class="day" id="day">
+    <div class="track" id="track"></div>
+  </div>
 
   <a class="setup-warn" id="noGroups" href="settings.html#offer" hidden><b>Your offers have nowhere to go.</b> Pick the WhatsApp groups to post in before you sell. <span class="go">Pick groups &rsaquo;</span></a>
   <a class="setup-warn" id="noUPI" href="settings.html#buyers" hidden><b>Buyers have no UPI QR to pay on.</b> Add your UPI ID and the bot sends each buyer a QR for the agreed price. <span class="go">Add UPI &rsaquo;</span></a>
@@ -66,52 +55,6 @@
     <button class="home-btn gold" id="homeEmptyEdit" type="button">+ ADD WIDGETS</button>
   </div>
 
-  <!-- The board's markup; home.js moves it into the Market and Market pulse widgets. -->
-  <div id="widgetParts" hidden>
-  <main class="chest" id="chest">
-    <div class="chest-head">
-      <span class="head-icon" id="headIcon"></span>
-      <span class="head-name" id="headName">Loading</span>
-      <span class="head-meta" id="headMeta"></span>
-      <span class="pager" id="pager">
-        <button class="pg" id="pgPrev" aria-label="Previous page">&lsaquo;</button>
-        <span id="pgText"></span>
-        <button class="pg" id="pgNext" aria-label="Next page">&rsaquo;</button>
-      </span>
-      <span class="live" id="live"><i></i><span id="liveText">connecting</span></span>
-    </div>
-    <div class="body">
-      <nav class="tabs" id="tabs" aria-label="Messes"></nav>
-      <section class="grid" id="grid" aria-label="Listings"></section>
-    </div>
-    <div class="controls">
-      <div class="ctl-left" id="ctlLeft"></div>
-      <div class="ctl-row" id="ctlRow"></div>
-    </div>
-  </main>
-
-  <section class="chest pulse" id="pulse" aria-label="Market stats">
-    <div class="chest-head">
-      <span class="head-icon" id="pulseIcon"></span>
-      <span class="head-name">Market pulse</span>
-      <span class="head-meta" id="pulseMeta"></span>
-      <span class="legend"><span><i class="m"></i>messages</span><span><i></i>sales</span></span>
-      <span class="wins" id="wins" role="group" aria-label="Stats window"></span>
-    </div>
-    <div class="cards" id="cards"></div>
-  </section>
-
-  <footer class="hint" id="hint">
-    <span><kbd>1</kbd>-<kbd>5</kbd> messes</span>
-    <span><kbd>&larr;</kbd><kbd>&rarr;</kbd> pages</span>
-    <span><kbd>R</kbd> recent</span>
-    <span><kbd>P</kbd> price</span>
-    <span><kbd>D</kbd> diet</span>
-    <span><kbd>M</kbd> meal</span>
-    <span><kbd>S</kbd> sold</span>
-    <span><kbd>W</kbd> wanted</span>
-  </footer>
-  </div>
 </div>
 
 <aside class="tray" id="tray" hidden aria-label="Widgets you can add">

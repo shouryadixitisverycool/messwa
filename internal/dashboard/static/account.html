@@ -5,28 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#0b0d12">
-<title>Account · Mess Auction House</title>
+<title>Account · messwa</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preload" href="silkscreen-700.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="shell.css">
 <link rel="stylesheet" href="account.css">
 <script src="common.js" defer></script>
+<script src="shell.js" defer></script>
 <script src="account.js" defer></script>
 </head>
-<body>
+<body data-page="account">
 <div class="app account">
-  <header class="top">
-    <div class="brand">
-      <span class="logo" id="logo"></span>
-      <div>
-        <h1 id="who">Account</h1>
-      </div>
-      <nav class="navs" aria-label="Pages">
-        <a class="nav-link" href="./" title="Back to the listings"><span id="navIcon"></span>Auction house</a>
-        <button class="nav-link" id="logout" type="button">Sign out</button>
-      </nav>
-    </div>
-  </header>
+  <div class="page-head">
+    <h1 class="page-title" id="who">Account</h1>
+    <button class="btn" id="logout" type="button">Sign out</button>
+  </div>
 
   <section class="chest" id="signupsBox" aria-label="Sign-up requests" hidden>
     <div class="chest-head">
