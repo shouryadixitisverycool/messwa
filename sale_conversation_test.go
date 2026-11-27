@@ -147,3 +147,26 @@ func TestOldPaymentText(t *testing.T) {
 		}
 	}
 }
+
+// The real hook is wired up: opening a database rewrites an old row.
+func TestOpenRewritesOldPaymentText(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "d.db")
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := withInteropNote(t, mockPaymentPayload("65.00", time.Now()), "table 3")
+	old := oldDump(t, "Reported amount: INR 65.00 (unverified).", &waE2E.SendPaymentMessage{TransactionData: proto.String(data)})
+	if err := st.AddSaleMessage(t.Context(), 1, "buyer", store.SaleMessage{ID: "p", Kind: "payment", Text: old}); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	if st, err = store.Open(path); err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	got, err := st.SaleMessages(t.Context(), 1, "buyer")
+	if err != nil || len(got) != 1 || got[0].Text != "Paid INR 65.00\nNote: table 3" {
+		t.Fatalf("messages: %+v %v", got, err)
+	}
+}

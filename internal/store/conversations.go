@@ -53,8 +53,8 @@ func migratePaymentText(db *sql.DB) error {
 		return nil
 	}
 	rows, err := db.Query(`SELECT rowid,text FROM sale_messages WHERE kind='payment'
- AND (text LIKE 'Reported amount: % (unverified).'||char(10)||char(10)||'Retained payment details:'||char(10)||'%'
-  OR text LIKE 'Amount unavailable.'||char(10)||char(10)||'Retained payment details:'||char(10)||'%')`)
+ AND (text GLOB 'Reported amount: * (unverified).'||char(10)||char(10)||'Retained payment details:'||char(10)||'*'
+  OR text GLOB 'Amount unavailable.'||char(10)||char(10)||'Retained payment details:'||char(10)||'*')`)
 	if err != nil {
 		return err
 	}
