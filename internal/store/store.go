@@ -159,13 +159,7 @@ func Open(path string) (*Store, error) {
 			return nil, fmt.Errorf("migrate: %w", err)
 		}
 	}
-	// Payment messages recorded before the payment card kept a JSON dump of
-	// the payload after the amount line. Rewrite them the way new ones are
-	// stored: "Reported amount: INR 65.00 (unverified)." becomes
-	// "Paid INR 65.00", the buyer's note moves out of the dump onto a
-	// "Note: " line, and the dump goes. Only rows in that old shape match,
-	// so a buyer's note in a new row is never cut.
-	if _, err := db.Exec(paymentTextMigration); err != nil {
+	if err := migratePaymentText(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate payment messages: %w", err)
 	}
@@ -176,16 +170,6 @@ func Open(path string) (*Store, error) {
 	}
 	return st, nil
 }
-
-const paymentTextMigration = `UPDATE sale_messages SET text=
- CASE WHEN substr(text,1,instr(text,char(10))-1) LIKE 'Reported amount: % (unverified).'
-  THEN 'Paid '||substr(text,18,instr(text,char(10))-32)
-  ELSE substr(text,1,instr(text,char(10))-1) END
- || coalesce(char(10)||'Note: '||nullif(trim(CASE WHEN json_valid(substr(text,instr(text,'Retained payment details:')+25))
-  THEN coalesce(json_extract(substr(text,instr(text,'Retained payment details:')+25),'$.noteMessage.extendedTextMessage.text'),
-   json_extract(substr(text,instr(text,'Retained payment details:')+25),'$.noteMessage.conversation')) END),''),'')
- WHERE kind='payment' AND (text LIKE 'Reported amount: % (unverified).'||char(10)||char(10)||'Retained payment details:%'
-  OR text LIKE 'Amount unavailable.'||char(10)||char(10)||'Retained payment details:%')`
 
 func (s *Store) Close() error {
 	if s.closeBoard != nil {

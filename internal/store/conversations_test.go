@@ -92,20 +92,24 @@ func TestConversationFollowsMovedBuyer(t *testing.T) {
 	}
 }
 
-// Payment rows recorded with the raw payload dump are rewritten to the new
-// form on open, keeping the buyer's note, and nothing else changes.
-func TestOpenDropsStoredPaymentPayload(t *testing.T) {
+// Open passes payment rows in the old dump shape through OldPaymentText,
+// once, and leaves every other row alone.
+func TestOpenRewritesOldPaymentRows(t *testing.T) {
+	saved := OldPaymentText
+	defer func() { OldPaymentText = saved }()
+	calls := 0
+	OldPaymentText = func(old string) string {
+		calls++
+		return "Paid INR 65.00"
+	}
 	const dump = "\n\nRetained payment details:\n"
 	rows := []struct{ kind, text, want string }{
-		{"payment", "Reported amount: INR 65.00 (unverified)." + dump + `{"transactionData": "AQAAAJEB"}`, "Paid INR 65.00"},
-		{"payment", "Reported amount: INR 1200.50 (unverified)." + dump + `{"noteMessage": {"extendedTextMessage": {"text": " table 3 "}}, "transactionData": "AQ"}`, "Paid INR 1200.50\nNote: table 3"},
-		{"payment", "Reported amount: INR 40.00 (unverified)." + dump + `{"noteMessage": {"conversation": "lunch"}}`, "Paid INR 40.00\nNote: lunch"},
-		{"payment", "Amount unavailable." + dump + `{"noteMessage": {"extendedTextMessage": {"text": ""}}}`, "Amount unavailable."},
-		{"payment", "Reported amount: INR 65.00 (unverified)." + dump + "{not json", "Paid INR 65.00"},
+		{"payment", "Reported amount: INR 65.00 (unverified)." + dump + "{}", "Paid INR 65.00"},
+		{"payment", "Amount unavailable." + dump + "{}", "Paid INR 65.00"},
 		// New rows, including a note a buyer typed to look like the old dump.
 		{"payment", "Paid INR 65.00\nNote: x" + dump + "y", "Paid INR 65.00\nNote: x" + dump + "y"},
-		{"payment", "Amount unavailable.", "Amount unavailable."},
-		{"text", "hi" + dump + "kept", "hi" + dump + "kept"},
+		{"payment", "Amount unavailable.\nNote: x" + dump + "y", "Amount unavailable.\nNote: x" + dump + "y"},
+		{"text", "Amount unavailable." + dump + "{}", "Amount unavailable." + dump + "{}"},
 	}
 	path := filepath.Join(t.TempDir(), "test.db")
 	s, err := Open(path)
@@ -119,7 +123,7 @@ func TestOpenDropsStoredPaymentPayload(t *testing.T) {
 		}
 	}
 	s.Close()
-	for range 2 { // the second open must change nothing
+	for range 2 { // the second open finds nothing to rewrite
 		if s, err = Open(path); err != nil {
 			t.Fatal(err)
 		}
@@ -133,5 +137,8 @@ func TestOpenDropsStoredPaymentPayload(t *testing.T) {
 				t.Errorf("row %d = %q, want %q", i, got[i].Text, r.want)
 			}
 		}
+	}
+	if calls != 2 {
+		t.Fatalf("rewrote %d rows, want 2", calls)
 	}
 }

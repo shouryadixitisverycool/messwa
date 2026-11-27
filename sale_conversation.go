@@ -8,6 +8,7 @@ import (
 
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types/events"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	"messwa/internal/store"
@@ -129,6 +130,29 @@ func (m *sellManager) recordConversation(peer, alt, id string, at time.Time, fro
 			}
 		}
 	}()
+}
+
+func init() { store.OldPaymentText = oldPaymentText }
+
+// oldPaymentText rebuilds a payment row recorded before the payment card
+// from the JSON dump it kept, the same way a new payment is stored, so an
+// old row keeps its note, including one only in the payload. A dump that
+// no longer parses keeps just the amount.
+func oldPaymentText(old string) string {
+	head, dump, ok := strings.Cut(old, "\n\nRetained payment details:\n")
+	if !ok {
+		return old
+	}
+	var pay waE2E.SendPaymentMessage
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal([]byte(dump), &pay); err == nil {
+		return conversationPaymentText(&waE2E.Message{SendPaymentMessage: &pay})
+	}
+	if amount, ok := strings.CutPrefix(head, "Reported amount: "); ok {
+		if amount, ok := strings.CutSuffix(amount, " (unverified)."); ok {
+			return "Paid " + amount
+		}
+	}
+	return head
 }
 
 // conversationPaymentText is "Paid INR 65.00", the amount decoded from

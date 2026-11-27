@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	"messwa/internal/store"
@@ -74,4 +77,73 @@ func TestConversationWaitsForAdmission(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("first message was dropped")
+}
+
+// withInteropNote appends the Android UPI interopNote entry, laid out as in
+// TestPaymentInteropNote, to a payload.
+func withInteropNote(t *testing.T, payload []byte, note string) string {
+	t.Helper()
+	metadata, err := hex.DecodeString("0b00000069006e007400650072006f0070004e006f007400650000000100000015000000500000000f0000006a006100760061002e006c0061006e0067002e0043006c00610073007300000025000000aced0005767200106a6176612e6c616e672e537472696e67a0f0a4387a3bb342020000787000000000000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.StdEncoding.EncodeToString(appendParcelString(append(payload, metadata...), note))
+}
+
+func TestConversationPaymentInteropNote(t *testing.T) {
+	data := withInteropNote(t, mockPaymentPayload("65.00", time.Now()), " table 3 ")
+	text := conversationPaymentText(&waE2E.Message{SendPaymentMessage: &waE2E.SendPaymentMessage{TransactionData: proto.String(data)}})
+	if text != "Paid INR 65.00\nNote: table 3" {
+		t.Fatalf("interopNote only: %q", text)
+	}
+	text = conversationPaymentText(&waE2E.Message{SendPaymentMessage: &waE2E.SendPaymentMessage{
+		TransactionData: proto.String(data),
+		NoteMessage:     &waE2E.Message{Conversation: proto.String("lunch")},
+	}})
+	if text != "Paid INR 65.00\nNote: lunch" {
+		t.Fatalf("noteMessage first: %q", text)
+	}
+}
+
+// oldDump is a payment row as the code before the payment card stored it.
+func oldDump(t *testing.T, label string, pay *waE2E.SendPaymentMessage) string {
+	t.Helper()
+	b, err := protojson.Marshal(pay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pretty any
+	if err := json.Unmarshal(b, &pretty); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = json.MarshalIndent(pretty, "", "  ")
+	return label + "\n\nRetained payment details:\n" + string(b)
+}
+
+func TestOldPaymentText(t *testing.T) {
+	at := time.Now()
+	plain := base64.StdEncoding.EncodeToString(mockPaymentPayload("65.00", at))
+	for _, c := range []struct{ old, want string }{
+		{oldDump(t, "Reported amount: INR 65.00 (unverified).", &waE2E.SendPaymentMessage{
+			TransactionData: proto.String(plain),
+			NoteMessage:     &waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{Text: proto.String("")}}}),
+			"Paid INR 65.00"},
+		{oldDump(t, "Reported amount: INR 65.00 (unverified).", &waE2E.SendPaymentMessage{
+			TransactionData: proto.String(plain),
+			NoteMessage:     &waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{Text: proto.String("lunch\n")}}}),
+			"Paid INR 65.00\nNote: lunch"},
+		{oldDump(t, "Reported amount: INR 65.00 (unverified).", &waE2E.SendPaymentMessage{
+			TransactionData: proto.String(withInteropNote(t, mockPaymentPayload("65.00", at), "table 3"))}),
+			"Paid INR 65.00\nNote: table 3"},
+		{oldDump(t, "Amount unavailable.", &waE2E.SendPaymentMessage{
+			TransactionData: proto.String("unreadable"),
+			NoteMessage:     &waE2E.Message{Conversation: proto.String("dinner")}}),
+			"Amount unavailable.\nNote: dinner"},
+		{"Reported amount: INR 65.00 (unverified).\n\nRetained payment details:\n{not json", "Paid INR 65.00"},
+		{"Amount unavailable.\n\nRetained payment details:\n{not json", "Amount unavailable."},
+	} {
+		if got := oldPaymentText(c.old); got != c.want {
+			t.Errorf("oldPaymentText(%q) = %q, want %q", c.old, got, c.want)
+		}
+	}
 }
