@@ -312,7 +312,13 @@ function marketSlide(w) {
   const plot = el('div', 'pplot');
   plot.id = 'pplot';
   const cap4 = el('p', 'rnote', 'Last 4 weeks');
-  return slide('s-market', big, plot, cap4);
+  const key = el('div', 'pleg');
+  for (const [cls, label] of [['b', 'Market middle half'], ['t', 'Median ask'], ['d', 'Your sale']]) {
+    const k = el('span');
+    k.append(el('i', cls), label);
+    key.append(k);
+  }
+  return slide('s-market', big, plot, key, cap4);
 }
 
 // The regulars slide: the week's top buyer, then everyone who came back.
@@ -468,9 +474,11 @@ function friendPills(box) {
     const price = f.task ? priceText(f.task) : f.schedule ? priceText(f.schedule) : f.amount ? rupees(f.amount) : '';
     const word = f.schedule ? hm(f.schedule.at) : { selling: 'selling', armed: 'paying', sending: 'paid', sold: 'sold', handoff: 'yours', ended: 'unsold' }[f.state] || f.state;
     const cls = f.state === 'sold' ? 'on' : open ? 'live' : 'off';
-    const p = pill(FRIEND, [who, price, el('span', 'st', word)], 'mp-friend ' + cls,
+    // Several meals for one friend can show at once, so name the day.
+    const day = f.date === D.today ? '' : dayWord(f.date);
+    const p = pill(FRIEND, [who, day, price, el('span', 'st', word)], 'mp-friend ' + cls,
       open ? () => openSell(f.date, friendCell(f)) : null,
-      `${who}, ${word}`);
+      [who, day, word].filter(Boolean).join(', '));
     p.style.setProperty('--m', messColor(f.mess));
     p.dataset.k = `f${f.date}|${f.slot || f.meal}`;
     box.append(p);

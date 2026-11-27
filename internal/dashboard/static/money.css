@@ -86,6 +86,7 @@
 .rbig .quiet { color: var(--calm-muted); font-size: var(--t-xl); }
 .rline { margin: 0; font-size: var(--t-md); color: var(--calm-muted); }
 .rnote { margin: 0; font-size: var(--t-xs); color: var(--calm-dim); }
+.rslide .pleg { flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); white-space: normal; color: var(--calm-muted); font-size: var(--t-xs); }
 
 .rmeals { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-2); }
 .rmeal { display: flex; align-items: center; gap: var(--sp-3); }
