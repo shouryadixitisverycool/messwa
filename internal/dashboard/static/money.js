@@ -340,7 +340,10 @@ function regularSlide(w) {
   }
   const heads = el('div', 'rheads');
   heads.id = 'heads';
-  kids.push(heads);
+  const card = el('div', 'panel rbuyer');
+  card.id = 'headCard';
+  card.hidden = true;
+  kids.push(heads, card);
   return slide('s-reg', ...kids);
 }
 
@@ -414,23 +417,42 @@ function recapDot() {
   if (s) track.style.setProperty('height', `${s.offsetHeight}px`);
 }
 
+let headPicked = '';   // the regular whose card is open, by key
+
 // renderHeads is every buyer who came back, all time, as faces with the
-// count on them. Hovering one shows what they buy.
+// count on them. Hovering one shows what they buy; tapping or pressing one
+// opens the same lines in a card under the faces.
 function renderHeads() {
   const box = $('heads');
   if (!box) return;
   const bs = buyers().filter((b) => b.n > 1).slice(0, 14);
+  const on = document.activeElement;
+  const focused = on && on.parentNode === box ? on.dataset.k : '';
   box.replaceChildren();
   for (const b of bs) {
     const t = tierOf(b.n);
-    const n = el('span', 'rhead');
+    const n = el('button', 'rhead');
+    n.type = 'button';
+    n.dataset.k = b.key;
     n.style.setProperty('--m', t.color);
     n.append(svgEl(face(b.key)), el('b', '', String(b.n)));
-    n.setAttribute('role', 'img');
     n.setAttribute('aria-label', `${b.name || fmtPhone(b.phone) || 'Unknown buyer'}, ${b.n} meals`);
+    n.setAttribute('aria-expanded', String(b.key === headPicked));
+    n.setAttribute('aria-controls', 'headCard');
     tip(n, () => buyerLines(b));
+    n.addEventListener('click', () => {
+      headPicked = headPicked === b.key ? '' : b.key;
+      renderHeads();
+      recapFit();
+    });
     box.append(n);
+    if (b.key === focused) n.focus();
   }
+  const picked = bs.find((b) => b.key === headPicked);
+  const card = $('headCard');
+  card.hidden = !picked;
+  if (picked) fillLines(card, buyerLines(picked));
+  else card.replaceChildren();
 }
 
 // ---------- rules and friends' meals as pills ----------
