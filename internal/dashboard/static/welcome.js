@@ -65,6 +65,7 @@ let typingTimer = null; // the queued row being typed now
 let typingKey = '';
 let drawn = false;
 let ready = false; // set once the first answers are all in
+let replay = false; // the next draw brings back rows already seen
 
 // text draws a line, with `backticks` as code.
 function text(s) {
@@ -264,6 +265,9 @@ function render() {
   // On the first draw, everything up to the last answer is history.
   let history = -1;
   if (!drawn) plan.items.forEach((x, i) => { if (x.from !== 'bot') history = i; });
+  // Rows coming back after a change come back whole.
+  if (replay) history = plan.items.length - 1;
+  replay = false;
   let appended = false;
   plan.items.forEach((it, i) => {
     const r = nodes.get(it.key);
@@ -283,7 +287,7 @@ function render() {
     }
     if (queue.includes(it.key) || typingKey === it.key) return;
     const idle = !queue.length && !typingKey;
-    if (reduced.matches || i <= history || (it.typing && idle)) appended = add(it, drawn && !reduced.matches) || appended;
+    if (reduced.matches || i <= history || (it.typing && idle)) appended = add(it, drawn && !reduced.matches && i > history) || appended;
     else queue.push(it.key);
   });
   if (!drawn) {
@@ -359,8 +363,11 @@ function paintAsk() {
   $('composer').classList.toggle('empty', !ask && !hold);
   const off = typing || sending;
   $('send').disabled = off;
+  $('pick').disabled = off;
   if (hold) {
+    // Rebuilt when typing ends, even if the question hasn't changed.
     for (const b of $('chips').children) b.disabled = true;
+    askSig = 'held';
     return;
   }
   const sig = JSON.stringify(ask) + sending;
@@ -429,7 +436,7 @@ async function saveKey(key) {
   try {
     await send('PUT', 'api/mess-key', { key });
     $('sayInput').value = '';
-    if (S.edit === 'key') S.edit = null;
+    if (S.edit === 'key') { S.edit = null; replay = true; }
     await paint();
   } catch (x) { setErr('key', x); render(); }
 }
@@ -448,7 +455,7 @@ async function getCode(phone) {
 
 async function chip(id) {
   if (sending) return;
-  if (id === 'keep') { S.edit = null; return render(); }
+  if (id === 'keep') { S.edit = null; replay = true; return render(); }
   if (id === 'phone' || id === 'qr') {
     S.codeMode = id === 'phone';
     setErr('code');
@@ -459,22 +466,14 @@ async function chip(id) {
   const [k, v] = id.split(':');
   if (k === 'handoff' || k === 'buyers') {
     // Picked straight away, so the chat moves on while it saves. A failed
-    // save takes the answer back and asks again.
-    const was = S.sell[k];
-    const acked = !!S.acks[k];
-    const editing = S.edit;
+    // save takes the answer back and asks again (see saveSell).
+    if (S.edit === k) replay = true;
     S.sell = { ...S.sell, [k]: v };
     ack(k);
     S.edit = null;
     setErr(k);
     render();
-    const ok = await saveSell({ [k]: v }, k, () => { S.sell = { ...S.sell, [k]: was }; });
-    if (!ok) {
-      if (!acked) ack(k, false);
-      S.edit = editing;
-      render();
-    }
-    return;
+    return saveSell();
   }
   if (id === 'ask') {
     setErr('ask');
@@ -515,8 +514,8 @@ async function paintWhatsApp() {
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
     const was = !!(S.wa && S.wa.linked);
-    // A code asked for by phone stays until a new one comes.
-    S.wa = { ...d, code: d.code || (S.codeMode && S.wa && S.wa.code) || '' };
+    if (done()) return;
+    S.wa = d;
     setErr('wa', d.error && !d.linked ? new Error(d.error) : null);
     if (!d.linked && !d.pairing) startLink();
     if (!d.linked && !waTimer) waTimer = setInterval(paintWhatsApp, 3000);
@@ -536,8 +535,9 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && !(
 // ---------- groups and how you sell ----------
 
 let sellTimer = null;
-let sellChain = Promise.resolve();
+let writes = Promise.resolve(); // settings saves, one at a time
 let sellSeq = 0; // bumped by each save, so older answers don't win
+let sellSaved = null; // the selling answers as the server last had them
 
 async function loadSell() {
   clearTimeout(sellTimer);
@@ -549,11 +549,12 @@ async function loadSell() {
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
     // A save went out meanwhile: its answer is newer than this one.
-    if (seq !== sellSeq) return;
+    if (seq !== sellSeq || done()) return;
     S.sell = d;
+    sellSaved = d;
     // A fresh account gets every group it's in, so it can sell at once.
     const joined = d.groups.filter((g) => g.joined).map((g) => g.jid);
-    if (d.checked && !d.saved && joined.length) { saveSell({ groups: joined }, 'groups'); return; }
+    if (d.checked && !d.saved && joined.length) { saveSell(joined); return; }
     setErr('groups', d.error ? new Error(d.error) : null);
     // Not in any group yet: keep looking until they join one.
     if (d.checked && !joined.length) sellTimer = setTimeout(loadSell, 10000);
@@ -563,36 +564,45 @@ async function loadSell() {
   render();
 }
 
-// saveSell sends the groups and selling answers, with change on top. Saves
-// go out one at a time, each built on the latest answers. On failure undo
-// takes the change back, unless a later save has gone out since. It
-// resolves to whether the save worked.
-function saveSell(change, step, undo) {
+// write queues a settings save behind the others, since each one sends
+// the whole set and the last to land wins.
+function write(fn) {
+  const p = writes.then(fn);
+  writes = p.catch(() => {});
+  return p;
+}
+
+// saveSell sends the groups and selling answers as the chat has them now.
+// A save that fails while a newer one waits does nothing: the newer one
+// carries the same answers. The newest one failing puts back what the
+// server has, and asks again whatever didn't save.
+function saveSell(groups) {
   const seq = ++sellSeq;
-  const run = async () => {
+  return write(async () => {
     const g = S.sell;
     const body = {
-      groups: postingOrder(g.groups).map((x) => x.jid),
+      groups: groups || postingOrder(g.groups).map((x) => x.jid),
       handoff: g.handoff,
       buyers: g.buyers,
-      ...change,
     };
     try {
       const d = await send('PUT', 'api/setup-sell', body);
-      if (seq === sellSeq) S.sell = d;
-      setErr(step);
-      render();
-      return true;
+      sellSaved = d;
+      if (seq === sellSeq) {
+        S.sell = d;
+        for (const k of ['groups', 'handoff', 'buyers']) setErr(k);
+      }
     } catch (x) {
-      if (undo && seq === sellSeq) undo();
-      setErr(step, x);
-      render();
-      return false;
+      if (seq !== sellSeq) return;
+      const was = sellSaved || g;
+      const lost = ['handoff', 'buyers'].filter((k) => S.sell[k] !== was[k]);
+      const groupsLost = JSON.stringify(postingOrder(S.sell.groups).map((y) => y.jid)) !== JSON.stringify(postingOrder(was.groups).map((y) => y.jid));
+      S.sell = { ...S.sell, groups: was.groups, handoff: was.handoff, buyers: was.buyers, pending: false };
+      for (const k of lost) { ack(k, false); setErr(k, x); }
+      if (groupsLost || !lost.length) setErr('groups', x);
     }
-  };
-  const p = sellChain.then(run);
-  sellChain = p.catch(() => {});
-  return p;
+    render();
+  });
 }
 
 // toggleGroup adds a group to the end of the posting order, or takes it out.
@@ -603,12 +613,12 @@ function toggleGroup(jid) {
     setErr('groups', new Error('Keep at least one group, or your offers go nowhere.'));
     return render();
   }
-  // Draw the new order now; the save confirms it.
-  const was = S.sell.groups;
-  S.sell = { ...S.sell, groups: was.map((x) => ({ ...x, picked: next.includes(x.jid), order: next.indexOf(x.jid) + 1 })) };
+  // Draw the new order now; the save confirms it. Until then the admins
+  // can't be asked.
+  S.sell = { ...S.sell, pending: true, groups: S.sell.groups.map((x) => ({ ...x, picked: next.includes(x.jid), order: next.indexOf(x.jid) + 1 })) };
   setErr('groups');
   render();
-  saveSell({ groups: next }, 'groups', () => { S.sell = { ...S.sell, groups: was }; });
+  saveSell(next);
 }
 
 // ---------- UPI ----------
@@ -627,9 +637,9 @@ async function loadUPI() {
 async function saveUPI(upi) {
   setErr('upi');
   try {
-    const d = await send('PUT', 'api/setup-upi', { upi });
+    const d = await write(() => send('PUT', 'api/setup-upi', { upi }));
     S.upi = d.upi;
-    if (S.edit === 'upi') S.edit = null;
+    if (S.edit === 'upi') { S.edit = null; replay = true; }
     $('sayInput').value = '';
   } catch (x) { setErr('upi', x); }
   render();
@@ -641,8 +651,10 @@ $('upiFile').addEventListener('change', async () => {
   const file = $('upiFile').files[0];
   $('upiFile').value = '';
   if (!file) return;
+  if (sending) return;
   setErr('upi');
-  $('pick').disabled = true;
+  sending = true;
+  paintAsk();
   try {
     const m = await me();
     const body = new FormData();
@@ -652,7 +664,7 @@ $('upiFile').addEventListener('change', async () => {
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
     await saveUPI(d.upi);
-  } catch (x) { setErr('upi', x); render(); } finally { $('pick').disabled = false; }
+  } catch (x) { setErr('upi', x); render(); } finally { sending = false; paintAsk(); }
 });
 
 // ---------- the account ----------

@@ -101,6 +101,9 @@ function chatPlan(s) {
   // Later answers (a saved UPI ID, a request) mean the user got past this
   // on another browser, but only a saved pick counts as an answer.
   const later = !!s.upi || asked;
+  // A question is open until answered, while being changed, and when its
+  // answer failed to save.
+  const open = (k) => !(acks[k] || later) || s.edit === k || !!(s.errors && s.errors[k]);
   bot('groups-q', 'Where should I post your offers? Tap them in the order I should try.');
   const g = s.sell;
   if (!g || !g.checked) {
@@ -125,19 +128,17 @@ function chatPlan(s) {
   // 4. How you sell. A failed save takes the answer back, so the question
   // comes back with the error under it.
   bot('handoff-q', 'A buyer replies to your offer. Who talks to them?');
-  if (!(acks.handoff || later) || s.edit === 'handoff') {
+  if (open('handoff')) {
     err('handoff');
     return done('handoff', { chips: choices('handoff', HANDOFF, g.handoff, s.edit === 'handoff') });
   }
   me('handoff-a', (HANDOFF[g.handoff] || HANDOFF.never)[0], { edit: 'handoff' });
-  err('handoff');
   bot('buyers-q', 'Who can buy?');
-  if (!(acks.buyers || later) || s.edit === 'buyers') {
+  if (open('buyers')) {
     err('buyers');
     return done('buyers', { chips: choices('buyers', BUYERS, g.buyers, s.edit === 'buyers') });
   }
   me('buyers-a', (BUYERS[g.buyers] || BUYERS.anyone)[0], { edit: 'buyers' });
-  err('buyers');
 
   // 5. UPI, then what a buyer sees with it.
   bot('upi-q', 'Buyers pay you on UPI. What\'s your UPI ID?');
@@ -172,7 +173,8 @@ function chatPlan(s) {
     ? `Almost there. I still need ${missing.join(' and ')}.`
     : 'That\'s everything. Shall I ask the admins to let you in?');
   err('ask');
-  return done('ask', { chips: [{ id: 'ask', label: 'Ask the admins', primary: true, disabled: missing.length > 0 }] });
+  // A group pick still saving can't be asked with.
+  return done('ask', { chips: [{ id: 'ask', label: 'Ask the admins', primary: true, disabled: missing.length > 0 || !!g.pending }] });
 }
 
 // KEEP backs out of changing an answer.

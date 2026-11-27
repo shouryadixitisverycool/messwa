@@ -187,3 +187,16 @@ test('progress runs from the key to waiting', () => {
   assert.equal(chatProgress('waiting'), 1);
   assert.ok(chatProgress('upi') > chatProgress('groups'));
 });
+
+test('a failed answer is asked again even when later ones are saved', () => {
+  const p = chatPlan(state({ keySet: true, wa: { linked: true }, sell: sell(), upi: 'a@ok', errors: { buyers: 'disk full' } }));
+  assert.equal(p.step, 'buyers');
+  assert.equal(p.items.at(-1).key, 'buyers-err');
+  assert.deepEqual(asks(p), ['buyers:anyone', 'buyers:unsaved_only']);
+});
+
+test('the admins can\'t be asked while a group pick is saving', () => {
+  const p = chatPlan(state({ keySet: true, wa: { linked: true }, sell: sell({ pending: true }), upi: 'a@ok' }));
+  assert.equal(p.step, 'ask');
+  assert.equal(p.ask.chips[0].disabled, true);
+});
