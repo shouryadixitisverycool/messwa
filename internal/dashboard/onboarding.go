@@ -26,6 +26,8 @@ type setupGroup struct {
 	Name   string `json:"name"`
 	Joined bool   `json:"joined"`
 	Picked bool   `json:"picked"`
+	// Order is the 1-based posting position when picked, or 0 if not.
+	Order int `json:"order,omitempty"`
 }
 
 // setupSell is the welcome page's selling step: the configured mess
@@ -83,17 +85,22 @@ func onboardingRoutes(mux *http.ServeMux, cfg *config.Config, srv *mcpserver.Ser
 				out.Checked = true
 			}
 		}
-		picked := map[string]bool{}
-		for _, g := range live.Sell.Groups {
-			picked[g] = true
-		}
 		for i, g := range cfg.Groups {
 			name, in := joined[g]
 			if name == "" {
 				name = names[g]
 			}
-			p := picked[g] || picked[name] || (len(live.Sell.Groups) == 0 && i < live.Sell.GroupCount)
-			out.Groups = append(out.Groups, setupGroup{JID: g, Name: name, Joined: in, Picked: p})
+			order := 0
+			for j, s := range live.Sell.Groups {
+				if s == g || (name != "" && s == name) {
+					order = j + 1
+					break
+				}
+			}
+			if order == 0 && len(live.Sell.Groups) == 0 && i < live.Sell.GroupCount {
+				order = i + 1
+			}
+			out.Groups = append(out.Groups, setupGroup{JID: g, Name: name, Joined: in, Picked: order > 0, Order: order})
 		}
 		writeJSON(w, r, out)
 	}

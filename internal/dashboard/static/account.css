@@ -52,8 +52,6 @@ code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--t
 
 .pairing-qr { width: 240px; max-width: 100%; background: #fff; padding: 12px; border-radius: 12px; image-rendering: pixelated; }
 
-.step.done .chest-head .head-name { color: var(--veg); }
-
 .signups { width: 100%; border-collapse: collapse; font-size: 13px; }
 .signups td { padding: 8px; border-bottom: 1px solid #1c2230; vertical-align: middle; }
 .signups td:last-child { text-align: right; white-space: nowrap; }
@@ -71,37 +69,8 @@ code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--t
 }
 .help:hover, .help[aria-expanded="true"] { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 55%, transparent); }
 
-.qr-box { display: flex; justify-content: center; }
-.code-box { display: flex; flex-direction: column; gap: 12px; }
-.pair-code {
-  align-self: center; padding: 14px 22px; border-radius: 12px;
-  background: #10141c; border: 1px solid color-mix(in srgb, var(--gold) 45%, transparent);
-  font: 700 30px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 4px; color: var(--gold);
-  user-select: all;
-}
-.mode-toggle { align-self: center; padding: 0; background: none; border: 0; color: var(--gold); font: 13px var(--sans); text-decoration: underline; cursor: pointer; }
-
 /* style.css's .empty is the board's overlay; a table cell stays in the flow. */
 td.empty { position: static; display: table-cell; text-align: left; }
-
-/* The welcome page's selling steps. */
-.h-lbl { font: 700 9px Pixel; letter-spacing: .5px; color: var(--muted); text-transform: uppercase; }
-.group-list { display: flex; flex-direction: column; gap: 6px; }
-.group-list:empty { display: none; }
-.g-row {
-  display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 12px; border-radius: 10px;
-  background: #10141c; border: 1px solid var(--line); color: var(--text); font: 14px var(--sans); text-align: left; cursor: pointer;
-}
-.g-row .g-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.g-row .g-box {
-  flex: none; width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center;
-  border: 1px solid var(--line); background: var(--slot); color: #0b0d12; font: 700 13px var(--sans);
-}
-.g-row[aria-checked="true"] { border-color: color-mix(in srgb, var(--veg) 55%, transparent); }
-.g-row[aria-checked="true"] .g-box { background: var(--veg); border-color: var(--veg); }
-.g-row:disabled { cursor: default; opacity: .55; }
-.g-tag { flex: none; font: 700 9px Pixel; letter-spacing: .5px; text-transform: uppercase; color: var(--dim); }
-.g-row[aria-checked="true"] .g-tag { color: var(--veg); }
 
 .choices { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .choice {
@@ -121,29 +90,3 @@ td.empty { position: static; display: table-cell; text-align: left; }
 }
 .form label.check input { width: 18px; height: 18px; padding: 0; margin: 0; accent-color: var(--veg); flex: none; }
 .choice:disabled { cursor: default; opacity: .55; }
-
-/* Welcome step 5: the UPI form beside a sample chat that shows the QR a
-   buyer would get for the UPI ID typed so far. */
-.upi-step { display: grid; grid-template-columns: minmax(0, 1fr) 236px; gap: 18px; align-items: start; }
-.upi-main { display: grid; gap: 12px; min-width: 0; }
-.upi-demo { margin: 0; display: grid; gap: 6px; }
-.demo-phone { border-radius: 16px; overflow: hidden; border: 1px solid var(--line); background: #0b141a; box-shadow: 0 10px 30px rgba(0, 0, 0, .35); }
-.demo-head { display: flex; gap: 8px; align-items: center; padding: 8px 10px; background: #202c33; color: #e9edef; font-size: 12.5px; line-height: 1.2; }
-.demo-head small { display: block; color: #8696a0; font-size: 10.5px; }
-.demo-av { width: 26px; height: 26px; border-radius: 50%; background: #53bdeb; color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 12px; flex: none; }
-.demo-log { display: flex; flex-direction: column; gap: 4px; padding: 10px 8px 12px; min-height: 250px;
-  background-image: radial-gradient(rgba(134, 150, 160, .12) 1px, transparent 1px); background-size: 14px 14px; }
-.demo-b { max-width: 88%; padding: 5px 8px; border-radius: 8px; font-size: 12px; line-height: 1.35; color: #e9edef; transition: opacity .2s; }
-.demo-b.in { align-self: flex-start; background: #202c33; }
-.demo-b.out { align-self: flex-end; background: #005c4b; }
-.demo-b[hidden] { display: none; }
-.demo-img { padding: 4px 4px 6px; }
-.demo-img img { display: block; width: 148px; height: 148px; background: #fff; border-radius: 6px; margin-bottom: 5px; image-rendering: pixelated; }
-.demo-img span { padding: 0 4px; }
-.demo-img.pop { animation: demo-pop .4s cubic-bezier(.2, 1.4, .4, 1); transform-origin: bottom right; }
-@keyframes demo-pop { from { transform: scale(.5); opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .demo-img.pop { animation: none; } }
-@media (max-width: 620px) {
-  .upi-step { grid-template-columns: minmax(0, 1fr); }
-  .upi-demo { max-width: 280px; width: 100%; justify-self: center; }
-}

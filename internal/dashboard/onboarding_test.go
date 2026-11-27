@@ -69,14 +69,49 @@ func TestSetupSell(t *testing.T) {
 	}
 
 	res = c.send(t, "PUT", "/api/setup-sell", map[string]any{"groups": []string{"c@g.us", "a@g.us"}, "handoff": "on_reply", "buyers": "unsaved_only"})
+	got = setupSell{}
 	json.NewDecoder(res.Body).Decode(&got)
 	res.Body.Close()
 	if res.StatusCode != 200 || !got.Saved || got.Handoff != "on_reply" || got.Buyers != "unsaved_only" || !got.Groups[0].Picked || got.Groups[1].Picked {
 		t.Fatalf("PUT = %d %+v", res.StatusCode, got)
 	}
+	if g := got.Groups; g[2].Order != 1 || g[0].Order != 2 || g[1].Order != 0 {
+		t.Fatalf("PUT orders = %+v", g)
+	}
 	if l := cfg.Live(); len(l.Sell.Groups) != 2 || l.Sell.Groups[0] != "c@g.us" || l.Sell.GroupCount != 0 {
 		t.Fatalf("live sell = %+v", l.Sell)
 	}
+
+	got = setupSell{}
+	if res := c.get(t, "/api/setup-sell", &got); res.StatusCode != 200 {
+		t.Fatalf("GET after PUT = %d", res.StatusCode)
+	}
+	if g := got.Groups; g[2].Order != 1 || g[0].Order != 2 || g[1].Order != 0 {
+		t.Fatalf("GET orders = %+v", g)
+	}
+
+	t.Run("group_count_fallback", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Groups = []string{"a@g.us", "b@g.us", "c@g.us"}
+		cfg.Sell.GroupCount = 2
+		cfg.ApplySaved(nil)
+		st := newTestStore(t)
+		ms := mcpserver.New(cfg, st, nil)
+		d := startDashboard(t, cfg, st, ms, NewHub())
+
+		jar, _ := cookiejar.New(nil)
+		c := &testClient{Client: &http.Client{Jar: jar}, d: d}
+		res := c.send(t, "POST", "/api/signup", map[string]string{"name": "asha", "password": "asha's password"})
+		res.Body.Close()
+
+		var got setupSell
+		if res := c.get(t, "/api/setup-sell", &got); res.StatusCode != 200 {
+			t.Fatalf("GET = %d", res.StatusCode)
+		}
+		if g := got.Groups; len(g) != 3 || !g[0].Picked || g[0].Order != 1 || !g[1].Picked || g[1].Order != 2 || g[2].Picked || g[2].Order != 0 {
+			t.Fatalf("groups = %+v", g)
+		}
+	})
 }
 
 func TestSetupUPI(t *testing.T) {

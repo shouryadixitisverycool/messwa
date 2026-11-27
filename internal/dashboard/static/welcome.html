@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#0b0d12">
 <title>Welcome · Mess Auction House</title>
@@ -10,142 +10,34 @@
 <link rel="preload" href="silkscreen-700.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="account.css">
+<link rel="stylesheet" href="welcome.css">
 <script src="common.js" defer></script>
+<script src="welcome-plan.js" defer></script>
 <script src="welcome.js" defer></script>
 </head>
-<body>
-<div class="app account">
-  <header class="top">
-    <div class="brand">
-      <span class="logo" id="logo"></span>
-      <div>
-        <h1 id="who">Welcome</h1>
-        <p class="sub">Set up your account, then ask an admin to let you in.</p>
-      </div>
+<body class="welcome">
+<div class="chat">
+  <header class="chat-top">
+    <span class="bot-av" id="logo" aria-hidden="true"></span>
+    <div class="chat-who">
+      <h1>messwa</h1>
+      <p class="chat-state" id="state">online</p>
     </div>
     <button class="nav-link" id="logout" type="button">Sign out</button>
+    <div class="chat-progress" aria-hidden="true"><span id="progress"></span></div>
   </header>
 
-  <p class="notice" id="declined" hidden>An admin declined this account. Talk to them if you think that's a mistake.</p>
+  <main class="chat-main"><div class="chat-log" id="log" role="log" aria-live="off" aria-label="Setup chat"></div></main>
 
-  <section class="chest step" id="keyStep" aria-label="Mess API key">
-    <div class="chest-head">
-      <span class="head-icon" id="keyIcon"></span>
-      <span class="head-name">1. Mess API key</span>
-      <span class="head-meta" id="keyMeta"></span>
-      <button class="help" type="button" aria-expanded="false" aria-controls="keyHelp" title="What's this?">?</button>
-    </div>
-    <div class="form">
-      <p class="note" id="keyHelp" hidden>Your key for the IIIT mess portal. messwa uses it to read your own registrations and QR. It's stored encrypted and never shown again. messwa checks it with the portal before saving, so you need to be on the IIIT network.</p>
-      <p class="notice" id="noSecret" hidden>The server has no <code>MESSWA_SECRET_KEY</code>, so it can't store keys yet. Ask an admin to set it.</p>
-      <form id="keyForm" class="row">
-        <label class="grow">Key<input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your mess API key" required></label>
-        <button class="btn primary" type="submit" id="keySave">Save key</button>
-      </form>
-      <p class="err" id="keyErr" role="alert" hidden></p>
-    </div>
-  </section>
-
-  <section class="chest step" id="waStep" aria-label="WhatsApp">
-    <div class="chest-head">
-      <span class="head-icon" id="waIcon"></span>
-      <span class="head-name">2. WhatsApp</span>
-      <span class="head-meta" id="waMeta"></span>
-      <button class="help" type="button" aria-expanded="false" aria-controls="waHelp" title="What's this?">?</button>
-    </div>
-    <div class="form">
-      <p class="note" id="waHelp" hidden>Link your WhatsApp as a linked device. messwa reads the mess groups with it, and later sells your meals from it when you ask. Your chats, buyers and sales stay private to you. Linking sends no messages.</p>
-      <p id="waStatus" class="wa-status">Checking…</p>
-      <div class="qr-box" id="qrBox" hidden><img id="waQR" alt="QR code to scan in WhatsApp, Linked devices" class="pairing-qr"></div>
-      <div id="codeBox" class="code-box" hidden>
-        <form id="codeForm" class="row">
-          <label class="grow">Your WhatsApp number<input id="phone" type="tel" autocomplete="tel" placeholder="+91 98765 43210"></label>
-          <button class="btn primary" type="submit" id="codeGo">Get code</button>
-        </form>
-        <div class="pair-code" id="pairCode" hidden></div>
-      </div>
-      <p class="err" id="waErr" role="alert" hidden></p>
-      <button class="mode-toggle" type="button" id="modeToggle" hidden>Link with phone number instead</button>
-    </div>
-  </section>
-
-  <section class="chest step" id="groupStep" aria-label="Groups to post in">
-    <div class="chest-head">
-      <span class="head-icon" id="groupIcon"></span>
-      <span class="head-name">3. Groups to post in</span>
-      <span class="head-meta" id="groupMeta"></span>
-      <button class="help" type="button" aria-expanded="false" aria-controls="groupHelp" title="What's this?">?</button>
-    </div>
-    <div class="form">
-      <p class="note" id="groupHelp" hidden>When you sell a meal, messwa posts the offer in these groups, top to bottom. It can only post in groups your WhatsApp is in. Change them later in Settings, Offer.</p>
-      <p class="note" id="groupNote">Link WhatsApp first.</p>
-      <div class="group-list" id="groupList" role="group" aria-label="Groups"></div>
-      <p class="err" id="groupErr" role="alert" hidden></p>
-    </div>
-  </section>
-
-  <section class="chest step" id="howStep" aria-label="How you sell">
-    <div class="chest-head">
-      <span class="head-icon" id="howIcon"></span>
-      <span class="head-name">4. How you sell</span>
-      <span class="head-meta" id="howMeta"></span>
-    </div>
-    <div class="form">
-      <div class="h-lbl">When a buyer replies</div>
-      <div class="choices" id="handoff" role="radiogroup" aria-label="When a buyer replies"></div>
-      <div class="h-lbl">Who can buy</div>
-      <div class="choices" id="buyers" role="radiogroup" aria-label="Who can buy"></div>
-      <p class="err" id="howErr" role="alert" hidden></p>
-    </div>
-  </section>
-
-  <section class="chest step" id="payStep" aria-label="Your UPI">
-    <div class="chest-head">
-      <span class="head-icon" id="payIcon"></span>
-      <span class="head-name">5. Your UPI</span>
-      <span class="head-meta" id="payMeta"></span>
-      <button class="help" type="button" aria-expanded="false" aria-controls="payHelp" title="What's this?">?</button>
-    </div>
-    <div class="form upi-step">
-      <div class="upi-main">
-        <p class="note">Buyers pay you on UPI. When one agrees to a price, messwa sends them a QR for it, and sends the meal QR once they send the payment screenshot.</p>
-        <p class="note" id="payHelp" hidden>messwa can't check that a screenshot is real, so check your UPI app after each sale. WhatsApp Pay payments count too. Change both in Settings, Buyers.</p>
-        <form id="upiForm" class="row">
-          <label class="grow">UPI ID<input id="upi" type="text" autocomplete="off" spellcheck="false" placeholder="name@okaxis" required></label>
-          <button class="btn" type="button" id="upiPick">📷 From QR</button>
-          <button class="btn primary" type="submit" id="upiSave">Save</button>
-        </form>
-        <input type="file" id="upiFile" accept="image/png,image/jpeg" hidden>
-        <p class="err" id="upiErr" role="alert" hidden></p>
-      </div>
-      <figure class="upi-demo" aria-label="What a buyer sees">
-        <figcaption class="h-lbl">What a buyer sees</figcaption>
-        <div class="demo-phone">
-          <div class="demo-head"><span class="demo-av">A</span><div><b>Asha</b><small>online</small></div></div>
-          <div class="demo-log">
-            <div class="demo-b in">kadamba lunch?</div>
-            <div class="demo-b out">ok 50</div>
-            <div class="demo-b out" id="demoPay">pay using whatsapp pay pls, not gpay/upi</div>
-            <div class="demo-b out" id="demoAfter">ill send the qr right after</div>
-            <div class="demo-b out demo-img" id="demoQR" hidden><img id="demoQRImg" alt=""><span id="demoCap"></span></div>
-          </div>
-        </div>
-      </figure>
-    </div>
-  </section>
-
-  <section class="chest step" id="askStep" aria-label="Approval">
-    <div class="chest-head">
-      <span class="head-icon" id="askIcon"></span>
-      <span class="head-name">6. Approval</span>
-      <span class="head-meta" id="askMeta"></span>
-    </div>
-    <div class="form">
-      <p class="note" id="askNote">Finish the steps above, then ask the admins to approve you.</p>
-      <p class="err" id="askErr" role="alert" hidden></p>
-      <div class="actions"><button class="btn primary" type="button" id="ask">Ask for approval</button></div>
-    </div>
-  </section>
+  <footer class="composer" id="composer">
+    <div class="chips" id="chips" role="group" aria-label="Replies"></div>
+    <form class="say" id="say" hidden>
+      <button class="say-pick" type="button" id="pick" title="Read it from a UPI QR" aria-label="Read UPI ID from a QR image" hidden></button>
+      <input id="sayInput" autocomplete="off" spellcheck="false" aria-label="Your reply">
+      <button class="say-send" type="submit" id="send" aria-label="Send"></button>
+    </form>
+    <input type="file" id="upiFile" accept="image/png,image/jpeg" hidden>
+  </footer>
 </div>
 <div class="tip" id="tip" hidden></div>
 </body>
