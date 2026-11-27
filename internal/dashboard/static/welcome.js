@@ -105,6 +105,8 @@ function bubble(it) {
     e.type = 'button';
     e.setAttribute('aria-label', EDITS[it.edit] || 'Change');
     e.addEventListener('click', () => {
+      // Start from the saved answer, not a draft left from last time.
+      $('sayInput').value = '';
       S.edit = it.edit;
       setErr(it.edit);
       render();
@@ -455,7 +457,13 @@ async function getCode(phone) {
 
 async function chip(id) {
   if (sending) return;
-  if (id === 'keep') { setErr(S.edit); S.edit = null; replay = true; return render(); }
+  if (id === 'keep') {
+    $('sayInput').value = '';
+    setErr(S.edit);
+    S.edit = null;
+    replay = true;
+    return render();
+  }
   if (id === 'phone' || id === 'qr') {
     S.codeMode = id === 'phone';
     setErr('code');
