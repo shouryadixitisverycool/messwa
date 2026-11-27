@@ -159,6 +159,10 @@ func Open(path string) (*Store, error) {
 			return nil, fmt.Errorf("migrate: %w", err)
 		}
 	}
+	if err := migratePaymentText(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate payment messages: %w", err)
+	}
 	st := &Store{db: db}
 	if err := st.migrateOwnership(context.Background()); err != nil {
 		db.Close()

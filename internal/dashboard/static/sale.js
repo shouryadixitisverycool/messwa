@@ -1344,6 +1344,31 @@ function conversationFold(v, b, title) {
   return d;
 }
 
+// payCard draws a WhatsApp Pay message like WhatsApp does: the amount
+// large, then who it went to and the time. m.text is "Paid INR 65.00",
+// then the buyer's note on the next line. It returns null for a payment
+// whose amount couldn't be read, which shows as plain text.
+function payCard(m) {
+  const [first, ...rest] = m.text.split('\n');
+  const amt = /^Paid INR (\d+)\.(\d\d)$/.exec(first);
+  if (!amt) return null;
+  const card = el('div', 'cv-pay');
+  const top = el('div', 'cv-pay-top');
+  top.append(el('span', 'cv-pay-amt', `₹${Number(amt[1]).toLocaleString('en-IN')}${amt[2] === '00' ? '' : '.' + amt[2]}`));
+  const note = rest.join('\n').replace(/^Note: /, '');
+  if (note) top.append(el('span', 'cv-pay-note', note));
+  const foot = el('div', 'cv-pay-foot');
+  const what = el('div', 'cv-pay-what');
+  what.append(el('span', '', m.from_me ? 'Sent by you' : 'Sent to you'), el('small', '', 'WhatsApp Pay'));
+  const icon = el('span', 'cv-pay-icon', '₹');
+  icon.setAttribute('aria-hidden', 'true');
+  foot.append(icon, what, el('time', 'cv-pay-at', hm(m.at)));
+  card.append(top, foot);
+  card.setAttribute('role', 'group');
+  card.setAttribute('aria-label', `WhatsApp Pay, ${top.firstChild.textContent}${note ? ', note: ' + note : ''}`);
+  return card;
+}
+
 const ATTACHMENT_WORD = { image: 'Picture', audio: 'Voice note or audio', video: 'Video', document: 'Document' };
 
 // chatBubble draws one message: the buyer's on the left, yours and the
@@ -1357,7 +1382,9 @@ function chatBubble(m, b, url, day) {
     w.append(el('b', 'sb-chip egg', 'CHECK'), el('span', '', m.checking));
     row.append(w);
   }
-  if (m.text) row.append(el('p', 'cv-text', m.text));
+  const pay = m.kind === 'payment' && payCard(m);
+  if (pay) row.append(pay);
+  else if (m.text) row.append(el('p', 'cv-text', m.text));
   const media = url + '&media=' + encodeURIComponent(m.id);
   if (m.media && ['audio', 'video', 'document'].includes(m.kind)) {
     const a = el('a', 'sb-chip cv-file', `↓ ${m.kind.toUpperCase()}`);

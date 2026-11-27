@@ -2,14 +2,16 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
+
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+
 	"messwa/internal/store"
-	"time"
 )
 
 // This observer never feeds messages or failures back into sale decisions.
@@ -130,16 +132,48 @@ func (m *sellManager) recordConversation(peer, alt, id string, at time.Time, fro
 	}()
 }
 
+func init() { store.OldPaymentText = oldPaymentText }
+
+// oldPaymentText rebuilds a payment row recorded before the payment card
+// from the JSON dump it kept, the same way a new payment is stored, so an
+// old row keeps its note, including one only in the payload. A dump that
+// no longer parses keeps just the amount.
+func oldPaymentText(old string) string {
+	head, dump, ok := strings.Cut(old, "\n\nRetained payment details:\n")
+	if !ok {
+		return old
+	}
+	var pay waE2E.SendPaymentMessage
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal([]byte(dump), &pay); err == nil {
+		return conversationPaymentText(&waE2E.Message{SendPaymentMessage: &pay})
+	}
+	if amount, ok := strings.CutPrefix(head, "Reported amount: "); ok {
+		if amount, ok := strings.CutSuffix(amount, " (unverified)."); ok {
+			return "Paid " + amount
+		}
+	}
+	return head
+}
+
+// conversationPaymentText is "Paid INR 65.00", the amount decoded from
+// the payload, and the buyer's note on a second line. The dashboard draws
+// it as a WhatsApp payment card. The raw payload stays out: it is opaque
+// to the seller and carries transaction data they have no use for.
 func conversationPaymentText(msg *waE2E.Message) string {
 	pay := msg.GetSendPaymentMessage()
-	b, _ := protojson.Marshal(pay)
-	var pretty any
-	if json.Unmarshal(b, &pretty) == nil {
-		b, _ = json.MarshalIndent(pretty, "", "  ")
+	text := "Amount unavailable."
+	p, err := decodePaymentPayload(pay.GetTransactionData())
+	if err == nil && p != nil && p.Amount != "" {
+		text = fmt.Sprintf("Paid %s %s", p.Currency, p.Amount)
 	}
-	label := "Amount unavailable."
-	if p, err := decodePaymentPayload(pay.GetTransactionData()); err == nil && p != nil && p.Amount != "" {
-		label = fmt.Sprintf("Reported amount: %s %s (unverified).", p.Currency, p.Amount)
+	// The note is usually in noteMessage; Android UPI payments may carry
+	// it only inside the payload, as interopNote.
+	note := strings.TrimSpace(messageText(pay.GetNoteMessage()))
+	if note == "" && p != nil && p.Note != nil {
+		note = strings.TrimSpace(*p.Note)
 	}
-	return label + "\n\nRetained payment details:\n" + string(b)
+	if note != "" {
+		text += "\nNote: " + note
+	}
+	return text
 }

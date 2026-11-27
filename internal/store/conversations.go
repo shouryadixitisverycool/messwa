@@ -39,6 +39,55 @@ func (s *Store) ConversationTask(ctx context.Context, peer, alt, quote string, a
 	return id, canonical, err
 }
 
+// OldPaymentText rewrites the text of a payment message recorded before the
+// payment card: its amount line, "\n\nRetained payment details:\n" and a
+// JSON dump of the payment. Package main sets it, since decoding the
+// payment lives there; Open then rewrites those rows to the current form.
+var OldPaymentText func(old string) string
+
+// migratePaymentText rewrites old payment rows with OldPaymentText. Only
+// rows in the old shape match, so a new row whose note a buyer typed to
+// look like the dump is never touched, and a second run changes nothing.
+func migratePaymentText(db *sql.DB) error {
+	if OldPaymentText == nil {
+		return nil
+	}
+	rows, err := db.Query(`SELECT rowid,text FROM sale_messages WHERE kind='payment'
+ AND (text GLOB 'Reported amount: * (unverified).'||char(10)||char(10)||'Retained payment details:'||char(10)||'*'
+  OR text GLOB 'Amount unavailable.'||char(10)||char(10)||'Retained payment details:'||char(10)||'*')`)
+	if err != nil {
+		return err
+	}
+	type row struct {
+		id   int64
+		text string
+	}
+	var old []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.text); err != nil {
+			rows.Close()
+			return err
+		}
+		old = append(old, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil || len(old) == 0 {
+		return err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, r := range old {
+		if _, err := tx.Exec(`UPDATE sale_messages SET text=? WHERE rowid=?`, OldPaymentText(r.text), r.id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *Store) AddSaleMessage(ctx context.Context, task int64, peer string, m SaleMessage) error {
 	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO sale_messages(task_id,peer,id,at,from_me,text,kind,checking) VALUES(?,?,?,?,?,?,?,?)`, task, peer, m.ID, m.At, m.FromMe, m.Text, m.Kind, m.Checking)
 	return err

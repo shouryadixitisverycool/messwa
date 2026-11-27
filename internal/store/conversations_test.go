@@ -91,3 +91,56 @@ func TestConversationFollowsMovedBuyer(t *testing.T) {
 		t.Fatalf("recorded under %d, want the sale holding the buyer %d (%v)", got, older, err)
 	}
 }
+
+// Open passes payment rows in the old dump shape through OldPaymentText,
+// once, and leaves every other row alone.
+func TestOpenRewritesOldPaymentRows(t *testing.T) {
+	saved := OldPaymentText
+	defer func() { OldPaymentText = saved }()
+	calls := 0
+	OldPaymentText = func(old string) string {
+		calls++
+		return "Paid INR 65.00"
+	}
+	const dump = "\n\nRetained payment details:\n"
+	rows := []struct{ kind, text, want string }{
+		{"payment", "Reported amount: INR 65.00 (unverified)." + dump + "{}", "Paid INR 65.00"},
+		{"payment", "Amount unavailable." + dump + "{}", "Paid INR 65.00"},
+		// New rows, including a note a buyer typed to look like the old dump.
+		{"payment", "Paid INR 65.00\nNote: x" + dump + "y", "Paid INR 65.00\nNote: x" + dump + "y"},
+		{"payment", "Amount unavailable.\nNote: x" + dump + "y", "Amount unavailable.\nNote: x" + dump + "y"},
+		{"text", "Amount unavailable." + dump + "{}", "Amount unavailable." + dump + "{}"},
+		// The old prefixes, matched case-sensitively as the Go parsing does.
+		{"payment", "amount unavailable." + dump + "{}", "amount unavailable." + dump + "{}"},
+	}
+	path := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	for i, r := range rows {
+		if err := s.AddSaleMessage(ctx, 1, "buyer", SaleMessage{ID: string(rune('a' + i)), At: int64(i), Kind: r.kind, Text: r.text}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+	for range 2 { // the second open finds nothing to rewrite
+		if s, err = Open(path); err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.SaleMessages(ctx, 1, "buyer")
+		s.Close()
+		if err != nil || len(got) != len(rows) {
+			t.Fatalf("messages: %v %v", got, err)
+		}
+		for i, r := range rows {
+			if got[i].Text != r.want {
+				t.Errorf("row %d = %q, want %q", i, got[i].Text, r.want)
+			}
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("rewrote %d rows, want 2", calls)
+	}
+}
