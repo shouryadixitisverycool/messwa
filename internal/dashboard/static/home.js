@@ -148,6 +148,13 @@ function cardSpec(item, when = '') {
           : item.phone ? { kind: 'href', label: 'Chat', href: `https://wa.me/${item.phone.replace(/\D/g, '')}` } : null,
       };
     }
+    case 'parked':
+      return {
+        icon: 'buyer', tone: 'bad', title: `${item.name || 'A buyer'} needs you`,
+        sub: sub(item.price > 0 ? `offered ${homeAmt(item.price)}` : '', when),
+        action: open('Open sale'),
+        alt: item.phone ? { kind: 'href', label: 'Chat', href: `https://wa.me/${item.phone.replace(/\D/g, '')}` } : null,
+      };
     case 'whatsapp':
       return { icon: 'link', tone: 'bad', title: 'WhatsApp is offline', sub: 'Offers can\'t go out', action: { kind: 'relink', label: 'Relink' } };
     case 'post':
@@ -181,12 +188,37 @@ function setupItems(D) {
   return out;
 }
 
+// parkedItems are buyers the bot stopped answering on a running sale, the
+// ones Sales marks "needs you". api/attention leaves them out, so Home finds
+// them in the ledger's running tasks. They go once you act on the sale.
+function parkedItems(N) {
+  if (!N) return [];
+  const cells = [...(N.days || []), ...(N.upcoming || [])].flatMap((d) => (d.cells || []).map((c) => [d.date, c]));
+  if (N.ahead) cells.push([N.ahead.date, N.ahead.cell]);
+  const tasks = [];
+  for (const [date, c] of cells) {
+    for (const t of [c.task, ...(c.extras || []).map((e) => e.task)]) if (t) tasks.push([date, c.meal, t]);
+  }
+  for (const f of N.friends || []) if (f.task) tasks.push([f.date, f.meal, f.task]);
+  const out = [];
+  const seen = new Set();
+  for (const [date, meal, t] of tasks) {
+    for (const b of t.buyers || []) {
+      const id = `parked-${t.id}-${b.key}`;
+      if (b.state !== 'parked' || b.muted || seen.has(id)) continue;
+      seen.add(id);
+      out.push({ id, kind: 'parked', date, meal, task: t.id, buyer: b.key, name: b.name || '', phone: b.phone || '', price: b.price || 0, resolvable: false });
+    }
+  }
+  return out;
+}
+
 // A swipe dismisses once it travels past this share of the card's width.
 const SWIPE_AT = 0.35;
 const swipeDone = (dx, width) => Math.abs(dx) >= width * SWIPE_AT;
 
 if (typeof module !== 'undefined') {
-  module.exports = { railNodes, railProgress, weekTotal, verdictText, sinceWord, sinceText, soldKeys, newSales, orbState, refundLink, cardSpec, setupItems, swipeDone };
+  module.exports = { railNodes, railProgress, weekTotal, verdictText, sinceWord, sinceText, soldKeys, newSales, orbState, refundLink, cardSpec, setupItems, parkedItems, swipeDone };
 }
 
 // ---------- the page ----------
@@ -211,6 +243,7 @@ if (typeof document !== 'undefined' && document.getElementById('home')) {
     rule: I('<path d="M4 12a8 8 0 1 0 2.3-5.7"/><path d="M4 4v4h4"/><path d="M12 8v4l2.5 1.5"/>'),
     groups: I('<circle cx="9" cy="9" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><circle cx="17" cy="9.5" r="2.4"/><path d="M15.5 14.2A4.5 4.5 0 0 1 21 18.5"/>'),
     upi: I('<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 8h3v3H8zM13 13h3v3h-3zM13 8h3M8 13v3"/>'),
+    buyer: I('<circle cx="12" cy="8.5" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/>'),
     dot: I('<circle cx="12" cy="12" r="3"/>'),
     x: I('<path d="m7 7 10 10M17 7 7 17"/>'),
   };
@@ -236,7 +269,7 @@ if (typeof document !== 'undefined' && document.getElementById('home')) {
   // ---------- verdict, since and orb ----------
 
   function cardItems() {
-    const items = attn ? attn.items.filter((x) => !gone.has(x.id)) : [];
+    const items = attn ? [...parkedItems(N), ...attn.items].filter((x) => !gone.has(x.id)) : [];
     return [...setupItems(D), ...items];
   }
 
@@ -609,6 +642,7 @@ if (typeof document !== 'undefined' && document.getElementById('home')) {
     if (N) lastSold = keys;
     drawTop();
     drawRail();
+    drawCards(); // parked buyers come from the ledger
   };
 
   async function loadWhatsApp() {

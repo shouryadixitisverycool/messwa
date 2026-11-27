@@ -251,6 +251,13 @@ button.rail-node:focus-visible .rail-dot { outline: 2px solid var(--calm-accent)
 /* attention.js's errors, which Home moves under the cards. */
 .home > .attn-note { margin: 0; font-size: var(--t-sm); color: var(--calm-bad); text-align: center; }
 .home > .attn-note:empty { display: none; }
+.home > .attn-bell {
+  align-self: center; min-height: 44px; padding: 0 var(--sp-4);
+  background: none; border: 1px solid var(--calm-line); border-radius: 999px;
+  font: var(--w-med) var(--t-sm) / 1 var(--sans); color: var(--calm-dim); letter-spacing: 0; cursor: pointer;
+}
+.home > .attn-bell:hover { color: var(--calm-text); }
+.home > .attn-bell[hidden] { display: none; }
 
 /* app.js's nudge to sell your next meal, in Home's calm dress. */
 .home .sell-nudge {

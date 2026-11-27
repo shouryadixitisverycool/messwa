@@ -126,3 +126,31 @@ test('a swipe dismisses past a third of the card', () => {
   assert.equal(H.swipeDone(100, 300), false);
   assert.equal(H.swipeDone(-110, 300), true);
 });
+
+test('buyers waiting on you in a running sale become cards', () => {
+  const task = (id, buyers) => ({ id, min: 50, max: 80, buyers });
+  const N = {
+    days: [{ date: '2026-11-26', cells: [
+      { meal: 'lunch', state: 'selling', task: task(7, [
+        { key: 'a', name: 'Meera', phone: '+91 98111 11111', state: 'parked', price: 60 },
+        { key: 'b', state: 'negotiating' },
+        { key: 'c', state: 'parked', muted: true },
+      ]) },
+      { meal: 'dinner', state: 'open', extras: [{ name: 'Egg', task: task(9, [{ key: 'd', state: 'parked' }]) }] },
+    ] }],
+    upcoming: [{ date: '2026-11-26', cells: [{ meal: 'lunch', task: task(7, [{ key: 'a', state: 'parked' }]) }] }],
+    friends: [{ date: '2026-11-26', meal: 'breakfast', task: task(11, [{ key: 'e', state: 'parked' }]) }],
+  };
+  const got = H.parkedItems(N);
+  assert.deepEqual(got.map((x) => x.id), ['parked-7-a', 'parked-9-d', 'parked-11-e']);
+  assert.equal(got[0].resolvable, false);
+  assert.deepEqual(H.parkedItems(null), []);
+
+  const spec = H.cardSpec(got[0], 'Lunch · today');
+  assert.equal(spec.title, 'Meera needs you');
+  assert.equal(spec.sub, 'offered ₹60 · Lunch · today');
+  assert.deepEqual(spec.action, { kind: 'sale', label: 'Open sale' });
+  assert.equal(spec.alt.href, 'https://wa.me/919811111111');
+  assert.equal(H.cardSpec(got[1]).title, 'A buyer needs you');
+  assert.equal(H.cardSpec(got[1]).alt, null);
+});

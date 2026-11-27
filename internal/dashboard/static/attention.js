@@ -59,9 +59,10 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     if (heading) heading.after(box); else document.querySelector('.app')?.prepend(box);
   }
 
-  // Home hides the banner and draws cards, so its errors show under them.
+  // Home hides the banner and draws cards, so its errors and the alert
+  // opt-in show under them.
   const home = document.getElementById('home');
-  if (home) home.append(note);
+  if (home) home.append(note, bell);
 
   let open = false; // the folded rows are showing
   more.onclick = () => { open = !open; draw(); };
@@ -69,10 +70,11 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   const canAlert = typeof Notification !== 'undefined';
   function drawBell() {
     const p = canAlert ? Notification.permission : 'denied';
-    bell.hidden = p === 'denied';
+    // Home offers the bell only until you decide.
+    bell.hidden = p === 'denied' || (!!home && p === 'granted');
     bell.disabled = p === 'granted';
     bell.classList.toggle('on', p === 'granted');
-    bell.textContent = p === 'granted' ? 'ALERTS ON' : 'ALERT ME';
+    bell.textContent = p === 'granted' ? 'ALERTS ON' : home ? 'Alert me in this browser' : 'ALERT ME';
     bell.title = p === 'granted'
       ? 'This browser alerts you about new problems while a Messwa tab is open'
       : 'Get a browser alert about new problems while a Messwa tab is open';
