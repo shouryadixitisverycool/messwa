@@ -92,7 +92,10 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     const v = await r.json();
     if (openSaleBuyer(v, buyer)) return;
     if (v.state === 'active') {
-      if (!N) await loadNudge(true);
+      // The ledger may be missing or stale (Buy never refreshes it), so
+      // fetch it again when the sale isn't in it.
+      if (openTaskMenu(v)) return;
+      await loadNudge(true);
       if (openTaskMenu(v)) return;
     }
     throw new Error(v.state === 'active' ? 'Nobody has answered this sale yet.' : 'Nobody answered this sale before it ended.');
