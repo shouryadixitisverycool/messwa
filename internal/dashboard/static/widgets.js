@@ -431,7 +431,7 @@ const HW = (() => {
     if (!fs.length) list.append(el('div', 'empty-note', 'Selling a meal for a friend? Add it with their QR on the sales page. Its money stays out of your numbers.'));
     for (const f of fs) {
       const row = el('a', 'friend' + (f.task || f.schedule ? ' live' : ''));
-      row.href = 'sales.html#friends';
+      row.href = 'sales.html#pills';
       if (f.task || f.schedule) row.addEventListener('click', (e) => {
         if (typeof openFriendHere === 'function' && openFriendHere(f.task ? f.task.id : f.schedule.id, f.task ? 'task' : 'schedule')) e.preventDefault();
       });
@@ -451,7 +451,7 @@ const HW = (() => {
       list.append(row);
     }
     const foot = el('div', 'w-foot');
-    foot.append(link('sales.html#friends', '+ Sell a friend\'s meal'));
+    foot.append(link('sales.html#pills', '+ Sell a friend\'s meal'));
     box.replaceChildren(list, foot);
   }
 

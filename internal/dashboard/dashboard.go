@@ -251,6 +251,7 @@ func Handler(cfg *config.Config, srv *mcpserver.Server, hub *Hub, acc *accounts.
 	attentionRoutes(mux, srv)
 	recurringRoutes(mux, srv)
 	mux.Handle("GET /api/sales", member(salesHandler(cfg, srv, regs)))
+	mux.Handle("GET /api/recap", member(recapHandler(cfg, srv, regs)))
 	mux.Handle("GET /api/meal-extras", member(mealExtrasHandler(cfg, srv, regs)))
 	mux.Handle("GET /api/insights", requireRole(accounts.Admin, insightsHandler(cfg, srv)))
 	mux.Handle("PUT /api/insights/gala", requireRole(accounts.Admin, galaHandler(srv)))

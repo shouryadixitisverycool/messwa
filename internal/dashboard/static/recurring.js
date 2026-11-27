@@ -202,29 +202,9 @@ function ruleSpanText() {
 function setRuleBusy(busy) {
   recurringBusy = busy;
   $('ruleFields').disabled = busy;
-  $('ruleNew').disabled = busy;
   for (const id of ['rulePreview', 'ruleCancel', 'ruleDeleteAsk', 'ruleDelete', 'ruleDeleteBack']) $(id).disabled = busy;
   if (busy) $('ruleSave').disabled = true;
-  for (const b of $('ruleList').querySelectorAll('button')) b.disabled = busy;
-}
-
-// "Mon-Fri", "Weekends", "Every day" or "Mon, Wed, Fri".
-function ruleDaysText(days) {
-  const set = new Set(days);
-  if (set.size === 7) return 'Every day';
-  if (set.size === 5 && [1, 2, 3, 4, 5].every((d) => set.has(d))) return 'Mon-Fri';
-  if (set.size === 2 && set.has(0) && set.has(6)) return 'Weekends';
-  return recurringDayOrder.filter((d) => set.has(d)).map((d) => recurringDays[d]).join(', ');
-}
-
-function ruleTimeText(before) {
-  if (before > 0) return `${before} min before serving`;
-  if (before < 0) return `${-before} min into serving`;
-  return 'when serving starts';
-}
-
-function ruleDateText(date) {
-  return typeof fmtDay === 'function' ? fmtDay(date) : date;
+  for (const b of $('pills').querySelectorAll('button.mp-rule')) b.disabled = busy;
 }
 
 function ruleChip(parent, type, value, label, checked, art, cls = 'rseg-i') {
@@ -315,8 +295,8 @@ function editRecurringRule(rule, open = true) {
   renderRuleRelative();
   $('ruleTitle').textContent = r.id ? r.name : 'New rule';
   $('ruleSub').textContent = r.id
-    ? `${r.enabled ? 'Active' : 'Paused'} · ${r.waiting || 0} waiting · changes apply to new meals`
-    : 'Sells matching registered meals up to four weeks ahead.';
+    ? `${r.enabled ? 'On' : 'Off'} · ${r.waiting || 0} waiting`
+    : '';
   $('ruleDeleteAsk').hidden = !r.id;
   $('ruleError').textContent = r.last_error ? `Last run: ${r.last_error}` : '';
   showRuleDelete(false);
@@ -333,37 +313,9 @@ function ruleListPrice(r) {
   return same ? `${signedPct(rels[0].low)}/${signedPct(rels[0].high)} median` : 'vs median';
 }
 
-function rulePill(r) {
-  if (r.enabled && r.last_error) return ['CHECK', 'cc'];
-  return r.enabled ? ['ACTIVE', 'ca'] : ['PAUSED', 'c8'];
-}
-
+// The rules show as pills on the Money tab; money.js draws them.
 function renderRecurringRules() {
-  const list = $('ruleList'); list.replaceChildren();
-  const on = recurringRules.filter((r) => r.enabled).length, waiting = recurringRules.reduce((n, r) => n + (r.waiting || 0), 0);
-  $('ruleMeta').replaceChildren(el('b', '', String(on)), ' active · ', el('b', '', String(waiting)), ' meals waiting');
-  if (!recurringRules.length) {
-    list.append(el('div', 'empty-note', 'Selling the same meals every week? Make a rule once. It schedules matching registered meals four weeks ahead, at your prices. Unschedule a meal in the ledger to keep it.'));
-    return;
-  }
-  for (const r of recurringRules) {
-    const row = el('button', 'friend live rule-row' + (r.enabled ? '' : ' off'));
-    row.type = 'button'; row.disabled = recurringBusy;
-    row.setAttribute('aria-label', `Edit recurring rule ${r.name}`);
-    row.onclick = () => editRecurringRule(r);
-    const ic = el('span', 'fr-ic');
-    ic.append(svgEl(r.meals.length === 1 ? icon(r.meals[0]) : mealsAllIcon(r.meals)));
-    const what = el('div', 'fr-what');
-    what.append(el('b', '', r.name),
-      el('span', '', `${ruleDaysText(r.weekdays)} · ${r.meals.map(cap).join(', ')} · up ${ruleTimeText(r.before)}`),
-      el('span', '', `${ruleDateText(r.from)} - ${ruleDateText(r.through)}${r.autopilot ? ' · autopilot' : ''}`));
-    if (r.enabled && r.last_error) what.append(el('span', 'rule-err', r.last_error));
-    const [word, cls] = rulePill(r);
-    const right = el('div', 'fr-right');
-    right.append(el('span', 'pill ' + cls, word), el('span', 'fr-amt', ruleListPrice(r)), el('span', 'fr-buyer', `${r.waiting} waiting`));
-    row.append(ic, what, right);
-    list.append(row);
-  }
+  if (typeof renderPills === 'function' && D) renderPills();
 }
 
 async function loadRecurringRules() {
@@ -384,7 +336,6 @@ async function loadRecurringRules() {
 }
 
 function refreshRecurringRulesView() {
-  $('ruleSec').hidden = !D?.owner;
   if (!D?.owner) return;
   if (!recurringInitialized) editRecurringRule(undefined, false);
   if (Date.now() - recurringLoadedAt > 30000) loadRecurringRules();
@@ -397,7 +348,6 @@ function openRecurringHash() {
   // The home page's Recurring rules widget links here with "new".
   const rule = match[1] === 'new' ? undefined : recurringRules.find((r) => r.id === Number(match[1]));
   if (!rule && match[1] !== 'new') return;
-  $('ruleSec').scrollIntoView({ block: 'start' });
   editRecurringRule(rule);
   history.replaceState(null, '', location.pathname + location.search);
 }
@@ -411,7 +361,6 @@ function previewTiles(out, applying) {
   return tiles.map(([k, v, cls]) => { const t = el('div', 'st'); t.append(el('span', '', k), el('b', cls, String(v))); return t; });
 }
 
-$('ruleIcon').append?.(svgEl(icon('clock')));
 $('ruleClock').append?.(svgEl(icon('clock')));
 $('ruleBeforeRange').addEventListener('input', () => {
   const v = -Number($('ruleBeforeRange').value) || 0;
@@ -430,7 +379,6 @@ $('ruleForm').addEventListener('change', (e) => {
 });
 // The −/+ boxes change prices on click, which fires no input event.
 $('ruleForm').addEventListener('click', (e) => { if (e.target?.closest?.('.pr-in button')) invalidateRulePreview(); });
-$('ruleNew').onclick = () => editRecurringRule();
 $('ruleCancel').onclick = closeRuleSheet;
 $('ruleDeleteAsk').onclick = () => showRuleDelete(true);
 $('ruleDeleteBack').onclick = () => showRuleDelete(false);

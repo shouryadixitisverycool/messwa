@@ -139,13 +139,12 @@ function renderCalendar() {
     const day = cells.get(date);
     const plannable = (day || []).filter((c) => calPlannable(c));
     const h = el(plannable.length ? 'button' : 'div', 'dh' + (date === D.today ? ' today' : date > D.today ? ' later' : ''),
-      date === D.today ? 'TODAY' : `${fmt(date, { weekday: 'short' }).toUpperCase()} ${dayOf(date).getUTCDate()}`);
+      date === D.today ? 'TODAY' : fmt(date, { weekday: 'short' }).toUpperCase());
+    // The date goes under the weekday on phones.
+    h.append(el('i', 'dn', ` ${dayOf(date).getUTCDate()}`));
     const total = sum(D.sales.filter((s) => isSold(s) && s.date === date).map((s) => s.amount));
-    const queued = (day || []).filter((c) => c.schedule || c.task).length;
-    if (!day) h.append(el('span', 'none', ' '));
-    else if (total) h.append(el('span', '', rupees(total)));
-    else if (queued && date >= D.today) { const s = el('span', 'q', String(queued)); s.append(el('i', '', ' TO SELL')); h.append(s); }
-    else h.append(el('span', 'none', '-'));
+    // The day's takings; meals still to sell show in the grid below.
+    h.append(total ? el('span', '', rupees(total)) : el('span', 'none', ' '));
     if (plannable.length) {
       h.type = 'button';
       h.disabled = calBusy;
@@ -185,6 +184,7 @@ function renderCalendar() {
   }
 
   renderCalMeta(dates, cells);
+  renderCalFilter();
   $('pgPrev').disabled = calWeek <= first;
   $('pgNext').disabled = calWeek >= last;
   $('pgToday').hidden = calWeek === mondayOf(D.today);
@@ -206,6 +206,7 @@ function calCellNode(date, c, picked) {
   n.classList.toggle('picked', picked.has(key));
   n.classList.toggle('active', calPicked.length === 1 && calPicked[0] === key);
   if (picked.has(key) && calPicked.length > 1) n.append(el('span', 'pick-mark', '✓'));
+  if (calFilter && !calFilterHas(calFilter, c)) n.classList.add('faded');
   if (c.kept && c.state === 'open') { n.classList.add('kept'); n.append(el('span', 'stamp long', 'KEPT')); }
   if (c.schedule_issue && !c.schedule && c.state === 'open') n.classList.add('issue');
   if (c.schedule?.retry_at) n.classList.add('retry');
@@ -217,32 +218,52 @@ function calCellNode(date, c, picked) {
   return n;
 }
 
+// renderCalMeta is the week's line between the arrows: its dates, what it
+// made and how many meals went to waste. The grid shows the rest.
 function renderCalMeta(dates, cells) {
   const all = dates.flatMap((d) => (cells.get(d) || []).map((c) => [d, c]));
-  const sold = all.filter(([, c]) => c.state === 'sold' || c.state === 'sending');
-  const earned = sum(sold.map(([, c]) => D.sales[c.sale].amount));
-  const wasted = all.filter(([, c]) => c.state === 'wasted');
-  const lost = sum(wasted.map(([, c]) => c.ask || 0));
-  const queued = all.filter(([, c]) => c.schedule).length;
-  // Extras sold apart from their meal count toward the week's money.
-  const xsold = D.sales.filter((s) => s.extra && isSold(s) && dates.includes(s.date));
+  const wasted = all.filter(([, c]) => c.state === 'wasted').length;
+  const earned = sum(D.sales.filter((s) => isSold(s) && dates.includes(s.date)).map((s) => s.amount));
+  const [a, b] = [dayOf(dates[0]), dayOf(dates[6])];
+  const range = a.getUTCMonth() === b.getUTCMonth() ? `${a.getUTCDate()}-${fmtShort(dates[6])}` : `${fmtShort(dates[0])} - ${fmtShort(dates[6])}`;
   const meta = $('ledMeta');
-  meta.replaceChildren(`${fmtShort(dates[0])} - ${fmtShort(dates[6])}`);
-  if (D.owner) {
-    if (sold.length || xsold.length) {
-      if (sold.length) {
-        meta.append(' · ', el('b', '', String(sold.length)), ' sold');
-        if (xsold.length) meta.append(' + ', el('b', '', String(xsold.length)), ` extra${xsold.length === 1 ? '' : 's'}`);
-      } else {
-        meta.append(' · ', el('b', '', String(xsold.length)), ` extra${xsold.length === 1 ? '' : 's'} sold`);
-      }
-      meta.append(' · ', el('span', 'gold', rupees(earned + sum(xsold.map((s) => s.amount)))));
-    }
-    if (queued) meta.append(' · ', el('b', '', String(queued)), ' scheduled');
-  } else {
-    $('ledName').textContent = 'Meal ledger';
+  meta.replaceChildren(el('span', 'wk', range));
+  if (D.owner && earned) meta.append(el('span', 'gold', rupees(earned)));
+  if (wasted) meta.append(el('span', 'red', `${wasted} wasted`));
+}
+
+// ---------- filters ----------
+
+// The chips under the grid double as its key. Tapping one fades every meal
+// in another state; tapping it again shows them all.
+const CAL_FILTERS = [
+  ['sold', 'Sold', ['sold', 'sending'], true],
+  ['selling', 'Selling', ['selling', 'armed', 'handoff'], true],
+  ['scheduled', 'Scheduled', ['scheduled'], true],
+  ['open', 'Open', ['open'], false],
+  ['ate', 'Ate', ['ate'], false],
+  ['wasted', 'Wasted', ['wasted'], false],
+];
+let calFilter = '';
+const calFilterHas = (f, c) => (CAL_FILTERS.find((x) => x[0] === f)?.[2] || []).includes(c.state);
+
+function renderCalFilter() {
+  const box = $('lfilter');
+  // Tapping a chip redraws the row; keep focus on the chip.
+  const on = document.activeElement;
+  const focused = on && on.parentNode === box ? on.dataset.f : '';
+  box.replaceChildren();
+  for (const [id, label, , own] of CAL_FILTERS) {
+    if (own && !D.owner) continue;
+    const b = el('button', 'lf lf-' + id);
+    b.type = 'button';
+    b.dataset.f = id;
+    b.setAttribute('aria-pressed', String(calFilter === id));
+    b.append(el('i'), label);
+    b.addEventListener('click', () => { calFilter = calFilter === id ? '' : id; renderCalendar(); });
+    box.append(b);
+    if (focused === id) b.focus();
   }
-  if (wasted.length) meta.append(' · ', el('span', 'red', `${wasted.length} wasted`), lost ? ` (${rupees(Math.round(lost))} at median)` : '');
 }
 
 // ---------- picking ----------
@@ -966,9 +987,9 @@ $('calMulti').addEventListener('click', () => {
   if (!calMulti && calPicked.length > 1) calPicked = [];
   renderCalendar();
 });
-$('pgPrev').addEventListener('click', () => { if (!D) return; calWeek = addDays(calWeek, -7); renderCalendar(); if (D.owner) renderEarnings(); });
-$('pgNext').addEventListener('click', () => { if (!D) return; calWeek = addDays(calWeek, 7); renderCalendar(); if (D.owner) renderEarnings(); });
-$('pgToday').addEventListener('click', () => { if (!D) return; calWeek = mondayOf(D.today); renderCalendar(); if (D.owner) renderEarnings(); });
+$('pgPrev').addEventListener('click', () => { if (!D) return; calWeek = addDays(calWeek, -7); renderCalendar(); });
+$('pgNext').addEventListener('click', () => { if (!D) return; calWeek = addDays(calWeek, 7); renderCalendar(); });
+$('pgToday').addEventListener('click', () => { if (!D) return; calWeek = mondayOf(D.today); renderCalendar(); });
 addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && calPicked.length && $('modal').hidden && !e.target.closest('.modal')) calClear();
 });
